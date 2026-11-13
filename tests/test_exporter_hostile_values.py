@@ -58,7 +58,7 @@ _HOSTILE: list[Callable[[], object]] = [
 
 def _devtools(value: object) -> str:
     attributes = devtools_client._json_attributes({"v": value})  # pyright: ignore[reportPrivateUsage]
-    return _json_text.js_stringify(attributes)
+    return _json_text.stringify(attributes)
 
 
 def _otlp(value: object) -> str:
