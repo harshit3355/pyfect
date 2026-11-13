@@ -8,13 +8,18 @@ A resume in Effect runs the woken fiber at once; in pyfect it goes through
 the scheduler, so a port yields where Effect's fiber would already have run.
 """
 
+from collections.abc import Callable
 from typing import Any
 
 import pytest
 
 import pyfect as fx
 from pyfect import testing
+from pyfect._fiber import Fiber
+from pyfect._stack_frame import CurrentStackFrame, InterruptorStackTrace, StackFrame
 from pyfect.scope import CloseableScope
+
+from ._custom_scheduler import Custom, drain, on
 
 
 def _interrupted(ex: fx.Exit[Any, Any] | None) -> bool:
@@ -98,6 +103,54 @@ def test_interrupts_the_loser_when_interrupted_while_starting(name: str):
     fiber = yield from body.fork()
     yield from fiber.await_exit()
     assert interrupted == ["loser"]
+
+
+@pytest.mark.parametrize("name", RACES)
+@testing.effect
+def test_interrupts_a_pending_loser_before_the_parent_resumes(name: str):
+    """${name} interrupts a pending loser before the parent resumes"""
+    tasks: list[Callable[[], None]] = []
+    parent: list[Fiber[Any, Any]] = []
+    yield_parent = [False]
+
+    def should_yield(fiber: Fiber[Any, Any]) -> bool:
+        if not yield_parent[0] or fiber not in parent:
+            return False
+        yield_parent[0] = False
+        return True
+
+    scheduler = Custom(should_yield, tasks)
+    winner = fx.Deferred[str]()
+    frame = StackFrame("race", lambda: None, None)
+    loser_exit: list[fx.Exit[str, Any]] = []
+
+    def record(ex: fx.Exit[str, Any]) -> fx.Effect[None]:
+        return fx.sync(lambda: loser_exit.append(ex))
+
+    def racing(fiber: Fiber[Any, Any]) -> fx.Effect[str]:
+        parent.append(fiber)
+        loser = queue.take().on_exit(record)
+        return _race(name, loser, winner.wait())
+
+    queue = yield from fx.Queue[str].unbounded().pipe(on(scheduler))
+    fiber = yield from (
+        fx.with_fiber(racing)
+        .pipe(fx.provide_service(CurrentStackFrame, frame))
+        .pipe(on(scheduler))
+        .fork(start_immediately=True)
+    )
+    # Wake the loser through a scheduled task, then settle the race while the
+    # parent yields before it could interrupt the loser.
+    queue.offer_unsafe("loser")
+    yield_parent[0] = True
+    winner.done_unsafe(fx.Success("winner"))
+    drain(tasks)
+    assert (yield from fiber.join()) == "winner"
+    assert (yield from queue.size()) == 1
+    [ex] = loser_exit
+    assert isinstance(ex, fx.Failure)
+    annotations = fx.cause.reason_annotations(ex.cause.reasons[0])
+    assert annotations.get_unsafe(InterruptorStackTrace) is frame
 
 
 def _record(done: list[int], i: int) -> fx.Effect[int]:

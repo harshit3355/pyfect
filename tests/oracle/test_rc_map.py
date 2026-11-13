@@ -450,6 +450,23 @@ def test_idle_time_to_live():
 
 
 @testing.effect
+def test_measures_idle_time_on_the_maps_clock():
+    """measures idle time on the map's clock"""
+    acquired: list[str] = []
+    released: list[str] = []
+    rc_map = yield from fx.RcMap.make(_lookup(acquired, released), idle_time_to_live="1 second")
+
+    # release and touch run on a different clock than the map's TestClock
+    yield from testing.with_live(fx.scoped(rc_map.get("foo")))
+    yield from testing.adjust("500 millis")
+    yield from testing.with_live(rc_map.touch("foo"))
+    yield from testing.adjust("500 millis")
+    assert released == []
+    yield from testing.adjust("500 millis")
+    assert released == ["foo"]
+
+
+@testing.effect
 def test_touch():
     """.touch"""
     acquired: list[str] = []

@@ -67,8 +67,10 @@ def creation_ttl(ttl: Duration) -> Effect[Strategy[Any, Any]]:
 
 
 def usage_ttl(ttl: Duration) -> Effect[Strategy[Any, Any]]:
-    """Every ``ttl``, while the pool is above its target size, invalidate
-    the items idle for at least ``ttl``, longest idle first."""
+    """While the pool is above its target size, invalidate an unreserved
+    item ``ttl`` after its last release, longest idle first. An item that
+    becomes excess or unreserved only after that is retired within ``ttl``
+    (Effect 4.1.4's loop: sleep until the earliest deadline)."""
     ttl_nanos = nanos_or_infinite(ttl)
 
     def make(fiber: Fiber[Any, Any]) -> Effect[Strategy[Any, Any]]:
@@ -77,25 +79,29 @@ def usage_ttl(ttl: Duration) -> Effect[Strategy[Any, Any]]:
         def run(pool: _Pool) -> Effect[None]:
             state = pool.state
 
-            def retire() -> Effect[None]:
+            def retire_or_sleep() -> Effect[None]:
+                now = clock.now_nanos_unsafe()
+                wake_at = now + ttl_nanos
                 oldest: _Item | None = None
                 with state.lock:
-                    if pool._active_size() <= pool._target_size():
-                        return _VOID
-                    expired = clock.now_nanos_unsafe() - ttl_nanos
+                    excess = pool._active_size() > pool._target_size()
                     for item in state.items:
-                        if item.ref_count > 0 or item.idle_since > expired:
+                        if item.ref_count > 0 or item in state.invalidated:
                             continue
-                        if item in state.invalidated or item.reservations:
-                            continue
-                        if oldest is None or item.idle_since < oldest.idle_since:
+                        due = item.idle_since + ttl_nanos
+                        if due > now:
+                            wake_at = min(wake_at, due)
+                        elif (
+                            excess
+                            and not item.reservations
+                            and (oldest is None or item.idle_since < oldest.idle_since)
+                        ):
                             oldest = item
                 if oldest is None:
-                    return _VOID
-                return pool._invalidate_item(oldest).and_then(process)
+                    return clock.sleep(from_nanos_or_infinite(wake_at - now))
+                return pool._invalidate_item(oldest)
 
-            process: Effect[None] = _Suspend(retire)
-            return process.delay(ttl).forever(disable_yield=True)
+            return _Suspend(retire_or_sleep).forever(disable_yield=True)
 
         def on_acquire(_: _Item) -> Effect[None]:
             return _VOID

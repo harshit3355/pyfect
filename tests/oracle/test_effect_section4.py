@@ -384,11 +384,15 @@ def test_duration_input_forms():
         from_input_unsafe("abc")
 
 
-def test_from_env_copies_the_environment(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("SECTION4_X", "before")
+def test_from_env_copies_the_environment_at_its_first_lookup(monkeypatch: pytest.MonkeyPatch):
+    # Effect main (#10567): the snapshot is taken by the first lookup, not by fromEnv().
+    monkeypatch.setenv("SECTION4_X", "made")
     provider = config_provider.from_env()
-    monkeypatch.setenv("SECTION4_X", "after")
-    assert fx.run_sync_exit(config.string("SECTION4_X").parse(provider)) == Success("before")
+    monkeypatch.setenv("SECTION4_X", "first lookup")
+    read = config.string("SECTION4_X").parse(provider)
+    assert fx.run_sync_exit(read) == Success("first lookup")
+    monkeypatch.setenv("SECTION4_X", "later")
+    assert fx.run_sync_exit(read) == Success("first lookup")
 
 
 def test_date_time_has_millisecond_precision():

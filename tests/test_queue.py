@@ -392,24 +392,57 @@ def test_a_take_interrupted_at_a_yield_keeps_its_message(
             assert out == ([1] if offered == fx.Success(True) else []), (budget, delay)
 
 
-def test_offer_to_a_sliding_queue_of_capacity_zero_keeps_the_newest_item():
-    """Effect Queue.ts ``offerUnsafe``: a full sliding queue drops its oldest
-    item and appends the new one, so capacity 0 holds one item. (Checked
-    against Effect 4.0.6; no Effect test covers it.)"""
+def test_offer_sliding_with_zero_capacity_only_hands_off_to_waiting_takers():
+    """Effect: Queue.test.ts 'offer sliding with zero capacity only hands off to waiting
+    takers'. With no taker waiting the item is dropped, not held."""
 
     @fx.gen
     def program():
         q = yield from fx.Queue[int].sliding(0)
-        offered = ((yield from q.offer(1)), (yield from q.offer(2)))
+        dropped = yield from q.offer(0)
         size = yield from q.size()
-        return offered, size, (yield from q.take()), (yield from q.size())
+        taker = yield from q.take().fork(start_immediately=True)
+        handed = yield from q.offer(1)
+        return dropped, size, handed, (yield from taker.join())
 
-    assert run(program) == ((True, True), 1, 2, 0)
+    assert run(program) == (True, 0, True, 1)
+
+
+def test_offer_all_sliding_with_zero_capacity_hands_the_newest_messages_to_waiting_takers():
+    """Effect: Queue.test.ts 'offerAll sliding with zero capacity hands the newest
+    messages to waiting takers'."""
+
+    @fx.gen
+    def program():
+        q = yield from fx.Queue[int].sliding(0)
+        taker = yield from q.take().fork(start_immediately=True)
+        rest = yield from q.offer_all([1, 2])
+        offered = yield from q.offer(3)
+        return rest, offered, (yield from taker.join()), (yield from q.size())
+
+    assert run(program) == ([], True, 3, 0)
+
+
+def test_offer_sliding_with_zero_capacity_trims_to_the_takers_left_after_an_interruption():
+    """Effect: Queue.test.ts 'offer sliding with zero capacity trims to the takers left
+    after an interruption'."""
+
+    @fx.gen
+    def program():
+        q = yield from fx.Queue[int].sliding(0)
+        taker = yield from q.take().fork(start_immediately=True)
+        interrupted = yield from q.take().fork(start_immediately=True)
+        rest = yield from q.offer_all([1, 2])
+        yield from interrupted.interrupt()
+        offered = yield from q.offer(3)
+        return rest, offered, (yield from taker.join()), (yield from q.size())
+
+    assert run(program) == ([], True, 3, 0)
 
 
 def test_offer_all_to_a_sliding_queue_of_capacity_zero_keeps_nothing():
-    """Effect Queue.ts ``offerAllUnsafe`` trims a sliding queue to its
-    capacity after appending, so nothing stays and nothing is returned."""
+    """Effect Queue.ts ``offerAllUnsafe`` trims a sliding queue of capacity 0
+    to its waiting takers, so with none nothing stays and nothing is returned."""
 
     @fx.gen
     def program():
@@ -419,37 +452,28 @@ def test_offer_all_to_a_sliding_queue_of_capacity_zero_keeps_nothing():
     assert run(program) == ([], 0)
 
 
-def test_offer_to_a_full_sliding_queue_leaves_a_waiting_taker_parked():
-    """Effect Queue.ts ``offerUnsafe``: the sliding branch swaps the item and
-    returns without ``releaseTakers``, so at capacity 0 the taker stays parked
-    next to the item, and a later take gets it. Printed by Effect under Node:
-    the first taker never ends, the second takes 7, a direct take gets 8."""
+@pytest.mark.parametrize("method", ["offer", "offer_all"])
+def test_zero_capacity_offer_after_offer_all_waits_for_another_taker(method: str):
+    """Effect: Queue.test.ts 'zero-capacity %s after offerAll waits for another taker'."""
 
     @fx.gen
     def program():
-        q = yield from fx.Queue[int].sliding(0)
-        parked = yield from q.take().fork()
-        yield from _settle()
-        offered = yield from q.offer(7)
-        yield from _settle()
-        after_offer = parked.poll_unsafe(), (yield from q.size())
-        second = yield from q.take().fork()
-        yield from _settle()
-        after_second = second.poll_unsafe(), parked.poll_unsafe(), (yield from q.size())
-        yield from q.offer(8)
-        yield from _settle()
-        direct = yield from q.take()
-        yield from _settle()
-        still = parked.poll_unsafe()
-        yield from parked.interrupt()
-        return offered, after_offer, after_second, direct, still
+        q = yield from fx.Queue[int].bounded(0)
+        taker = yield from q.take().fork(start_immediately=True)
+        rest = yield from q.offer_all([1])
+        second = q.offer(2).as_void() if method == "offer" else q.offer_all([2]).as_void()
+        producer = yield from second.fork(start_immediately=True)
+        first = yield from taker.join()
+        while_alone = producer.poll_unsafe()
+        taken = yield from q.take()
+        return rest, first, while_alone, taken, producer.poll_unsafe() is not None
 
-    assert run(program) == (True, (None, 1), (fx.Success(7), None, 0), 8, None)
+    assert run(program) == ([], 1, None, 2, True)
 
 
-def test_a_parked_taker_of_a_sliding_queue_of_capacity_zero_wakes_when_it_ends():
-    """Printed by Effect under Node: ``end`` releases the taker, which then
-    takes the item that sat next to it."""
+def test_a_parked_taker_of_a_sliding_queue_of_capacity_zero_gets_the_offered_item():
+    """The offer hands the item to the parked taker, which then sees ``end``
+    leave nothing behind."""
 
     @fx.gen
     def program():

@@ -500,3 +500,50 @@ def test_admits_queued_requests_covered_by_a_release_in_one_dispatcher_turn():
     yield from fx.sync(run_turn)
     assert admitted == [0, 1]
     yield from fx.Fiber.join_all(waiters)
+
+
+@testing.effect
+def test_admits_a_queued_zero_permit_waiter_after_exhausting_the_release_budget():
+    """admits a queued zero-permit waiter after exhausting the release budget"""
+    turns: list[Callable[[], None]] = []
+
+    def _no_cancel() -> None:
+        pass
+
+    def hold(run: Callable[[], None]) -> Callable[[], None]:
+        turns.append(run)
+        return _no_cancel
+
+    on_scheduler = fx.provide_service(CurrentScheduler, MixedScheduler("async", hold))
+    sem = yield from fx.Semaphore.make(1)
+    yield from sem.take(1)
+    admitted: list[int] = []
+
+    def request(permits: int) -> fx.Effect[fx.Fiber[None, Never]]:
+        taken = sem.take(permits).and_then(fx.sync(lambda: admitted.append(permits)))
+        return taken.pipe(on_scheduler).fork(start_immediately=True)
+
+    positive = yield from request(1)
+    yield from sem.release(1).pipe(on_scheduler)
+    # The positive waiter is eligible but has not resumed, so take(0) must queue behind it.
+    cancelled = yield from request(0)
+    zero = yield from request(0)
+    assert cancelled.poll_unsafe() is None
+    yield from cancelled.interrupt()
+    assert zero.poll_unsafe() is None
+    assert admitted == []
+
+    def run_turn() -> None:
+        turns.pop(0)()
+
+    def run_all() -> None:
+        while turns:
+            turns.pop(0)()
+
+    yield from fx.sync(run_turn)
+    assert admitted == [1, 0]
+    yield from fx.Fiber.join_all([positive, zero])
+    yield from sem.release(1)
+    yield from fx.sync(run_all)
+    assert (yield from sem.take_if_available(1))
+    assert not (yield from sem.take_if_available(1))

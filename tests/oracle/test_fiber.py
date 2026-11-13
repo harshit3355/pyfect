@@ -141,6 +141,17 @@ def test_interrupt_all_as_awaits_fibers_passed_as_a_one_shot_iterable():
 
 
 @testing.effect
+def test_keeps_a_finalizers_defect_when_an_interrupted_fiber_waits_for_a_child():
+    """keeps a finalizer's defect when an interrupted fiber waits for a child"""
+    finalizer = fx.void.fork(uninterruptible=True).and_then(fx.die("boom"))
+    fiber = yield from fx.never.ensuring(finalizer).fork(start_immediately=True)
+    yield from fiber.interrupt()
+    ex = yield from fiber.await_exit()
+    assert ex.has_interrupts
+    assert ex.find_defect() == fx.Ok("boom")
+
+
+@testing.effect
 def test_delivers_a_synchronous_self_interrupt_instead_of_completing_to_success():
     """delivers a synchronous self-interrupt instead of completing to success"""
 

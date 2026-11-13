@@ -172,7 +172,10 @@ def test_scoped_get_closes_the_expired_entry_it_replaces():
 
 
 @testing.effect
-def test_scoped_invalidate_when_is_false_once_the_cache_closed_during_the_wait():
+def test_scoped_invalidate_when_is_interrupted_once_the_cache_closed_during_the_wait():
+    """As Effect 4.1.4's ``invalidateWhen`` (#10451): the lookup it waits on
+    completes its waiters with an interrupt once the cache closed, and
+    ``catch_`` does not catch interrupts."""
     finish = yield from fx.Latch.make()
 
     def lookup(_key: str) -> fx.Effect[int, Never, fx.Scope]:
@@ -186,7 +189,8 @@ def test_scoped_invalidate_when_is_false_once_the_cache_closed_during_the_wait()
     checking = yield from cache.invalidate_when("a", lambda _: True).fork(start_immediately=True)
     yield from scope.close(fx.Success(None))
     yield from finish.open()
-    assert (yield from checking.await_exit()) == fx.Success(False)
+    ex = yield from checking.await_exit()
+    assert isinstance(ex, fx.Failure) and ex.cause.has_interrupts_only
 
 
 @testing.effect

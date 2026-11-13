@@ -110,6 +110,46 @@ def test_sleep_handles_multiple_sleeps():
 
 
 @testing.effect
+def test_sleep_preserves_interruption_masking_in_a_finalizer_on_first_use():
+    """TestClock.test.ts "sleep - preserves interruption masking in a finalizer on first use"."""
+    clock = TestClock()
+    events: list[str] = []
+
+    @fx.gen
+    def cleanup():
+        events.append("cleanup started")
+        yield from fx.sleep("1 second")
+        events.append("cleanup finished")
+
+    fiber = yield from (
+        fx.never.ensuring(cleanup)
+        .pipe(fx.provide_service(fx.Clock, clock))
+        .fork(start_immediately=True)
+    )
+    fiber.interrupt_as_unsafe(None)
+    yield from fx.yield_now()
+    assert events == ["cleanup started"]
+    assert fiber.poll_unsafe() is None
+    yield from clock.adjust("1 second")
+    yield from fiber.await_exit()
+    assert events == ["cleanup started", "cleanup finished"]
+
+
+@testing.effect
+def test_sleep_waits_the_full_duration_each_time_a_sleep_effect_runs():
+    """TestClock.test.ts "sleep - waits the full duration each time a sleep effect runs"."""
+    clock = yield from testing.test_clock()
+    sleep = clock.sleep(seconds(1))
+    yield from testing.adjust("5 seconds")
+    for _ in range(2):
+        fiber = yield from sleep.fork()
+        yield from testing.adjust("999 millis")
+        assert fiber.poll_unsafe() is None
+        yield from testing.adjust("1 millis")
+        assert fiber.poll_unsafe() == fx.Success(None)
+
+
+@testing.effect
 def test_set_time_sleep_correctly_handles_new_set_time():
     """TestClock.test.ts "setTime - sleep correctly handles new set time"."""
     elapsed: list[bool] = []

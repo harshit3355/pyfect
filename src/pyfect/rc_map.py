@@ -275,8 +275,10 @@ class RcMap[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never]:
         return _WithFiber(body)
 
     def touch_unsafe(self, key: K, fiber: Fiber[Any, Any]) -> None:
-        """``touch`` in ``fiber``'s step, on the clock of its context."""
-        clock: ClockService = fiber._context.lookup(Clock)[1]
+        """``touch`` in ``fiber``'s step. As every idle time, measured on the
+        clock of the context the map was made in (as in Effect 4.1.4), not
+        ``fiber``'s."""
+        clock = self._clock()
         with self._lock:
             entry = None if self._entries is None else self._entries.get(key)
             if entry is not None and not entry.idle_time_to_live.is_zero():
@@ -359,9 +361,13 @@ class RcMap[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never]:
     def _release(self, key: K, entry: _Entry[A, E]) -> Effect[None]:
         return _WithFiber(lambda fiber: self._release_now(fiber, key, entry))
 
+    def _clock(self) -> ClockService:
+        """The clock idle times are measured on: the map's, not a borrower's."""
+        return self._context.lookup(Clock)[1]
+
     def _release_now(self, fiber: Fiber[Any, Any], key: K, entry: _Entry[A, E]) -> Effect[None]:
         ttl = entry.idle_time_to_live
-        clock: ClockService = fiber._context.lookup(Clock)[1]
+        clock = self._clock()
         with self._lock:
             entry.ref_count -= 1
             if entry.ref_count > 0:
@@ -402,7 +408,7 @@ class RcMap[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never]:
 
         # Started before it is published: closing the map interrupts the
         # published timer, which must have started by then.
-        timer: Fiber[None, Never] = new_root(self._owner, fiber._context)
+        timer: Fiber[None, Never] = new_root(self._owner, self._context)
         start_root(timer, uninterruptible_mask(expire_when_due).ensuring(_Sync(forget)))
         timer.run_in(self._scope)
         with self._lock:

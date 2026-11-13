@@ -690,9 +690,10 @@ class Fiber(Generic[A_co, E_co]):
         # before the step that reaches ``MaxOpsBeforeYield`` (Effect's
         # ``shouldYield``), but always takes its first step, so a budget
         # of 1 or 2 still makes progress. An ``EffectScheduler`` is asked
-        # before every step, the first too, as in Effect.
+        # before every step, the first too, as in Effect, except the step a
+        # run resumed after a pause (``ops`` > 0) saved (Effect 4.1.4).
         ops, self._ops_on_resume = self._ops_on_resume, 0
-        first = ops + 1 if self._should_yield is None else 0
+        first = ops + 1 if self._should_yield is None or ops else 0
         # Whether ``cur`` is the exit a step (or a frame that ``claims``)
         # just returned: a result it decided (a taken item, an applied
         # update) reaches its continuation with no pause in between, where
@@ -762,8 +763,16 @@ class Fiber(Generic[A_co, E_co]):
         """The step budget is spent: let other fibers run, then go on with
         ``cur``. Effect pauses with ``flatMap(yieldNow, () => cur)``, whose
         continuation is the first step of the resumed run, so that run
-        starts one step into its budget."""
-        self._queue_yielded(_Yielded(cur, ops=1))
+        starts one step into its budget. A dispatcher that raises is a
+        defect the fiber goes on with, right after this run (as in Effect)."""
+        yielded = _Yielded(cur, ops=1)
+        try:
+            self._queue_yielded(yielded)
+        except BaseException as exc:
+            self._yielded = None
+            if self._batch_first is yielded:
+                self._batch_first = None
+            self._drive(self._raised(exc))
 
     def _queue_yielded(self, yielded: _Yielded, priority: int = 0) -> None:
         self._yielded = yielded
