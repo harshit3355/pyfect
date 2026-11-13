@@ -143,13 +143,15 @@ class Statement[A = Row](Fragment, Effect[list[A], SqlError, Never]):
     ``values_unprepared`` and ``unprepared``; ``compile()`` gives the SQL
     and parameters without running it."""
 
-    __slots__ = ("acquirer", "borrower", "compiler", "span_attributes", "transform_rows")
+    __slots__ = ("acquirer", "borrower", "compiler", "span_attributes", "sql", "transform_rows")
 
     acquirer: Acquirer
     compiler: Compiler
     span_attributes: tuple[tuple[str, object], ...]
     transform_rows: TransformRows | None
     borrower: Borrower | None
+    sql: Constructor | None
+    """The client that built the statement, given to ``CurrentTransformer``."""
 
     def __init__(
         self,
@@ -160,6 +162,7 @@ class Statement[A = Row](Fragment, Effect[list[A], SqlError, Never]):
         span_attributes: SpanAttributes,
         transform_rows: TransformRows | None,
         borrower: Borrower | None,
+        sql: Constructor | None = None,
     ) -> None:
         super().__init__(segments)
         self.acquirer = acquirer
@@ -167,6 +170,7 @@ class Statement[A = Row](Fragment, Effect[list[A], SqlError, Never]):
         self.span_attributes = tuple(span_attributes)
         self.transform_rows = transform_rows
         self.borrower = borrower
+        self.sql = sql
 
     def __repr__(self) -> str:
         sql, params = self.compile()
@@ -332,7 +336,7 @@ def _with_statement[A, X, E, R](
         transform = fiber.get_ref(CurrentTransformer)
         if transform is None:
             return f(self, fiber)
-        constructor = make(
+        constructor = self.sql or make(
             self.acquirer, self.compiler, self.span_attributes, self.transform_rows, self.borrower
         )
         transformed = transform(self, constructor, fiber, span)
@@ -387,6 +391,7 @@ class Constructor:
             span_attributes=self.span_attributes,
             transform_rows=self.transform_rows,
             borrower=self.borrower,
+            sql=self,
         )
 
     def __call__(self, template: SqlText, /, *args: object, **kwargs: object) -> Statement[Row]:

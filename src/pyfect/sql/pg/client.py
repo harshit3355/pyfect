@@ -32,6 +32,7 @@ from pyfect.sql.client import make as make_sql_client
 from pyfect.sql.connection import Acquirer, Borrower, Connection, Row, TransformRows, ValueRow
 from pyfect.sql.error import SqlError, UnknownError
 from pyfect.sql.pg import pool as pg_pool
+from pyfect.sql.pg._resolve import ResolvedConfig, resolve
 from pyfect.sql.pg.config import PgClientConfig, PgPoolConfig
 from pyfect.sql.pg.connection import DEFAULT_LISTEN_CAPACITY, Notification, PgConnection, Result
 from pyfect.sql.pg.connection import make as make_connection
@@ -119,6 +120,11 @@ class PgSqlConnection:
 
 
 _LEASED = PoolStats(idle=0, used=1, pending=0, min=1, max=1)
+
+
+def _is_transaction(conn: Connection) -> bool:
+    """A session the server ended has nothing left to roll back."""
+    return not cast("PgSqlConnection", conn).connection.is_dead
 
 
 def _on_commit_failure(conn: Connection) -> Effect[None, SqlError]:
@@ -273,8 +279,8 @@ def _make_impl(
     listen_acquirer: Effect[PgConnection, SqlError, Scope],
     config: PgClientConfig,
     pool_stats: Effect[PoolStats],
-) -> Effect[PgClientService, Never, Reactivity]:
-    def with_context(fiber: Any) -> Effect[PgClientService, Never, Reactivity]:
+) -> Effect[PgClientService, SqlError, Reactivity]:
+    def with_context(fiber: Any) -> Effect[PgClientService, SqlError, Reactivity]:
         captured: Context[Any] = fiber._context
         hook = config.on_acquire
         acquire, transact, listen, borrow = (
@@ -304,31 +310,37 @@ def _make_impl(
             if config.transform_result_names is None
             else default_transforms(config.transform_result_names, config.transform_json).array
         )
-        span_attributes = [
-            *config.span_attributes.items(),
-            ("db.system.name", "postgresql"),
-            ("db.namespace", config.database or config.username or "postgres"),
-            ("server.address", config.host or "localhost"),
-            ("server.port", config.port or 5432),
-        ]
-        client = make_sql_client(
-            driver="pg",
-            acquirer=acquire,
-            borrower=borrow,
-            prepare_transaction_controls=True,
-            commit=_commit,
-            on_commit_failure=_on_commit_failure,
-            release_savepoint=lambda name: f"RELEASE SAVEPOINT {name}",
-            transaction_acquirer=transact,
-            compiler=compiler,
-            span_attributes=span_attributes,
-            transform_rows=transform_rows,
-        )
-        return client.map(
-            lambda c: PgClientService(
-                config=config, listen_acquirer=listen, pool_stats=pool_stats, **c.fields()
+
+        def build(resolved: ResolvedConfig) -> Effect[PgClientService, Never, Reactivity]:
+            span_attributes = [
+                *config.span_attributes.items(),
+                ("db.system.name", "postgresql"),
+                # PostgreSQL connects to the database named after the user when none is given.
+                ("db.namespace", resolved.params.get("dbname") or resolved.params["user"]),
+                ("server.address", resolved.host),
+                ("server.port", resolved.port),
+            ]
+            client = make_sql_client(
+                driver="pg",
+                acquirer=acquire,
+                borrower=borrow,
+                prepare_transaction_controls=True,
+                commit=_commit,
+                on_commit_failure=_on_commit_failure,
+                is_transaction=_is_transaction,
+                release_savepoint=lambda name: f"RELEASE SAVEPOINT {name}",
+                transaction_acquirer=transact,
+                compiler=compiler,
+                span_attributes=span_attributes,
+                transform_rows=transform_rows,
             )
-        )
+            return client.map(
+                lambda c: PgClientService(
+                    config=config, listen_acquirer=listen, pool_stats=pool_stats, **c.fields()
+                )
+            )
+
+        return resolve(config).flat_map(build)
 
     return _WithFiber(with_context)
 
@@ -340,7 +352,7 @@ def _wrap(connection: PgConnection) -> Connection:
 def make(config: PgPoolConfig) -> Effect[PgClientService, SqlError, Scope | Reactivity]:
     """A client on a pool of sessions; it closes with the scope."""
 
-    def build(pool: pg_pool.PgPoolService) -> Effect[PgClientService, Never, Reactivity]:
+    def build(pool: pg_pool.PgPoolService) -> Effect[PgClientService, SqlError, Reactivity]:
         def borrow[A, E, R](
             f: Callable[[Connection], Effect[A, E, R]],
         ) -> Effect[A, E | SqlError, R]:
@@ -364,7 +376,7 @@ def make_client(
     """A client on one session; with ``acquire_for_stream``, each stream
     and listener opens a session of its own."""
 
-    def build(connection: PgConnection) -> Effect[PgClientService, Never, Reactivity]:
+    def build(connection: PgConnection) -> Effect[PgClientService, SqlError, Reactivity]:
         side = make_connection(config) if acquire_for_stream else None
         return _make_impl(
             acquirer=succeed(PgSqlConnection(connection, side)),

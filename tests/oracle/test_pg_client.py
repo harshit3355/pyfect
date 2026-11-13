@@ -494,6 +494,27 @@ def test_after_commit_runs_once_other_connections_see_the_transactions_rows(pg_s
     yield from _with_pool(pg_server, body)
 
 
+@testing.effect
+def test_keeps_the_typed_error_when_the_server_ends_the_session_in_a_nested_transaction(
+    pg_server: PgServer,
+):
+    """keeps the typed error when the server ends the session in a nested transaction"""
+
+    def body():
+        sql = yield from pg.PgClient()
+        cause = yield from (
+            sql.with_transaction(
+                sql.with_transaction(sql("SELECT pg_terminate_backend(pg_backend_pid())"))
+            )
+            .sandbox()
+            .flip()
+        )
+        assert not cause.has_dies, cause.pretty()
+        assert isinstance(cause.squash(), SqlError)
+
+    yield from _with_pool(pg_server, body)
+
+
 # --- PgClient.makeClient without preparation ------------------------------------
 
 

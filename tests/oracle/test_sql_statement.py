@@ -135,6 +135,16 @@ def test_renumbers_a_cached_returning_fragment():
     )
 
 
+def test_uses_each_constructors_own_compiler_for_a_shared_acquirer():
+    """uses each constructor's own compiler for a shared acquirer"""
+    acquirer: Any = fx.void
+    sql = st.make(acquirer, st.make_compiler_sqlite(), [], None)
+    transformed = st.make(acquirer, st.make_compiler_sqlite(lambda name: f"t_{name}"), [], None)
+
+    assert sql("SELECT {}", sql.identifier("a")).compile() == ('SELECT "a"', ())
+    assert transformed("SELECT {}", transformed.identifier("a")).compile() == ('SELECT "t_a"', ())
+
+
 def test_binds_plain_objects_shaped_like_fragments_or_segments_as_parameters():
     """binds plain objects shaped like fragments or segments as parameters"""
     sql = st.make(fx.never, st.make_compiler_sqlite(), [], None)
@@ -306,3 +316,22 @@ def test_skips_propagation_when_tracing_is_disabled():
         .pipe(fx.provide_service(st.SpanPropagationEnabled, True))
         .pipe(fx.provide_service(TracerEnabled, False))
     )
+
+
+@testing.effect
+def test_passes_the_client_that_built_a_statement_to_the_current_transformer():
+    """passes the client that built a statement to the current transformer"""
+    sql = yield from _make_client(fx.void).pipe(fx.provide(reactivity_layer))
+    copy = sql.without_transforms()
+    clients: list[str] = []
+
+    def transformer(
+        statement: st.Statement[Any], client: st.Constructor, _fiber: object, _span: object
+    ) -> fx.Effect[st.Statement[Any]]:
+        clients.append("sql" if client is sql else "copy" if client is copy else "other")
+        return fx.succeed(statement)
+
+    yield from fx.all(
+        sql("select 1"), sql.unsafe("select 1"), copy("select 1"), copy.unsafe("select 1")
+    ).pipe(fx.provide_service(st.CurrentTransformer, transformer))
+    assert clients == ["sql", "sql", "copy", "copy"]

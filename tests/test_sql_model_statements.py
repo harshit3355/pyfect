@@ -6,11 +6,13 @@ dialect's compiler, is the one Effect 4.1.2's ``SqlModel`` sends.
 connection records its SQL, with the pg, mysql2, mssql, ClickHouse and
 SQLite compilers (libSQL and D1 use SQLite's). Dialect SQL the model wrote by
 hand, as its ``returning *`` was (SQL Server takes ``OUTPUT INSERTED.*``,
-which only the compiler writes), shows up here as a difference.
+which only the compiler writes), shows up here as a difference. The two SQL
+Server ``update`` entries are Effect main's (#10563, ``OUTPUT INSERTED.*``
+before the ``where``), edited in by hand from that commit.
 
 Where Effect's own statement fails on a dialect, so does pyfect's: an
-update's ``returning *`` on SQL Server and ClickHouse, an insert's
-``RETURNING *`` on ClickHouse."""
+update's ``returning *`` on ClickHouse, an insert's ``RETURNING *`` on
+ClickHouse."""
 
 from __future__ import annotations
 

@@ -18,6 +18,8 @@ import asyncio
 from collections.abc import Callable, Coroutine, Generator, Sequence
 from typing import Any
 
+import pytest
+
 import pyfect as fx
 from pyfect import option, reactivity, testing
 from pyfect.exit import Failure
@@ -93,6 +95,44 @@ def test_releases_completed_nested_savepoints():
     ).flip()
     assert error == "outer rollback"
     assert (yield from sql("SELECT value FROM savepoint_release")) == [{"value": 1}]
+
+
+@pytest.mark.parametrize("level", ["transaction", "savepoint"])
+@testing.effect
+def test_fails_reserve_from_a_fiber_that_outlives_its(level: str):
+    """fails reserve from a fiber that outlives its %s"""
+    sql = yield from _memory()
+    yield from sql("CREATE TABLE stale_reserve (value INTEGER)")
+
+    def attempt():
+        go = fx.Deferred[None]()
+        stale = yield from sql.with_transaction(
+            go.wait()
+            .and_then(
+                fx.scoped(
+                    sql.reserve.flat_map(
+                        lambda conn: conn.execute_raw("INSERT INTO stale_reserve VALUES (1)", ())
+                    )
+                )
+            )
+            .fork()
+        )
+        yield from go.succeed(None)
+        # Keep the outer transaction alive until the stale attempt finishes, even if it succeeds.
+        yield from stale.await_exit()
+        return stale
+
+    stale = yield from (
+        sql.with_transaction(fx.gen(attempt)) if level == "savepoint" else fx.gen(attempt)
+    )
+    assert (yield from sql("SELECT value FROM stale_reserve")) == []
+    error = yield from stale.join().flip()
+    assert isinstance(error, SqlError)
+    assert (type(error.reason).__name__, error.reason.message, error.is_retryable) == (
+        "UnknownError",
+        "SqlClient: the transaction has already ended",
+        False,
+    )
 
 
 @testing.effect

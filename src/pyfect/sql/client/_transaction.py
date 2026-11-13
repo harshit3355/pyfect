@@ -18,7 +18,7 @@ from pyfect._effect_resources import _run_finalizer
 from pyfect._primitives import Restore, uninterruptible_mask
 from pyfect.cause import Cause, Die, Fail, from_reasons
 from pyfect.context import Context, Reference, Tag
-from pyfect.effect import die
+from pyfect.effect import die, fail
 from pyfect.exit import Exit, Failure, Success
 from pyfect.logger._log import log_with_level
 from pyfect.logger._refs import UnhandledLogLevel
@@ -26,7 +26,7 @@ from pyfect.reactivity import Keys, Reactivity, ReactivityService
 from pyfect.scope import CloseableScope, Scope
 from pyfect.semaphore import Semaphore
 from pyfect.sql.connection import Connection
-from pyfect.sql.error import SqlError
+from pyfect.sql.error import SqlError, UnknownError
 from pyfect.sql.statement._statement import (
     _propagates,
     _record_connection_wait,
@@ -97,7 +97,9 @@ class SafeIntegers(Reference[bool], key="effect/sql/SqlClient/SafeIntegers"):
 class BeginTransaction(Reference[str | None], key="effect/sql/SqlClient/BeginTransaction"):
     """The statement that starts outermost transactions in place of the
     client's ``BEGIN``, such as ``BEGIN ISOLATION LEVEL SERIALIZABLE``. It
-    runs unprepared; savepoints ignore it. Provide it around the one
+    runs unprepared; savepoints ignore it. MySQL can't set an isolation
+    level in ``START TRANSACTION``, so its client runs a ``SET TRANSACTION``
+    statement before its ``BEGIN``. Provide it around the one
     ``with_transaction`` it is for, and never build it from untrusted
     input."""
 
@@ -112,7 +114,8 @@ class BeginTransaction(Reference[str | None], key="effect/sql/SqlClient/BeginTra
 @dataclass(slots=True, eq=False)
 class _AfterCommitBuffer:
     """The ``after_commit`` callbacks of one transaction level. A committed
-    savepoint hands them to its parent; the outermost level runs them."""
+    savepoint hands them to its parent; the outermost level runs them.
+    ``open`` is false once the level's body exits."""
 
     parent: _AfterCommitBuffer | None
     callbacks: list[Effect[None]] = field(default_factory=list[Effect[None]])
@@ -122,6 +125,37 @@ class _AfterCommitBuffer:
 # Keyed by the level, so a context without the transaction tag has no
 # buffer, and transactions not started by ``make_with_transaction`` have none.
 _buffers: WeakKeyDictionary[TransactionLevel, _AfterCommitBuffer] = WeakKeyDictionary()
+
+
+def _has_ended(buffer: _AfterCommitBuffer | None) -> bool:
+    """Whether a level or one of its parents has ended. Forked fibers keep a
+    level in their context after it ends."""
+    while buffer is not None:
+        if not buffer.open:
+            return True
+        buffer = buffer.parent
+    return False
+
+
+def _transaction_ended() -> Effect[Never, SqlError]:
+    return fail(
+        SqlError(
+            reason=UnknownError(cause=None, message="SqlClient: the transaction has already ended")
+        )
+    )
+
+
+def active_transaction_connection(level: TransactionLevel) -> Effect[Connection, SqlError]:
+    """The connection of ``level``, or a ``SqlError`` when that level or one
+    of its parents has ended, checked when the effect runs. For drivers that
+    read their transaction service directly. Levels not started by
+    ``make_with_transaction`` are untracked, so their connection is always
+    returned."""
+    return _Suspend(
+        lambda: (
+            _transaction_ended() if _has_ended(_buffers.get(level)) else _Succeed(level.connection)
+        )
+    )
 
 
 def _run_after_commit[R](effect: Effect[None, Never, R]) -> Effect[None, Never, R]:
@@ -154,13 +188,8 @@ def make_after_commit(
             buffer = _buffers.get(level) if found else None
             if buffer is None:
                 return _run_after_commit(effect)
-            current: _AfterCommitBuffer | None = buffer
-            while current is not None:
-                if not current.open:
-                    return die(
-                        RuntimeError("SqlClient.afterCommit: the transaction has already ended")
-                    )
-                current = current.parent
+            if _has_ended(buffer):
+                return die(RuntimeError("SqlClient.afterCommit: the transaction has already ended"))
             # Runs later with the services in scope now, minus the transaction.
             without = services.pipe(Context.omit(transaction_service))
             buffer.callbacks.append(_Locally(effect, lambda _: without))
@@ -313,7 +342,16 @@ class WithTransaction:
             body: Effect[A, E, R] = _Locally(restore(effect), lambda _: inner)
 
             def finish(exit_: Exit[A, E]) -> Effect[A, E | SqlError, R]:
-                end = self._end(conn, depth, exit_, span)
+                buffer.open = False
+                # The savepoint ended with its parent, and the connection may
+                # already be in another transaction.
+                if _has_ended(buffer.parent):
+                    return (
+                        _transaction_ended()
+                        if isinstance(exit_, Success)
+                        else _FailCause(exit_.cause)
+                    )
+                end = self._end(conn, depth, exit_, span, buffer)
 
                 def done(_: object) -> Effect[A, E]:
                     nonlocal committed
@@ -337,8 +375,10 @@ class WithTransaction:
 
         transaction: Effect[A, E | SqlError, R]
         if parent is not None:
-            conn = parent.connection
-            transaction = start(conn).flat_map(lambda _: in_level(conn))
+            # Checked under the savepoint permit: the parent can end while we wait.
+            transaction = active_transaction_connection(parent).flat_map(
+                lambda conn: start(conn).flat_map(lambda _: in_level(conn))
+            )
         else:
             scope = CloseableScope()
 
@@ -361,7 +401,6 @@ class WithTransaction:
             )
 
         def settle(_: Exit[Any, Any]) -> Effect[None]:
-            buffer.open = False
             if not committed or not buffer.callbacks:
                 return _Succeed(None)
             if buffer.parent is not None:
@@ -376,10 +415,16 @@ class WithTransaction:
         if parent is None:
             return settled
         semaphore: Semaphore = services.get_unsafe(self._semaphore_tag)
-        return semaphore.with_permits(settled)
+        # The savepoint wait is interruptible; the savepoint and its cleanup are not.
+        return restore(semaphore.with_permits(settled.uninterruptible()))
 
     def _end(
-        self, conn: Connection, depth: int, exit_: Exit[Any, Any], span: Span
+        self,
+        conn: Connection,
+        depth: int,
+        exit_: Exit[Any, Any],
+        span: Span,
+        buffer: _AfterCommitBuffer,
     ) -> Effect[None, SqlError]:
         opts = self._options
         control = self._control
@@ -394,7 +439,11 @@ class WithTransaction:
             end = control("ROLLBACK", opts.rollback(conn), span).or_die()
         release = opts.release_savepoint
         if depth > 0 and release is not None:
-            end = end.and_then(control("RELEASE SAVEPOINT", release(conn, depth), span).or_die())
+            release_effect = control("RELEASE SAVEPOINT", release(conn, depth), span).or_die()
+            # An ancestor can end while the savepoint rollback is in flight.
+            end = end.flat_map(
+                lambda _: _Succeed(None) if _has_ended(buffer.parent) else release_effect
+            )
         return end
 
     def _commit(self, conn: Connection, span: Span) -> Effect[None, SqlError]:
@@ -454,6 +503,7 @@ __all__ = [
     "TransactionLevel",
     "TransactionOptions",
     "WithTransaction",
+    "active_transaction_connection",
     "make_after_commit",
     "make_with_transaction",
     "transaction_connection",

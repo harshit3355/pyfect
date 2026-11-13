@@ -94,6 +94,7 @@ class FakeConnection:
     def call_procedure(
         self, name: str, params: Sequence[TypedValue], outputs: Sequence[TypedValue], /
     ) -> tuple[Rows, dict[str, object]]:
+        self.queries.append(name)
         if self._fake.request_causes:
             self._request(name)
         return [], {"answer": 42}

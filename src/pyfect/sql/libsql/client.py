@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable, Mapping
 from typing import Any, Never, Unpack, cast
 
+from pyfect._context_effects import service_option
 from pyfect._core import Effect
 from pyfect._effect_args import require_effect
 from pyfect._primitives import Restore
@@ -22,6 +23,7 @@ from pyfect.context import Context, Tag
 from pyfect.effect import succeed
 from pyfect.layer import Layer, provide
 from pyfect.layer import effect_context as layer_effect_context
+from pyfect.option import Option, is_some
 from pyfect.reactivity import Reactivity
 from pyfect.reactivity import layer as reactivity_layer
 from pyfect.scope import Scope, acquire_release
@@ -31,7 +33,9 @@ from pyfect.sql.client import (
     ClientFields,
     SqlClient,
     SqlClientService,
+    TransactionLevel,
     TransactionOptions,
+    active_transaction_connection,
     make_with_transaction,
     transaction_connection,
 )
@@ -180,9 +184,14 @@ def make(
             transform_rows=transform_rows,
         )
 
+        def reserve(level: Option[TransactionLevel]) -> Effect[Connection, SqlError, Scope]:
+            # Inside a transaction, its connection: the permit is the transaction's.
+            return active_transaction_connection(level.value) if is_some(level) else lease
+
         def service_of(c: SqlClientService) -> LibsqlClientService:
             fields = c.fields()
             fields["with_transaction"] = with_transaction
+            fields["reserve"] = service_option(service).flat_map(reserve)
             return LibsqlClientService(config=config, sdk=sdk, **fields)
 
         return client.map(service_of)

@@ -12,7 +12,7 @@ which protocol each statement takes.
 
 import json
 from collections.abc import Callable, Generator
-from typing import Any
+from typing import Any, cast
 from urllib.parse import quote
 
 import pytest
@@ -27,6 +27,7 @@ from pyfect.logger import Logger
 from pyfect.logger import layer as logger_layer
 from pyfect.reactivity import layer as reactivity_layer
 from pyfect.sql import SqlClient, mysql
+from pyfect.sql.client import BeginTransaction
 from pyfect.sql.error import AuthenticationError, SqlError, UniqueViolation
 from pyfect.sql.statement import CurrentTransformer, Statement
 
@@ -195,6 +196,51 @@ def test_releases_completed_nested_savepoints(mysql_server: MysqlServer):
 
         yield from sql.with_transaction(fx.gen(transaction))
         assert (yield from sql("SELECT value FROM savepoint_release")) == [{"value": 1}]
+
+    yield from _with_client(mysql_server, body)
+
+
+@testing.effect
+def test_starts_a_transaction_at_the_isolation_level_of_a_set_transaction_begin_transaction(
+    mysql_server: MysqlServer,
+):
+    """starts a transaction at the isolation level of a SET TRANSACTION BeginTransaction"""
+
+    def body():
+        sql = yield from SqlClient()
+        yield from sql("DROP TABLE IF EXISTS begin_statement")
+        yield from sql("CREATE TABLE begin_statement (value VARCHAR(32))")
+
+        def on_one_connection():
+            # one connection, so the transaction can't run on another session
+            tx = yield from SqlClient()
+            count = tx("SELECT COUNT(*) AS n FROM begin_statement").map(
+                lambda rows: int(cast("int", rows[0]["n"]))
+            )
+
+            def transaction():
+                yield from tx("INSERT INTO begin_statement VALUES ('rolled back')")
+                before = yield from count
+                yield from sql("INSERT INTO begin_statement VALUES ('committed')")
+                return (yield from fx.fail((yield from count) > before))
+
+            saw_concurrent_commit = yield from (
+                tx.with_transaction(fx.gen(transaction))
+                .pipe(
+                    fx.provide_service(
+                        BeginTransaction, "SET TRANSACTION ISOLATION LEVEL READ COMMITTED"
+                    )
+                )
+                .flip()
+            )
+            # READ COMMITTED, where MySQL's default REPEATABLE READ would not see it
+            assert saw_concurrent_commit is True
+
+        yield from fx.scoped(fx.gen(on_one_connection)).pipe(
+            fx.provide(mysql.layer(_config(mysql_server, max_connections=1)))
+        )
+        # the failure rolled back the transaction's own insert
+        assert (yield from sql("SELECT value FROM begin_statement")) == [{"value": "committed"}]
 
     yield from _with_client(mysql_server, body)
 

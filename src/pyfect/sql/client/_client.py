@@ -18,6 +18,7 @@ from pyfect.sql.client._transaction import (
     TransactionConnection,
     TransactionOptions,
     WithTransaction,
+    active_transaction_connection,
     make_after_commit,
     transaction_connection,
 )
@@ -133,9 +134,8 @@ class SqlClientService(Constructor):
         }
 
     def without_transforms(self) -> Self:
-        """This client, without renaming identifiers or result columns."""
-        if self.transform_rows is None:
-            return self
+        """A copy of this client that renames neither identifiers nor result
+        columns."""
         copy = copy_module.copy(self)
         copy.compiler = self.compiler.without_transform
         copy.transform_rows = None
@@ -148,7 +148,9 @@ class SqlClientService(Constructor):
 
         Inside, ``Reactivity`` invalidations wait for the outermost commit
         (and are dropped on rollback). ``BeginTransaction`` replaces the
-        client's ``BEGIN``."""
+        client's ``BEGIN``. Statements from a fiber that outlives the
+        transaction it was forked in fail with an ``SqlError``: use
+        ``after_commit`` for work after the commit."""
         require_effect(effect, "effect")
         return self._with_transaction(effect)
 
@@ -203,6 +205,7 @@ def make(
     transaction_service: type[TransactionConnection] | None = None,
     prepare_transaction_controls: bool = False,
     begin_transaction: str = "BEGIN",
+    begin: Callable[[Connection, str | None], Effect[None, SqlError]] | None = None,
     rollback: str = "ROLLBACK",
     commit: str | Callable[[Connection], Effect[None, SqlError]] = "COMMIT",
     on_commit_failure: Callable[[Connection], Effect[None, SqlError]] | None = None,
@@ -221,6 +224,10 @@ def make(
     - ``prepare_transaction_controls``: run ``BEGIN``, ``COMMIT`` and
       ``SAVEPOINT`` prepared (off by default: several databases refuse);
       rollbacks and savepoint releases always run unprepared
+    - ``begin(conn, statement)``: starts an outermost transaction, given
+      the ``BeginTransaction`` provided, if any, in place of
+      ``begin_transaction``, for databases that need more than one
+      statement to start one
     - ``commit``: its SQL, or an effect committing on the connection;
       ``on_commit_failure`` cleans up when it fails
     - ``is_transaction``: whether a transaction is open; when it says no,
@@ -245,7 +252,7 @@ def make(
             return _Succeed(None)
         return unprepared(conn, sql)
 
-    def begin(conn: Connection, statement: str | None) -> Effect[None, SqlError]:
+    def default_begin(conn: Connection, statement: str | None) -> Effect[None, SqlError]:
         # Unlike the client's own, a provided statement isn't fixed, so it
         # isn't prepared.
         if statement is None:
@@ -262,7 +269,7 @@ def make(
             transaction_service=service,
             span_attributes=tuple(span_attributes),
             acquire_connection=lambda restore: restore(tx_acquirer),
-            begin=begin,
+            begin=default_begin if begin is None else begin,
             savepoint=lambda conn, depth: control(conn, savepoint(name(depth))),
             release_savepoint=None
             if release is None
@@ -276,7 +283,7 @@ def make(
 
     def in_transaction(fiber: Fiber[Any, Any]) -> Effect[Connection, SqlError, Scope]:
         found, level = fiber._context.lookup(service)
-        return _Succeed(level.connection) if found else acquirer
+        return active_transaction_connection(level) if found else acquirer
 
     get_connection: Acquirer = _WithFiber(in_transaction)
 
@@ -291,7 +298,7 @@ def make(
         ) -> Effect[A, E | SqlError, R]:
             def body(fiber: Fiber[Any, Any]) -> Effect[A, E | SqlError, R]:
                 found, level = fiber._context.lookup(service)
-                return f(level.connection) if found else lend(f)
+                return active_transaction_connection(level).flat_map(f) if found else lend(f)
 
             return _WithFiber(body)
 

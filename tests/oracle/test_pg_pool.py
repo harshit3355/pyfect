@@ -45,7 +45,7 @@ pytest.importorskip("psycopg")
 from _gc_census import tracked_of
 
 import pyfect as fx
-from pyfect import scope, testing
+from pyfect import redacted, scope, testing
 from pyfect.cause import Interrupted
 from pyfect.exit import Failure
 from pyfect.pool import PoolStats
@@ -788,6 +788,95 @@ def test_reports_no_connect_for_a_session_that_was_ready_before_the_statement(
         .with_tracer(tracer)
         .pipe(fx.provide_service(SpanPropagationEnabled, True))
     )
+
+
+def _ensure_span_metadata_databases(server: PgServer) -> None:
+    """The databases (and the ``app_user`` role) the span metadata cases
+    connect to, on the shared server."""
+    import psycopg
+
+    with psycopg.connect(server.uri, autocommit=True) as conn:
+        if conn.execute("SELECT 1 FROM pg_roles WHERE rolname = 'app_user'").fetchone() is None:
+            conn.execute("CREATE ROLE app_user LOGIN PASSWORD 'postgres'")
+        for database in ("app", "query_db", "explicit_db", "app_user"):
+            found = conn.execute(
+                "SELECT 1 FROM pg_database WHERE datname = %s", (database,)
+            ).fetchone()
+            if found is None:
+                conn.execute(f'CREATE DATABASE "{database}" OWNER app_user')
+
+
+# Effect's cases, on the real server: the URL's host and port are the server's
+# wherever Effect's are the ones the client reports. Each case: whether the
+# client is single-connection, the URL (``{port}`` is the server's), whether
+# host, port and database are also given as options, and the database
+# reported.
+_SPAN_METADATA = [
+    pytest.param(
+        False,
+        "postgres://postgres:postgres@127.0.0.1:{port}/app",
+        False,
+        "app",
+        id="pooled URL-only",
+    ),
+    pytest.param(
+        True,
+        "postgres://postgres:postgres@127.0.0.1:{port}/app",
+        False,
+        "app",
+        id="single-connection URL-only",
+    ),
+    pytest.param(
+        False,
+        "postgres://postgres:postgres@original:5433/original"
+        "?host=127.0.0.1&port={port}&dbname=query_db",
+        False,
+        "query_db",
+        id="URL query parameters override authority and path",
+    ),
+    pytest.param(
+        False,
+        "postgres://postgres:postgres@original:5433/original?host=query&port=55416&dbname=query_db",
+        True,
+        "explicit_db",
+        id="explicit options override URL query parameters",
+    ),
+    pytest.param(
+        False,
+        "postgres://127.0.0.1:{port}/?user=app_user&password=postgres",
+        False,
+        "app_user",
+        id="omitted database defaults to URL username",
+    ),
+]
+
+
+@testing.live
+@pytest.mark.parametrize(("single", "url", "explicit", "database"), _SPAN_METADATA)
+def test_query_span_metadata(
+    pg_server: PgServer, single: bool, url: str, explicit: bool, database: str
+):
+    """PgPool connection spans / query span metadata: $name"""
+    _ensure_span_metadata_databases(pg_server)
+    tracer, spans = _recording()
+    port = pg_server.port
+    options: dict[str, Any] = (
+        {"host": "127.0.0.1", "port": port, "database": "explicit_db"} if explicit else {}
+    )
+    config = pg.PgPoolConfig(url=redacted.make(url.format(port=port)), **options)
+
+    def body():
+        sql: pg.PgClientService = yield from (pg.make_client(config) if single else pg.make(config))
+        yield from sql("SELECT 1")
+        span = next(span for span in spans if "db.system.name" in span.attributes)
+        assert [
+            span.name,
+            span.attributes.get("db.namespace"),
+            span.attributes.get("server.address"),
+            span.attributes.get("server.port"),
+        ] == [database, database, "127.0.0.1", port]
+
+    yield from (fx.scoped(fx.gen(body)).with_tracer(tracer).pipe(fx.provide(fx.reactivity.layer)))
 
 
 def _dead_sessions(url: object) -> int:
