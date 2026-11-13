@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.5 (unreleased)
+
+### Fixed
+
+- `tests/cross_run`'s `RcRef.get` case failed now and then on CI with "3 resources live at
+  once": it allowed at most 2, which is wrong for `RcRef` and `RcMap` (and so `LayerMap`). As
+  in Effect 4.1.2, once a key's last holder lets go the key is free again before that
+  holder's release has run, so a `get` from the same run meanwhile acquires afresh and any
+  number of releases can still be running; a `get` from a run on another thread waits for the
+  release (0.6.4). Run under Node, Effect holds 3 at once
+  when two releases wait on a gate, and so does pyfect (`tests/test_resource_edges.py` pins
+  both). The cases now check what does hold: while a resource is held, no newer one is
+  acquired for its key.
+
 ## 0.6.4 (2026-11-14)
 
 ### Added
