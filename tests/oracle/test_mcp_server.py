@@ -45,6 +45,7 @@ from pyfect.ai._mcp.core import PromptEntry, ToolEntry
 from pyfect.context import Context
 from pyfect.deferred import Deferred
 from pyfect.errors import Done
+from pyfect.exit import Success
 from pyfect.http import request as R
 from pyfect.http.client import HttpClientService
 from pyfect.http.response import HttpClientResponse
@@ -1389,3 +1390,59 @@ def test_drops_progress_queued_on_stdout_after_its_request_is_cancelled():
     background = yield from harness.receive()
     assert background["params"] == {"progressToken": "background", "progress": 1}
     assert (yield from harness.stdout.size()) == 0
+
+
+@testing.effect
+def test_should_exit_successfully_when_stdin_closes_after_initialization():
+    """McpServer / stdio / should exit successfully when stdin closes after initialization"""
+    harness = yield from stdio_harness(P.v2025_06_18)
+    yield from harness.initialize()
+    yield from harness.close
+    exit = yield from harness.fiber.await_exit()
+    assert isinstance(exit, Success)
+
+
+def _initialize_line(id: int) -> bytes:
+    request = {
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "TestClient", "version": "1.0.0"},
+        },
+    }
+    return (json.dumps(request) + "\n").encode()
+
+
+@testing.effect
+def test_should_give_each_layer_stdio_server_its_own_protocol_in_one_layer_graph():
+    """McpServer / stdio / should give each layerStdio server its own protocol in one layer graph"""
+
+    def make_stdio(id: int, out: Queue[str]) -> fx.layer.Layer[stdio.Stdio]:
+        def output(*, end_on_done: bool = False) -> stdio.Output:
+            def write(chunk: str | bytes) -> fx.Effect[None]:
+                return out.offer(chunk.decode() if isinstance(chunk, bytes) else chunk).as_void()
+
+            return cast("stdio.Output", sink.for_each(write))
+
+        return stdio.layer_test(
+            stdin=stream.make(_initialize_line(id)).concat(stream.never), stdout=output
+        )
+
+    def server(name: str) -> fx.layer.Layer[M.McpServer, Any, stdio.Stdio]:
+        return M.layer_stdio(name=name, version="1.0.0", protocols=[P.v2025_11_25])
+
+    stdout_a = yield from Queue[str].unbounded()
+    stdout_b = yield from Queue[str].unbounded()
+    yield from fx.layer.merge(
+        server("A").pipe(fx.layer.provide(make_stdio(1, stdout_a))),
+        server("B").pipe(fx.layer.provide(make_stdio(2, stdout_b))),
+    ).build()
+    response_a = json.loads((yield from stdout_a.take()))
+    response_b = json.loads((yield from stdout_b.take()))
+    assert response_a["id"] == 1
+    assert response_a["result"]["serverInfo"]["name"] == "A"
+    assert response_b["id"] == 2
+    assert response_b["result"]["serverInfo"]["name"] == "B"
