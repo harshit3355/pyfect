@@ -11,6 +11,7 @@ from typing import Any, Never
 
 import pyfect as fx
 from pyfect import date_time
+from pyfect import schema as S
 from pyfect._core import Effect
 from pyfect.ai import _provider as P
 from pyfect.ai.ai_error import AiError, InvalidOutputError, ToolParameterValidationError
@@ -34,10 +35,28 @@ _FINISH_REASONS: Mapping[str, FinishReason] = {
 }
 
 
-def resolve_finish_reason(reason: str | None) -> FinishReason:
+def resolve_finish_reason(reason: str | None, has_tool_calls: bool) -> FinishReason:
+    """A response with no finish reason finishes with ``tool-calls`` when it
+    has tool calls to run, else ``other``."""
     if reason is None:
-        return "other"
+        return "tool-calls" if has_tool_calls else "other"
     return _FINISH_REASONS.get(reason, "unknown")
+
+
+type ToolCodecs = Mapping[str, S.Top]
+"""The codec each tool's call parameters decode with: the one its schema was
+sent with. A tool without one (sent with the default schema, or its own JSON
+Schema) gets its parameters as they came."""
+
+
+def normalize_params(codecs: ToolCodecs, name: str, params: object) -> Effect[object]:
+    """``params`` decoded with the tool's codec; invalid ones unchanged, for
+    the toolkit to report."""
+    codec = codecs.get(name)
+    if codec is None:
+        return fx.succeed(params)
+    decoded: Effect[object, Any, Any] = S.decode_unknown_effect(codec)(params)
+    return decoded.or_else_succeed(lambda _: params)
 
 
 def usage(raw: GT.ChatUsage | None) -> dict[str, Any]:
@@ -151,7 +170,9 @@ def _image(url: str) -> Gen[Part]:
     return {"type": "source", "sourceType": "url", "id": id, "url": url, "title": ""}
 
 
-def _make_response(raw: GT.ChatResult, response: HttpClientResponse) -> Gen[list[Part]]:
+def _make_response(
+    raw: GT.ChatResult, response: HttpClientResponse, codecs: ToolCodecs
+) -> Gen[list[Part]]:
     parts: list[Part] = [
         {
             "type": "response-metadata",
@@ -180,7 +201,12 @@ def _make_response(raw: GT.ChatResult, response: HttpClientResponse) -> Gen[list
         params = yield from parse_params(
             name, P.or_default(call["function"].get("arguments"), "{}"), "makeResponse"
         )
-        part: Part = {"type": "tool-call", "id": call["id"], "name": name, "params": params}
+        part: Part = {
+            "type": "tool-call",
+            "id": P.or_default(call.get("id"), f"{raw['id']}_tool_{index}"),
+            "name": name,
+            "params": (yield from normalize_params(codecs, name, params)),
+        }
         if index == 0 and details:
             part["metadata"] = {KEY: {"reasoningDetails": details}}
         parts.append(part)
@@ -204,7 +230,7 @@ def _make_response(raw: GT.ChatResult, response: HttpClientResponse) -> Gen[list
     parts.append(
         {
             "type": "finish",
-            "reason": resolve_finish_reason(finish_reason),
+            "reason": resolve_finish_reason(finish_reason, bool(calls)),
             "usage": usage(raw.get("usage")),
             "response": P.response_details(response),
             "metadata": {KEY: metadata},
@@ -214,6 +240,6 @@ def _make_response(raw: GT.ChatResult, response: HttpClientResponse) -> Gen[list
 
 
 def make_response(
-    raw: GT.ChatResult, response: HttpClientResponse
+    raw: GT.ChatResult, response: HttpClientResponse, codecs: ToolCodecs
 ) -> Effect[list[Part], AiError, IdGenerator]:
-    return fx.gen(lambda: _make_response(raw, response))
+    return fx.gen(lambda: _make_response(raw, response, codecs))

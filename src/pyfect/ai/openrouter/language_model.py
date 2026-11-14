@@ -10,7 +10,9 @@ The configuration is OpenRouter's chat request (``temperature``,
 the strictness of a schema-backed response format, ``True`` by default for
 OpenAI models (``openai/``, ``gpt-``, ``o1-``, ``o3-``, ``o4-``), unsaid
 (``None``) for the others. Tool and response schemas are written for the
-model's family (Anthropic's, OpenAI's or the default); provider-defined
+model's family (Anthropic's, OpenAI's or the default; a strict tool on a
+default model gets OpenAI's strict subset), and a tool call's parameters
+are decoded with the codec its schema was sent with; provider-defined
 tools are not supported. Provider options under ``"openrouter"`` set
 ``cacheControl`` breakpoints, a file's ``fileName`` and the
 ``reasoningDetails`` replayed in later turns.
@@ -23,6 +25,7 @@ from typing import Any, Literal, Never, TypedDict
 
 import pyfect as fx
 from pyfect import layer as L
+from pyfect import schema as S
 from pyfect import stream as St
 from pyfect._core import Effect
 from pyfect.ai import _provider as P
@@ -35,7 +38,7 @@ from pyfect.ai.ai_error import AiError, InvalidUserInputError
 from pyfect.ai.anthropic_structured_output import to_codec_anthropic
 from pyfect.ai.openai_structured_output import to_codec_openai
 from pyfect.ai.openrouter._prompt import MODULE, Block, prepare_messages
-from pyfect.ai.openrouter._response import Part, make_response
+from pyfect.ai.openrouter._response import Part, ToolCodecs, make_response
 from pyfect.ai.openrouter._stream import make_stream_response
 from pyfect.ai.openrouter.client import OpenRouterClient
 from pyfect.ai.openrouter.client import Service as ClientService
@@ -117,9 +120,14 @@ def codec_transformer(model: str) -> T.CodecTransformer:
     return lm.default_codec_transformer
 
 
-def _tools(options: lm.ProviderOptions, codecs: T.CodecTransformer) -> tuple[Any, Any]:
+def _tools(
+    options: lm.ProviderOptions, transformer: T.CodecTransformer
+) -> tuple[Any, Any, ToolCodecs]:
+    """The tools to send, the tool choice, and the codec each tool's call
+    parameters are decoded with: the one its schema was sent with."""
+    codecs: dict[str, S.Top] = {}
     if not options.tools:
-        return None, None
+        return None, None, codecs
     if any(isinstance(tool, T.ProviderDefined) for tool in options.tools):
         raise PT.unsupported(
             MODULE,
@@ -131,39 +139,56 @@ def _tools(options: lm.ProviderOptions, codecs: T.CodecTransformer) -> tuple[Any
         )
     tools: list[Block] = []
     for tool in options.tools:
-        parameters = _tool_parameters(tool, codecs)
-        function: Block = {
-            "name": tool.name,
-            "parameters": parameters,
-            "strict": T.get_strict_mode(tool),
-        }
+        strict = T.get_strict_mode(tool)
+        # Strict tools need the OpenAI strict schema subset.
+        tool_transformer = (
+            to_codec_openai
+            if strict is True and transformer is lm.default_codec_transformer
+            else transformer
+        )
+        parameters, codec = _tool_parameters(tool, tool_transformer)
+        if codec is not None:
+            codecs[tool.name] = codec
+        function: Block = {"name": tool.name, "parameters": parameters, "strict": strict}
         description = T.get_description(tool)
         if description is not None:
             function["description"] = description
         tools.append({"type": "function", "function": function})
     choice = options.tool_choice
     if isinstance(choice, str):
-        return tools, choice
+        return tools, choice, codecs
     if "tool" in choice:
-        return tools, {"type": "function", "function": {"name": choice["tool"]}}
+        return tools, {"type": "function", "function": {"name": choice["tool"]}}, codecs
     allowed = set(choice.get("one_of", ()))
     kept = [tool for tool in tools if tool["function"]["name"] in allowed]
-    return kept, "required" if choice.get("mode") == "required" else "auto"
+    return kept, "required" if choice.get("mode") == "required" else "auto", codecs
 
 
-def _tool_parameters(tool: T.AnyTool, codecs: T.CodecTransformer) -> P.JsonObject:
-    """An object or ``anyOf`` schema (a dynamic tool's own one as given)."""
-    schema = PT.tool_json_schema(MODULE, tool, require_object=False, transformer=codecs)
-    raw = isinstance(tool, T.Dynamic) and tool.json_schema is not None
-    if schema.get("type") == "object" or isinstance(schema.get("anyOf"), list) or raw:
-        return schema
-    raise PT.unsupported_schema(
-        MODULE,
-        f'Tool "{tool.name}" parameters: expected a JSON Schema with type "object" or '
-        f'"anyOf", received {P.dumps(schema)}. '
-        "For a tool without parameters, omit `parameters` or use `Tool.EmptyParams`",
-        "prepareTools",
-    )
+def _tool_parameters(
+    tool: T.AnyTool, transformer: T.CodecTransformer
+) -> tuple[P.JsonObject, S.Top | None]:
+    """An object or ``anyOf`` schema and the codec of its calls (a dynamic
+    tool's own JSON Schema as given, with none). The codec is the
+    transformer's of the parameters' encoded side, so decoding a call never
+    runs the application's decoders."""
+    if isinstance(tool, T.Dynamic) and tool.json_schema is not None:
+        return dict(tool.json_schema), None
+    schema = PT.tool_json_schema(MODULE, tool, require_object=False, transformer=transformer)
+    if schema.get("type") != "object" and not isinstance(schema.get("anyOf"), list):
+        raise PT.unsupported_schema(
+            MODULE,
+            f'Tool "{tool.name}" parameters: expected a JSON Schema with type "object" or '
+            f'"anyOf", received {P.dumps(schema)}. '
+            "For a tool without parameters, omit `parameters` or use `Tool.EmptyParams`",
+            "prepareTools",
+        )
+    if transformer is lm.default_codec_transformer:
+        return schema, None
+    try:
+        codec = transformer(S.to_encoded(tool.parameters_schema))[0]
+    except Exception as error:
+        raise PT.unsupported_schema(MODULE, error, "prepareTools") from error
+    return schema, codec
 
 
 def _response_format(
@@ -187,10 +212,10 @@ def _response_format(
 
 def _make_request(
     config: Mapping[str, Any], options: lm.ProviderOptions, codecs: T.CodecTransformer
-) -> Effect[dict[str, Any], AiError]:
+) -> Effect[tuple[dict[str, Any], ToolCodecs], AiError]:
     try:
         messages = prepare_messages(options.prompt)
-        tools, tool_choice = _tools(options, codecs)
+        tools, tool_choice, tool_codecs = _tools(options, codecs)
         response_format = _response_format(config, options, codecs)
     except UnsupportedInput as error:
         return fx.fail(error.error)
@@ -202,7 +227,7 @@ def _make_request(
         request["tools"] = tools
     if tool_choice is not None:
         request["tool_choice"] = tool_choice
-    return fx.succeed(request)
+    return fx.succeed((request, tool_codecs))
 
 
 def _annotate_request(span: Span | None, request: Mapping[str, Any]) -> None:
@@ -279,32 +304,45 @@ def make(
     def current() -> Effect[ConfigService]:
         return P.current_config(Config, {"model": model}, config)
 
-    def request(options: lm.ProviderOptions) -> Effect[dict[str, Any], AiError]:
+    def request(options: lm.ProviderOptions) -> Effect[tuple[dict[str, Any], ToolCodecs], AiError]:
         built = current().flat_map(lambda cfg: _make_request(cfg, options, codecs))
 
-        def annotate(body: dict[str, Any]) -> dict[str, Any]:
-            _annotate_request(options.span, body)
-            return body
+        def annotate(
+            prepared: tuple[dict[str, Any], ToolCodecs],
+        ) -> tuple[dict[str, Any], ToolCodecs]:
+            _annotate_request(options.span, prepared[0])
+            return prepared
 
         return built.map(annotate)
 
     def build(client: ClientService) -> Effect[lm.Service]:
         def generate(options: lm.ProviderOptions) -> Effect[Sequence[lm.EncodedPart], AiError, Any]:
-            def respond(sent: tuple[GT.ChatResult, Any]) -> Effect[list[Part], AiError, Any]:
-                raw, response = sent
-                _annotate_response(options.span, raw)
-                return make_response(raw, response)
+            def send(
+                prepared: tuple[dict[str, Any], ToolCodecs],
+            ) -> Effect[list[Part], AiError, Any]:
+                body, tool_codecs = prepared
 
-            return request(options).flat_map(
-                lambda body: client.create_chat_completion(body).flat_map(respond)  # pyright: ignore[reportArgumentType]
-            )
+                def respond(sent: tuple[GT.ChatResult, Any]) -> Effect[list[Part], AiError, Any]:
+                    raw, response = sent
+                    _annotate_response(options.span, raw)
+                    return make_response(raw, response, tool_codecs)
+
+                return client.create_chat_completion(body).flat_map(respond)  # pyright: ignore[reportArgumentType]
+
+            return request(options).flat_map(send)
 
         def stream(options: lm.ProviderOptions) -> Stream[lm.EncodedPart, AiError, Any]:
-            built: Effect[Stream[Part, AiError, Any], AiError] = request(options).flat_map(
-                lambda body: client.create_chat_completion_stream(body).map(  # pyright: ignore[reportArgumentType]
-                    lambda sent: make_stream_response(sent[1], sent[0], client.max_response_bytes)
+            def send(
+                prepared: tuple[dict[str, Any], ToolCodecs],
+            ) -> Effect[Stream[Part, AiError, Any], AiError]:
+                body, tool_codecs = prepared
+                return client.create_chat_completion_stream(body).map(  # pyright: ignore[reportArgumentType]
+                    lambda sent: make_stream_response(
+                        sent[1], sent[0], client.max_response_bytes, tool_codecs
+                    )
                 )
-            )
+
+            built = request(options).flat_map(send)
             return St.unwrap(built).map(lambda part: _annotate_stream_part(options.span, part))
 
         return lm.make(

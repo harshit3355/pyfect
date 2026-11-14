@@ -7,7 +7,8 @@ from __future__ import annotations
 
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false
 # pyright: reportUnknownMemberType=false, reportUnknownLambdaType=false
-from typing import Any, TypedDict
+import json
+from typing import Any, Required, TypedDict
 
 import pytest
 
@@ -23,7 +24,10 @@ from pyfect.ai import response as R
 from pyfect.ai import tool as T
 from pyfect.ai import toolkit as K
 from pyfect.ai.openrouter import client, language_model
+from pyfect.context import Tag
 from pyfect.redacted import make as redact
+from pyfect.schema import getter as G
+from pyfect.schema import transformation as Tr
 
 from ._ai_http import MockHttp, json_response, mock_sse
 
@@ -708,3 +712,513 @@ def test_stream_tool_param_fragments():
         disable_tool_call_resolution=True,
     ).pipe(fx.provide(toolkit.to_layer(probe.handler(lambda *_: fx.succeed("ok")))))
     assert [part.delta for part in parts if part.type == "tool-params-delta"] == ['{"a":', "1}"]
+
+
+# finish reason inference ------------------------------------------------------------------
+
+_USAGE = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+_PROBE_CALL = {
+    "index": 0,
+    "id": "call-1",
+    "type": "function",
+    "function": {"name": "ProbeTool", "arguments": '{"value":1}'},
+}
+
+
+class Value(TypedDict):
+    value: float
+
+
+class MaybeValue(TypedDict, total=False):
+    value: float
+
+
+_VALUE_TOOL = T.make("ProbeTool", parameters=S.Struct(Value), success=S.Finite)
+_VALUE_TOOLKIT = K.make(_VALUE_TOOL)
+_VALUE_LAYER = _VALUE_TOOLKIT.to_layer(_VALUE_TOOL.handler(lambda p, _: fx.succeed(p["value"])))
+
+
+def _chunk_of(model: str, **fields: Any) -> dict[str, Any]:
+    return {
+        "id": "response-1",
+        "object": "chat.completion.chunk",
+        "model": model,
+        "created": 1,
+        **fields,
+    }
+
+
+@testing.effect
+def test_generate_null_finish_reason():
+    """OpenRouterLanguageModel / finish reason inference / generate executes tool calls with a
+    null finish reason"""
+    call = {key: value for key, value in _PROBE_CALL.items() if key != "index"}
+    http = mock(
+        choices=[
+            {
+                "index": 0,
+                "finish_reason": None,
+                "message": {"role": "assistant", "content": None, "tool_calls": [call]},
+            }
+        ]
+    )
+    response = yield from _provided(
+        lm.generate_text("Use the tool", toolkit=_VALUE_TOOLKIT).pipe(fx.provide(_VALUE_LAYER)),
+        http,
+        "test/model",
+    )
+    assert response.finish_reason == "tool-calls"
+    assert [part.result for part in response.tool_results] == [1]
+
+
+@testing.effect
+def test_stream_no_finish_reason():
+    """OpenRouterLanguageModel / finish reason inference / stream executes complete tool calls
+    without a finish reason"""
+    first = {**_PROBE_CALL, "function": {"name": "ProbeTool", "arguments": '{"value":'}}
+    events = [
+        _chunk_of("test/model", choices=[{"index": 0, "delta": {"tool_calls": [first]}}]),
+        _chunk_of(
+            "test/model",
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {"tool_calls": [{"index": 0, "function": {"arguments": "1}"}}]},
+                }
+            ],
+            usage=_USAGE,
+        ),
+    ]
+    parts = yield from _provided(
+        lm.stream_text(prompt="Use the tool", toolkit=_VALUE_TOOLKIT)
+        .run_collect()
+        .map(list)
+        .pipe(fx.provide(_VALUE_LAYER)),
+        stream_mock(events),
+        "test/model",
+    )
+    assert [part.reason for part in parts if part.type == "finish"] == ["tool-calls"]
+    assert [part.result for part in parts if part.type == "tool-result"] == [1]
+
+
+@testing.effect
+def test_stream_truncated_call_without_finish_reason():
+    """OpenRouterLanguageModel / finish reason inference / does not execute a truncated tool call
+    alongside a complete call without a finish reason"""
+    tool = T.make("ProbeTool", parameters=S.Struct(MaybeValue), success=S.String)
+    toolkit = K.make(tool)
+    executed: list[object] = []
+
+    def handle(params: MaybeValue, _: Any) -> fx.Effect[str]:
+        return fx.sync(lambda: executed.append(params.get("value"))).as_("ok")
+
+    truncated = {
+        "index": 1,
+        "id": "call-2",
+        "type": "function",
+        "function": {"name": "ProbeTool", "arguments": '{"value":'},
+    }
+    events = [
+        _chunk_of(
+            "test/model", choices=[{"index": 0, "delta": {"tool_calls": [_PROBE_CALL, truncated]}}]
+        ),
+        _chunk_of("test/model", choices=[], usage=_USAGE),
+    ]
+    yield from _provided(
+        lm.stream_text(prompt="Use the probe tool", toolkit=toolkit)
+        .run_drain()
+        .exit()
+        .pipe(fx.provide(toolkit.to_layer(tool.handler(handle)))),
+        stream_mock(events),
+        "test/model",
+    )
+    # Either rejecting the response or leaving the partial call interrupted is safe.
+    assert None not in executed
+
+
+# schema codecs ----------------------------------------------------------------------------
+
+
+class Tags(TypedDict):
+    tags: dict[str, float]
+
+
+_TAGS_TOOL = T.make(
+    "TagsTool",
+    failure_mode="return",
+    parameters=S.Struct(Tags, tags=S.Record(S.String, S.Finite)),
+    success=S.String,
+)
+
+
+def _tags_handler(params: Tags, _: Any) -> fx.Effect[str]:
+    assert params == {"tags": {"a": 1}}
+    return fx.succeed(_dumps(params["tags"]))
+
+
+def _dumps(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"))
+
+
+def _tool_calls_response(*calls: dict[str, Any], id: str = "gen-test123") -> MockHttp:
+    return mock(
+        id=id,
+        choices=[
+            {
+                "finish_reason": "tool_calls",
+                "index": 0,
+                "message": {"role": "assistant", "content": None, "tool_calls": list(calls)},
+            }
+        ],
+    )
+
+
+def _function_call(id: str | None, name: str, arguments: object) -> dict[str, Any]:
+    call: dict[str, Any] = {
+        "type": "function",
+        "function": {"name": name, "arguments": _dumps(arguments)},
+    }
+    if id is not None:
+        call["id"] = id
+    return call
+
+
+@testing.effect
+def test_decodes_with_sent_codec():
+    """OpenRouterLanguageModel / schema codecs / decodes tool call parameters with the codec their
+    schema was sent with"""
+    toolkit = K.make(_TAGS_TOOL)
+    http = _tool_calls_response(
+        _function_call("call-1", "TagsTool", {"tags": [{"0": "a", "1": 1}]}),
+        _function_call("call-2", "TagsTool", {"tags": 42}),
+    )
+    response = yield from _provided(
+        lm.generate_text("Use a tool", toolkit=toolkit).pipe(
+            fx.provide(toolkit.to_layer(_TAGS_TOOL.handler(_tags_handler)))
+        ),
+        http,
+        GPT,
+    )
+    assert http.bodies[0]["tools"][0]["function"]["parameters"]["properties"]["tags"]["type"] == (
+        "array"
+    )
+    assert len(response.tool_results) == 2
+    success = next(part for part in response.tool_results if part.id == "call-1")
+    invalid = next(part for part in response.tool_results if part.id == "call-2")
+    assert (success.is_failure, success.result) == (False, '{"a":1}')
+    assert invalid.is_failure
+    assert isinstance(invalid.result, E.AiError)
+    assert isinstance(invalid.result.reason, E.ToolParameterValidationError)
+
+
+@testing.effect
+def test_stream_decodes_with_sent_codec():
+    """OpenRouterLanguageModel / schema codecs / decodes streamed tool call parameters with the
+    codec their schema was sent with: the stream decodes as the response does"""
+    toolkit = K.make(_TAGS_TOOL)
+    call = {
+        "index": 0,
+        "id": "call-1",
+        "type": "function",
+        "function": {"name": "TagsTool", "arguments": _dumps({"tags": [{"0": "a", "1": 1}]})},
+    }
+    events = [
+        _chunk(
+            choices=[{"index": 0, "finish_reason": "tool_calls", "delta": {"tool_calls": [call]}}]
+        ),
+        _chunk(choices=[], usage=_USAGE),
+    ]
+    parts = yield from _stream(events, prompt="Use a tool", toolkit=toolkit).pipe(
+        fx.provide(toolkit.to_layer(_TAGS_TOOL.handler(_tags_handler)))
+    )
+    assert [(p.is_failure, p.result) for p in parts if p.type == "tool-result"] == [
+        (False, '{"a":1}')
+    ]
+
+
+class _Decoder(Tag[float], key="test/OpenRouterDecoder"):
+    pass
+
+
+class DecodeParams(TypedDict):
+    n: float
+
+
+@testing.effect
+def test_disabled_resolution_encoded_params():
+    """OpenRouterLanguageModel / schema codecs / returns encoded tool parameters without decoding
+    services when resolution is disabled"""
+    parameter = S.String.pipe(
+        S.decode_to(
+            S.Finite,
+            Tr.Transformation(G.transform_effect(lambda _, __: _Decoder()), G.transform(str)),
+        )
+    )
+    toolkit = K.make(T.make("Decode", parameters=S.Struct(DecodeParams, n=parameter)))
+    response = yield from _provided(
+        lm.generate_text("Use a tool", toolkit=toolkit, disable_tool_call_resolution=True),
+        _tool_calls_response(_function_call("call-1", "Decode", {"n": "1"})),
+        GPT,
+    )
+    assert [part.params for part in response.tool_calls] == [{"n": "1"}]
+
+
+class StrictQuery(TypedDict, total=False):
+    query: Required[str]
+    limit: float
+
+
+@testing.effect
+def test_strict_tool_default_model():
+    """OpenRouterLanguageModel / schema codecs / sends strict tools a strict-compatible schema for
+    models without a provider codec"""
+    tool = T.make("StrictTool", parameters=S.Struct(StrictQuery), success=S.String).annotate(
+        T.Strict, True
+    )
+    toolkit = K.make(tool)
+    seen: list[object] = []
+
+    def handle(params: StrictQuery, _: Any) -> fx.Effect[str]:
+        seen.append(params)
+        return fx.succeed("ok")
+
+    http = _tool_calls_response(
+        _function_call("call-1", "StrictTool", {"query": "search", "limit": None})
+    )
+    response = yield from _provided(
+        lm.generate_text("Use a tool", toolkit=toolkit).pipe(
+            fx.provide(toolkit.to_layer(tool.handler(handle)))
+        ),
+        http,
+        GEMINI,
+    )
+    assert seen == [{"query": "search"}]
+    assert [(p.is_failure, p.result) for p in response.tool_results] == [(False, "ok")]
+    function = http.bodies[0]["tools"][0]["function"]
+    assert function["strict"] is True
+    assert function["parameters"]["additionalProperties"] is False
+    assert function["parameters"]["required"] == ["query", "limit"]
+
+
+class Payload(TypedDict):
+    payload: bool
+
+
+@testing.effect
+def test_non_strict_json_content_schema():
+    """OpenRouterLanguageModel / generateText / tool preparation / preserves JSON content schemas
+    for non-strict tools on default models"""
+    tool = T.make(
+        "JsonTool", parameters=S.Struct(Payload, payload=S.from_json_string(S.Boolean))
+    ).annotate(T.Strict, False)
+    tools = yield from _tools(K.make(tool))
+    assert tools[0]["function"]["parameters"]["properties"]["payload"] == {
+        "type": "string",
+        "contentMediaType": "application/json",
+        "contentSchema": {"type": "boolean"},
+    }
+
+
+# generateText / tool call ids, message preparation ----------------------------------------
+
+
+@testing.effect
+def test_tool_calls_without_ids():
+    """OpenRouterLanguageModel / generateText / generates distinct IDs for tool calls without IDs
+    and preserves supplied IDs"""
+    tool = T.make("ProbeTool", parameters=S.Struct(A), success=S.String)
+    http = _tool_calls_response(
+        _function_call(None, "ProbeTool", {"a": 1}),
+        _function_call(None, "ProbeTool", {"a": 2}),
+        _function_call("provided-id", "ProbeTool", {"a": 3}),
+        id="response-1",
+    )
+    response = yield from _provided(
+        lm.generate_text("call the tools", toolkit=K.make(tool), disable_tool_call_resolution=True),
+        http,
+        GPT,
+    )
+    assert [(c.id, c.name, c.params) for c in response.tool_calls] == [
+        ("response-1_tool_0", "ProbeTool", {"a": 1}),
+        ("response-1_tool_1", "ProbeTool", {"a": 2}),
+        ("provided-id", "ProbeTool", {"a": 3}),
+    ]
+
+
+@testing.effect
+def test_base64_string_data_urls():
+    """OpenRouterLanguageModel / generateText / message preparation / sends base64 string image
+    and file data as data URLs"""
+    user = yield from _user_body(
+        [
+            Pr.FilePart(media_type="image/png", data="iVBORw0KGgo="),
+            Pr.FilePart(media_type="image/png", data="data:image/png;base64,iVBORw0KGgo="),
+            Pr.FilePart(media_type="image/png", data="https://example.com/image.png"),
+            Pr.FilePart(media_type="application/pdf", file_name="document.pdf", data="JVBERg=="),
+        ]
+    )
+    assert user["content"] == [
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+        {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}},
+        {"type": "image_url", "image_url": {"url": "https://example.com/image.png"}},
+        {
+            "type": "file",
+            "file": {
+                "filename": "document.pdf",
+                "file_data": "data:application/pdf;base64,JVBERg==",
+            },
+        },
+    ]
+
+
+# streamText (4.1.4) -----------------------------------------------------------------------
+
+
+@testing.effect
+def test_stream_empty_content_deltas():
+    """OpenRouterLanguageModel / streamText / keeps streamed reasoning in one part when content
+    deltas are empty"""
+    model = "deepseek/deepseek-v4-flash"
+    events = [
+        _chunk_of(model, choices=[{"index": 0, "delta": {"content": "", "reasoning": "Thinking"}}]),
+        _chunk_of(model, choices=[{"index": 0, "delta": {"content": "", "reasoning": " it over"}}]),
+        _chunk_of(
+            model,
+            choices=[{"index": 0, "finish_reason": "stop", "delta": {"content": "Answer"}}],
+            usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8},
+        ),
+    ]
+    parts = yield from _provided(
+        lm.stream_text(prompt="reason then answer").run_collect().map(list),
+        stream_mock(events),
+        model,
+    )
+    assert [
+        f"{part.type}:{part.delta}" if hasattr(part, "delta") else part.type
+        for part in parts
+        if part.type.startswith(("reasoning-", "text-"))
+    ] == [
+        "reasoning-start",
+        "reasoning-delta:Thinking",
+        "reasoning-delta: it over",
+        "reasoning-end",
+        "text-start",
+        "text-delta:Answer",
+        "text-end",
+    ]
+
+
+def _probe_stream(events: list[Any]) -> fx.Effect[list[Any], Any, Any]:
+    probe = T.make("ProbeTool", parameters=S.Struct(A), success=S.String)
+    toolkit = K.make(probe)
+    return _stream(
+        events, prompt="call the tool", toolkit=toolkit, disable_tool_call_resolution=True
+    ).pipe(fx.provide(toolkit.to_layer(probe.handler(lambda *_: fx.succeed("ok")))))
+
+
+@testing.effect
+def test_stream_calls_without_indices():
+    """OpenRouterLanguageModel / streamText / streams parallel tool calls without indices exactly
+    once"""
+    events = [
+        _chunk(
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "ProbeTool", "arguments": '{"a":'},
+                            },
+                            {
+                                "id": "call-2",
+                                "type": "function",
+                                "function": {"name": "ProbeTool", "arguments": '{"a":'},
+                            },
+                        ]
+                    },
+                }
+            ]
+        ),
+        _chunk(
+            choices=[
+                {
+                    "index": 0,
+                    "finish_reason": "tool_calls",
+                    "delta": {
+                        "tool_calls": [
+                            {"function": {"arguments": "1}"}},
+                            {"function": {"arguments": "2}"}},
+                        ]
+                    },
+                }
+            ]
+        ),
+        _chunk(choices=[], usage={"prompt_tokens": 5, "completion_tokens": 3, "total_tokens": 8}),
+    ]
+    parts = yield from _probe_stream(events)
+    assert [(p.id, p.name, p.params) for p in parts if p.type == "tool-call"] == [
+        ("call-1", "ProbeTool", {"a": 1}),
+        ("call-2", "ProbeTool", {"a": 2}),
+    ]
+
+
+@testing.effect
+def test_stream_ends_mid_tool_call():
+    """OpenRouterLanguageModel / streamText / fails when the response ends before a tool call's
+    parameters are complete"""
+
+    class Text(TypedDict):
+        a: str
+
+    probe = T.make("ProbeTool", parameters=S.Struct(Text), success=S.String)
+    toolkit = K.make(probe)
+    events = [
+        _chunk(
+            choices=[
+                {
+                    "index": 0,
+                    "delta": {
+                        "tool_calls": [
+                            {
+                                "index": 0,
+                                "id": "call-1",
+                                "type": "function",
+                                "function": {"name": "ProbeTool", "arguments": '{"a":"trunc'},
+                            }
+                        ]
+                    },
+                }
+            ]
+        ),
+        _chunk(choices=[{"index": 0, "finish_reason": "length", "delta": {}}], usage=_USAGE),
+    ]
+    error = yield from _provided(
+        lm.stream_text(prompt="call the tool", toolkit=toolkit, disable_tool_call_resolution=True)
+        .run_drain()
+        .flip()
+        .pipe(fx.provide(toolkit.to_layer(probe.handler(lambda *_: fx.succeed("ok"))))),
+        stream_mock(events),
+        GPT,
+    )
+    assert isinstance(error.reason, E.ToolParameterValidationError)
+
+
+@testing.effect
+def test_stream_empty_fragment_after_call():
+    """OpenRouterLanguageModel / streamText / ignores an empty fragment after a tool call
+    completes"""
+    calls = [
+        {
+            "index": 0,
+            "id": "call-1",
+            "type": "function",
+            "function": {"name": "ProbeTool", "arguments": '{"a":1}'},
+        },
+        {"index": 0, "function": {"arguments": ""}},
+    ]
+    events = [_chunk(choices=[{"index": 0, "delta": {"tool_calls": [call]}}]) for call in calls]
+    parts = yield from _probe_stream(events)
+    assert [(p.id, p.params) for p in parts if p.type == "tool-call"] == [("call-1", {"a": 1})]

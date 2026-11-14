@@ -657,7 +657,8 @@ def test_generate_container_without_skills():
         mock_json(_message([{"type": "text", "text": "Hello"}], container=container)),
     )
     finish = _first(response.content, R.FinishPart)
-    assert finish.metadata["anthropic"]["container"] == container
+    metadata: Any = finish.metadata["anthropic"]
+    assert metadata["container"] == container
 
 
 @testing.effect

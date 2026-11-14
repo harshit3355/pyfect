@@ -3,9 +3,12 @@
 
 Reasoning and text deltas open their part on first use; a tool call
 ends as soon as its streamed arguments parse as JSON. The chunk carrying
-``usage`` (the last) flushes the rest: with a ``tool-calls`` finish the
-unfinished calls are sent (unparseable arguments as ``{}``), then the open
-reasoning and text parts end and the finish part follows. Reasoning
+``usage`` (the last) flushes the rest: the unfinished calls are sent, an
+unparseable one as ``{}`` with a ``tool-calls`` finish and as a
+``ToolParameterValidationError`` with any other, then the open reasoning
+and text parts end and the finish part follows. Without a finish reason
+the stream finishes with ``tool-calls`` when every call parsed, else
+``other``. Reasoning
 details are accumulated (consecutive text details merged) and replayed on
 the reasoning end and the first tool call."""
 
@@ -19,7 +22,7 @@ import pyfect as fx
 from pyfect import date_time
 from pyfect._core import Effect
 from pyfect.ai import _provider as P
-from pyfect.ai.ai_error import AiError, InvalidOutputError
+from pyfect.ai.ai_error import AiError, InvalidOutputError, ToolParameterValidationError
 from pyfect.ai.openrouter import _response as Rs
 from pyfect.ai.openrouter._prompt import KEY, MODULE, base64_from_data_url, media_type_of
 from pyfect.ai.openrouter.generated import types as GT
@@ -55,15 +58,17 @@ def _parsed(text: str) -> tuple[bool, object]:
 class _Stream:
     response: HttpClientResponse
     max_chars: int
+    codecs: Rs.ToolCodecs
     text_started: bool = False
     reasoning_started: bool = False
     metadata_emitted: bool = False
     details_attached: bool = False
-    finish_reason: FinishReason = "other"
+    finish_reason: FinishReason | None = None
     reasoning_id: str = ""
     text_id: str = ""
     total_tool_calls: int = 0
     tool_calls: dict[int, _ToolCall] = field(default_factory=dict[int, _ToolCall])
+    completed_indexes: set[int] = field(default_factory=set[int])
     details: list[Detail] = field(default_factory=list[Detail])
     file_annotations: list[Any] = field(default_factory=list[Any])
     usage: dict[str, Any] = field(default_factory=lambda: {"inputTokens": {}, "outputTokens": {}})
@@ -155,12 +160,21 @@ class _Stream:
 
     def _tool_deltas(self, calls: Sequence[GT.ChatStreamToolCall]) -> Rs.Gen[list[Part]]:
         parts: list[Part] = []
-        for call in calls:
-            index = int(call["index"])
+        for position, call in enumerate(calls):
+            index = int(P.or_default(call.get("index"), position))
             active = self.tool_calls.get(index)
             function = call.get("function") or {}
             delta = P.or_default(function.get("arguments"), "")
             if active is None:
+                # Some providers send an empty fragment after a call's arguments are complete.
+                empty = (
+                    call.get("id") is None
+                    and call.get("type") is None
+                    and function.get("name") is None
+                    and not delta
+                )
+                if empty and index in self.completed_indexes:
+                    continue
                 if call.get("type") != "function":
                     message = "Received tool call delta that was not of type: 'function'"
                     return (yield from fx.fail(_invalid(message)))
@@ -185,21 +199,28 @@ class _Stream:
             if not ok:
                 continue
             parts.append({"type": "tool-params-end", "id": active.id})
-            parts.append(
-                {
-                    "type": "tool-call",
-                    "id": active.id,
-                    "name": active.name,
-                    "params": params,
-                    "metadata": self._call_metadata(),
-                }
-            )
+            parts.append((yield from self._tool_call(active, params)))
             self.total_tool_calls += 1
             del self.tool_calls[index]
+            self.completed_indexes.add(index)
         return parts
 
-    def _flush(self, chunk: GT.ChatStreamChunk) -> list[Part]:
+    def _tool_call(self, call: _ToolCall, params: object) -> Rs.Gen[Part]:
+        return {
+            "type": "tool-call",
+            "id": call.id,
+            "name": call.name,
+            "params": (yield from Rs.normalize_params(self.codecs, call.name, params)),
+            "metadata": self._call_metadata(),
+        }
+
+    def _flush(self, chunk: GT.ChatStreamChunk) -> Rs.Gen[list[Part]]:
         parts: list[Part] = []
+        if self.finish_reason is None:
+            # Inferred only when every call parsed, so a truncated one is never sent as `{}`.
+            self.finish_reason = Rs.resolve_finish_reason(
+                None, self.total_tool_calls > 0 and not self.tool_calls
+            )
         encrypted = any(
             detail["type"] == "reasoning.encrypted" and detail.get("data")
             for detail in self.details
@@ -208,19 +229,18 @@ class _Stream:
             # Gemini 3 answers `stop` after a tool call with a thought
             # signature, though it expects the call's result.
             self.finish_reason = "tool-calls"
-        if self.finish_reason == "tool-calls":
-            for index in sorted(self.tool_calls):
-                call = self.tool_calls[index]
-                ok, params = _parsed(call.params.text())
-                parts.append(
-                    {
-                        "type": "tool-call",
-                        "id": call.id,
-                        "name": call.name,
-                        "params": params if ok else {},
-                        "metadata": self._call_metadata(),
-                    }
+        for index in sorted(self.tool_calls):
+            call = self.tool_calls[index]
+            ok, params = _parsed(call.params.text())
+            if not ok and self.finish_reason != "tool-calls":
+                description = (
+                    f'Response finished with reason "{self.finish_reason}" before the tool '
+                    "call parameters were complete"
                 )
+                reason = ToolParameterValidationError(tool_name=call.name, description=description)
+                error = AiError(module=MODULE, method="makeStreamResponse", reason=reason)
+                return (yield from fx.fail(error))
+            parts.append((yield from self._tool_call(call, params if ok else {})))
         if self.reasoning_started:
             parts.append(
                 {
@@ -252,11 +272,11 @@ class _Stream:
     def _choice(self, choice: GT.ChatStreamChoice) -> Rs.Gen[list[Part]]:
         reason = choice.get("finish_reason")
         if reason is not None:
-            self.finish_reason = Rs.resolve_finish_reason(reason)
+            self.finish_reason = Rs.resolve_finish_reason(reason, False)
         delta = choice["delta"]
         parts = yield from self._reasoning_deltas(delta)
         content = delta.get("content")
-        if content is not None:
+        if content:
             parts.extend((yield from self._text(content)))
         for annotation in delta.get("annotations") or []:
             if annotation["type"] == "url_citation":
@@ -299,7 +319,7 @@ class _Stream:
         if chunk["choices"]:
             parts.extend((yield from self._choice(chunk["choices"][0])))
         if raw_usage is not None:
-            parts.extend(self._flush(chunk))
+            parts.extend((yield from self._flush(chunk)))
         return parts
 
     def event(self, chunk: GT.ChatStreamChunk) -> Effect[list[Part], AiError, Any]:
@@ -312,8 +332,11 @@ def _without_none(part: Mapping[str, Any]) -> Part:
 
 
 def make_stream_response(
-    chunks: Stream[GT.ChatStreamChunk, AiError], response: HttpClientResponse, max_chars: int
+    chunks: Stream[GT.ChatStreamChunk, AiError],
+    response: HttpClientResponse,
+    max_chars: int,
+    codecs: Rs.ToolCodecs,
 ) -> Stream[Part, AiError, Any]:
     """``max_chars`` bounds each tool call's streamed arguments."""
-    state = _Stream(response, max_chars)
+    state = _Stream(response, max_chars, codecs)
     return chunks.map_effect(state.event).flatten_iterable().map(_without_none)
