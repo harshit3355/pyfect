@@ -564,3 +564,77 @@ def test_record_min_properties_description():
         S.Record(S.String, S.Finite).check(S.is_min_properties(2, description="description")),
         _entries(f"{_RECORD}; description", {"type": "string"}, {"type": "number"}),
     )
+
+
+class _OptionalValue(TypedDict):
+    value: NotRequired[Any]
+
+
+class _OptionalAB(TypedDict):
+    a: NotRequired[float]
+    b: NotRequired[float | None]
+
+
+class _OptionalChecked(TypedDict):
+    a: NotRequired[dict[str, float] | None]
+    b: NotRequired[str | dict[str, float] | None]
+
+
+def _non_null(value: object) -> bool:
+    return value is not None
+
+
+def test_optional_tuple():
+    """Tuple / optional Tuple([String, Finite])"""
+    schema = S.Struct(_OptionalValue, value=S.Tuple(S.String, S.Finite))
+    asserts = SchemaAsserts(to_codec_anthropic(schema).codec)
+    encoding = asserts.encoding()
+    encoding.succeed({"value": ("a", 1)}, {"value": {"0": "a", "1": 1}})
+    encoding.succeed({}, {"value": None})
+    decoding = asserts.decoding()
+    decoding.succeed({"value": {"0": "a", "1": 1}}, {"value": ("a", 1)})
+    decoding.succeed({"value": None}, {})
+
+
+def test_optional_record():
+    """Record / optional Record(String, Finite)"""
+    schema = S.Struct(_OptionalValue, value=S.Record(S.String, S.Finite))
+    asserts = SchemaAsserts(to_codec_anthropic(schema).codec)
+    encoding = asserts.encoding()
+    encoding.succeed({"value": {"a": 1}}, {"value": [{"0": "a", "1": 1}]})
+    encoding.succeed({}, {"value": None})
+    decoding = asserts.decoding()
+    decoding.succeed({"value": [{"0": "a", "1": 1}]}, {"value": {"a": 1}})
+    decoding.succeed({"value": None}, {})
+
+
+def test_optional_properties_that_already_accept_null():
+    """Struct / optional properties that already accept null: Effect's ``a`` is
+    ``Schema.optional``, a union with ``undefined`` carrying the description; Python has no
+    ``undefined``, so ``a`` is a plain optional key."""
+    schema = S.Struct(_OptionalAB, a=S.Finite, b=S.NullOr(S.Finite))
+    assert to_codec_anthropic(schema).json_schema == {
+        "type": "object",
+        "properties": {
+            "a": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+            "b": {"anyOf": [{"type": "number"}, {"type": "null"}]},
+        },
+        "required": ["a", "b"],
+        "additionalProperties": False,
+    }
+    asserts = SchemaAsserts(to_codec_anthropic(schema).codec)
+    asserts.encoding().succeed({"a": 1, "b": 2})
+    asserts.encoding().succeed({}, {"a": None, "b": None})
+    asserts.decoding().succeed({"a": 1, "b": 2})
+    asserts.decoding().succeed({"a": None, "b": None}, {})
+
+
+def test_optional_checked_nullable_properties_preserve_absent_keys():
+    """Struct / optional checked nullable properties preserve absent keys"""
+    checked = S.NullOr(S.Record(S.String, S.Finite)).check(
+        S.make_filter(_non_null, expected="non-null")
+    )
+    schema = S.Struct(_OptionalChecked, a=checked, b=S.Union(S.String, checked))
+    asserts = SchemaAsserts(to_codec_anthropic(schema).codec)
+    asserts.encoding().succeed({}, {"a": None, "b": None})
+    asserts.decoding().succeed({"a": None, "b": None}, {})
