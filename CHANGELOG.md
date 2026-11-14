@@ -192,6 +192,8 @@
 - A dispatcher whose `schedule_task` raises during an automatic yield makes the fiber die with
   that defect, as in Effect 4.1.4 (#10463). The exception escaped to whoever was running the
   fiber, killing the forking parent instead and leaving the child stuck.
+- `headers.from_input` joins repeated names in `(name, value)` pairs with `", "`, as Effect
+  4.1.4 does (#10450); it kept only the last value.
 
 ### Performance
 

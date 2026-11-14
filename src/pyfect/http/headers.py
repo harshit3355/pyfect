@@ -118,6 +118,10 @@ EMPTY: Headers = Headers()
 
 
 def from_input(input: Input | None = None) -> Headers:
+    """Headers from a mapping or ``(name, value)`` pairs. Names are lowercased; list values
+    in a mapping and repeated names in pairs are joined with ``", "``, and ``None`` values
+    are left out. A comma-joined ``set-cookie`` is not safe to forward as one header: read a
+    client response's ``cookies`` instead."""
     if input is None:
         return EMPTY
     if isinstance(input, Headers):
@@ -131,7 +135,11 @@ def from_input(input: Input | None = None) -> Headers:
             elif value is not None:
                 out[key.lower()] = ", ".join(value)
         return Headers._unsafe(out)  # pyright: ignore[reportPrivateUsage]
-    return Headers._unsafe({k.lower(): v for k, v in input})  # pyright: ignore[reportPrivateUsage]
+    joined: dict[str, str] = {}
+    for name, value in input:
+        key = name.lower()
+        joined[key] = f"{joined[key]}, {value}" if key in joined else value
+    return Headers._unsafe(joined)  # pyright: ignore[reportPrivateUsage]
 
 
 def is_redacted_name(name: str, patterns: Sequence[Pattern]) -> bool:
