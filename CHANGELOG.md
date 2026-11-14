@@ -265,6 +265,10 @@
   `UT`, `UTC` or a US zone abbreviation (`EST`, `pdt`, any case) in that zone, as on Effect
   main (#10562); they added a `Z` after it, so the string failed to parse. The trailing-zone
   check is now built from the date parser's own zone words.
+- The `encoding.csv` decoders emit the records completed before an error in the same chunk,
+  then fail, as in Effect 4.1.4 (#10456); they dropped them, so the records seen depended on
+  how the input was split into chunks. A property test now checks that every split gives the
+  same records and error.
 
 ### Performance
 

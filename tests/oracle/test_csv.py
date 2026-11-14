@@ -282,6 +282,35 @@ def test_round_trips_tuple_schemas_by_position():
     ]
 
 
+def _before_error(text: str, channel: Any) -> fx.Effect[tuple[str, list[Any]], Any]:
+    values: list[Any] = []
+
+    def push(value: Any) -> fx.Effect[None]:
+        return fx.sync(lambda: values.append(value))
+
+    return (
+        stream.make(text)
+        .pipe_through_channel(channel)
+        .run_for_each(push)
+        .flip()
+        .map(lambda error: (error.kind, values))
+    )
+
+
+@testing.effect
+def test_emits_completed_records_before_decoding_errors_in_the_same_chunk():
+    """emits completed records before decoding errors in the same chunk"""
+    assert (yield from _before_error('a,b\nc,d\n"e"x\n', csv.decode_string())) == (
+        "Syntax",
+        [("a", "b"), ("c", "d")],
+    )
+    assert (yield from _before_error('a,b\nc,d\ne\n"f"x\n', csv.decode_string(headers=True))) == (
+        "Header",
+        [{"a": "c", "b": "d"}],
+    )
+    assert (yield from _before_error('a,b\n"c', csv.decode_string())) == ("Syntax", [("a", "b")])
+
+
 @testing.effect
 def test_fails_with_upstream_errors_without_flushing_a_partial_record():
     """fails with upstream errors without flushing a partial record"""
