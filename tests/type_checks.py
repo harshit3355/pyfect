@@ -7810,6 +7810,10 @@ def check_ai_providers() -> None:
         fx.Effect[lm.GenerateTextResponse[Never, Never], ai_error_module.AiError, lm.LanguageModel],
     )
     anthropic_lm.with_config_override({"max_token": 10})  # pyright: ignore[reportArgumentType]
+    # Every effort level Anthropic generates is accepted.
+    anthropic_lm.with_config_override({"output_config": {"effort": "xhigh"}})
+    anthropic_lm.with_config_override({"output_config": {"effort": "max"}})
+    anthropic_lm.with_config_override({"output_config": {"effort": "huge"}})  # pyright: ignore[reportArgumentType]
     compat_lm.with_config_override({"strict_json_schema": "yes"})  # pyright: ignore[reportArgumentType]
 
 

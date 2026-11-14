@@ -75,7 +75,7 @@ type Model = Literal[
 
 
 class OutputConfig(TypedDict, total=False):
-    effort: Literal["low", "medium", "high"] | None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None
 
 
 class ConfigService(TypedDict, total=False):

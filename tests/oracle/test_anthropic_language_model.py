@@ -569,6 +569,98 @@ def test_generate_fallback_iterations():
 
 
 @testing.effect
+def test_generate_web_fetch_without_citations():
+    """generateText / decodes a web fetch result whose document omits citations"""
+    content = [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_1",
+            "name": "web_fetch",
+            "input": {"url": "https://example.com"},
+        },
+        {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_1",
+            "content": {
+                "type": "web_fetch_result",
+                "url": "https://example.com",
+                "retrieved_at": "2026-03-03T15:05:04.091000+00:00",
+                "content": {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": "text/plain",
+                        "data": "Example Domain",
+                    },
+                    "title": "Example Domain",
+                },
+            },
+        },
+    ]
+    response = yield from _provided(
+        lm.generate_text(
+            "What is on https://example.com?", toolkit=K.make(AT.WebFetch_20250910({}))
+        ),
+        mock_json(_message(content)),
+    )
+    result = _first(response.content, R.ToolResultSuccess)
+    assert result.is_failure is False
+
+
+@testing.effect
+def test_generate_citation_without_file_id():
+    """generateText / decodes citations without a file_id"""
+    citation = {
+        "type": "char_location",
+        "cited_text": "30 days",
+        "document_index": 0,
+        "document_title": None,
+        "start_char_index": 24,
+        "end_char_index": 31,
+    }
+    text = "Returns are accepted within 30 days."
+    prompt = Pr.make(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "mediaType": "text/plain",
+                        "data": text.encode(),
+                        "options": {"anthropic": {"citations": {"enabled": True}}},
+                    }
+                ],
+            }
+        ]
+    )
+    response = yield from _provided(
+        lm.generate_text(prompt),
+        mock_json(_message([{"type": "text", "text": text, "citations": [citation]}])),
+    )
+    source = _first(response.content, R.DocumentSourcePart)
+    assert source.metadata["anthropic"] == {
+        "source": "document",
+        "type": "char_location",
+        "citedText": "30 days",
+        "startCharIndex": 24,
+        "endCharIndex": 31,
+    }
+
+
+@testing.effect
+def test_generate_container_without_skills():
+    """generateText / decodes a response container without skills"""
+    container = {"id": "container_1", "expires_at": "2026-11-04T12:00:00.000000Z"}
+    response = yield from _provided(
+        lm.generate_text("Hello"),
+        mock_json(_message([{"type": "text", "text": "Hello"}], container=container)),
+    )
+    finish = _first(response.content, R.FinishPart)
+    assert finish.metadata["anthropic"]["container"] == container
+
+
+@testing.effect
 def test_generate_context_window_exceeded():
     """generateText / reports length when the model context window is exceeded"""
     body = _message(
