@@ -20,6 +20,7 @@ from __future__ import annotations
 import os
 import socket
 import struct
+import threading
 from typing import Any
 
 import pytest
@@ -709,3 +710,43 @@ def test_shuts_down_websockets(unresponsive: bool) -> None:
     [exit] = drained
     assert isinstance(exit, Failure)
     assert not exit.cause.has_interrupts
+
+
+def test_shutdown_ends_other_upgraded_connections_at_once() -> None:
+    """Not an Effect title: the other half of "shuts down WebSockets". Shutdown ends the
+    server's side of a raw upgrade at once, so a client that closes in turn ends the
+    handler's read before the graceful shutdown timeout interrupts it."""
+    drained: list[fx.Exit[None, SocketError]] = []
+
+    @fx.fn
+    def handler():
+        request = yield from HttpServerRequest()
+        sock = yield from request.upgrade
+        drained.append((yield from to_stream(sock).run_drain().exit()))
+        return server_response.empty()
+
+    switched = threading.Event()
+    received: list[bytes] = []
+
+    def client(at: int) -> None:
+        with socket.create_connection(("127.0.0.1", at), timeout=TIMEOUT) as conn:
+            conn.sendall(
+                b"GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\n"
+                b"Upgrade: tcp\r\n\r\n"
+            )
+            data = b""
+            while chunk := conn.recv(65536):
+                data += chunk
+                switched.set()
+            received.append(data)
+
+    @fx.fn
+    def program():
+        at = yield from port
+        yield from effect.blocking(lambda: client(at)).fork_daemon()
+        yield from effect.blocking(lambda: switched.wait(TIMEOUT))
+
+    _routed(handler(), program(), graceful_shutdown_timeout="10 seconds")
+    assert received[0].startswith(b"HTTP/1.1 101 ")
+    [exit] = drained
+    assert not (isinstance(exit, Failure) and exit.cause.has_interrupts)
