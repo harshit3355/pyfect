@@ -328,6 +328,8 @@ class Connection:
     _cancelled: set[RequestId] = field(default_factory=set[RequestId])
     """The requests ended without an answer (a subscription that overflowed)."""
     _liveness: dict[RequestId, Liveness] = field(default_factory=dict[RequestId, Liveness])
+    _client_end: Deferred[None] = field(default_factory=Deferred[None])
+    """Done once the client's input ended, where its subscriptions complete (stdio)."""
     """Each request in flight's, for the progress it sends."""
     _reverse_ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
@@ -378,15 +380,20 @@ class Connection:
 
         return run
 
-    def drain(self) -> Effect[None]:
-        """Wait for the requests still being served, ending the subscriptions
-        among them: nobody is left to cancel those."""
+    def drain(self, *, complete_subscriptions: bool = False) -> Effect[None]:
+        """Wait for the requests still being served. Nobody is left to cancel
+        the subscriptions among them: they complete, answered, with
+        ``complete_subscriptions`` (Effect's stdio, at stdin's end), else
+        they are interrupted."""
 
         @gen
         def run():
-            # Taken at once: awaiting one, another may end by itself (overflow).
-            for fiber in [self._inflight[id] for id in self._listening]:
-                yield from fiber.interrupt()
+            if complete_subscriptions:
+                yield from self._client_end.succeed(None)
+            else:
+                # Taken at once: awaiting one, another may end by itself (overflow).
+                for fiber in [self._inflight[id] for id in self._listening]:
+                    yield from fiber.interrupt()
             while self._inflight:
                 yield from next(iter(self._inflight.values())).await_exit()
 
@@ -931,8 +938,9 @@ class Connection:
     # --- 2026-07-28 ----------------------------------------------------------------------
 
     def _listen(self, id: RequestId, params: JsonObject, out: Send) -> Effect[Wire, McpError]:
-        """A ``subscriptions/listen`` stream, on ``out``. It has no result: it
-        ends when cancelled, or by itself when its backlog overflows."""
+        """A ``subscriptions/listen`` stream, on ``out``. It ends when
+        cancelled, or by itself: unanswered when its backlog overflows,
+        with a complete result when the client's input ended."""
 
         def send(method: str, body: JsonObject) -> Effect[None]:
             return out(notification(method, body))
@@ -956,8 +964,12 @@ class Connection:
                 subscribe=self.server.subscribe_events,
                 send=send,
                 terminate=terminate,
+                client_end=self._client_end.wait(),
             )
-            return scoped(listened).and_then(interrupt())
+            ended: JsonObject = {"_meta": {subscriptions.SUBSCRIPTION_ID_META: id}}
+            return scoped(listened).flat_map(
+                lambda overflowed: interrupt() if overflowed else succeed(ended)
+            )
 
         return _decode(SUBSCRIPTIONS_LISTEN.payload_schema, params).flat_map(listening)
 
@@ -1005,7 +1017,7 @@ class Connection:
         if requested_level is not None and not log_levels.is_logging_level(requested_level):
             return fail(InvalidParams(f"Invalid request log level {requested_level!r}"))
         if method == SUBSCRIPTIONS_LISTEN.name:
-            return self._listen(id, params, out)
+            return self._listen(id, params, out).map(lambda result: complete(result, False))
         if method == "prompts/list" and not self.server.has_registrations.prompts:
             # An unadvertised capability's method (Effect's 2026-07-28 prompts/list).
             return fail_with_http_status(404, _method_not_found_bare())

@@ -112,7 +112,7 @@ def serve(info: ServerInfo, registry: Registry) -> Effect[None, PlatformError, M
         )
         finished = suspend(lambda: for_each(list(batches), _await_batch)).as_void()
         serving = yield from (
-            reading.and_then(connection.drain())
+            reading.and_then(connection.drain(complete_subscriptions=True))
             .and_then(finished)
             .ensuring(
                 sync(lambda: server.disconnect(connection.client_id)).and_then(connection.close())

@@ -12,6 +12,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Never, cast
 
+from pyfect._concurrency import race_all
 from pyfect._core import Effect
 from pyfect.ai.mcp_schema import JsonObject, RequestId, SubscriptionFilter
 from pyfect.deferred import Deferred
@@ -85,10 +86,13 @@ def listen(
     subscribe: Effect[Subscription[Event], Never, Scope],
     send: Callable[[str, JsonObject], Effect[None]],
     terminate: Callable[[RequestId, str], Effect[None]],
-) -> Effect[None, Never, Scope]:
+    client_end: Effect[None],
+) -> Effect[bool, Never, Scope]:
     """Acknowledge ``requested``, then deliver its events through ``send``.
-    It runs until interrupted; it returns only after ``terminate`` ended a
-    subscription whose backlog overflowed."""
+    It runs until interrupted, or until it ends by itself: ``True`` once its
+    backlog overflowed and ``terminate`` ended it, ``False`` once
+    ``client_end`` says the client's transport ended (stdin's end, for
+    stdio), so it completes."""
     honored = _honored(requested, presence)
     uris = frozenset(honored.get("resourceSubscriptions", ()))
     identity: JsonObject = {SUBSCRIPTION_ID_META: request_id}
@@ -129,7 +133,11 @@ def listen(
         )
         yield from send(ACKNOWLEDGED, {"_meta": identity, "notifications": cast("Any", honored)})
         deliver = pending.take().flat_map(lambda notification: send(*notification)).forever()
-        yield from deliver.race(overflowed.wait())
-        yield from terminate(request_id, OVERFLOW_REASON)
+        did_overflow: bool = yield from race_all(
+            deliver, overflowed.wait().as_(True), client_end.as_(False)
+        )
+        if did_overflow:
+            yield from terminate(request_id, OVERFLOW_REASON)
+        return did_overflow
 
     return run
