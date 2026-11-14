@@ -32,6 +32,7 @@ def test_encodes_and_decodes_binary_subarrays_with_and_without_padding() -> None
     for length, encoded in enumerate(vectors):
         view = memoryview(data)[1 : 1 + length]
         assert base64.encode(view) == encoded
+        assert base64.encode_unpadded(view) == encoded.rstrip("=")
         assert ok(base64.decode(encoded)) == bytes(view)
 
 
@@ -46,6 +47,7 @@ def test_encodes_long_inputs_as_the_standard_library_does() -> None:
 def test_encodes_strings_and_bytes() -> None:
     """encodes strings and bytes"""
     assert base64.encode("hello") == "aGVsbG8="
+    assert base64.encode_unpadded("hello") == "aGVsbG8"
     assert base64.encode(bytes([72, 101, 108, 108, 111])) == "SGVsbG8="
 
 
@@ -71,6 +73,58 @@ def test_rejects_invalid_input_with_format_information() -> None:
     assert invalid.error.message == "Invalid character !"
 
 
+def test_base64_preserves_a_leading_u_feff_when_round_tripping_strings() -> None:
+    """preserves a leading U+FEFF when round-tripping strings"""
+    assert ok(base64.decode_string(base64.encode("\ufeffa"))) == "\ufeffa"
+
+
+def test_base64_round_trips_every_byte_value() -> None:
+    """round trips every byte value"""
+    data = bytes(range(256))
+    encoded = base64.encode(data)
+    assert ok(base64.decode(encoded)) == data
+    # MIME-style 76-character lines
+    assert ok(base64.decode(re.sub(r".{76}", "\\g<0>\r\n", encoded))) == data
+
+
+def test_decodes_either_alphabet_with_or_without_padding() -> None:
+    """decodes either alphabet, with or without padding"""
+    for length in (0, 48):
+        prefix = "AAAA" * length
+        data = bytes(length * 3) + bytes([251, 255])
+        for encoded in ["+/8=", "+/8", "-_8=", "-_8"]:
+            assert ok(base64.decode_lenient(prefix + encoded)) == data, encoded
+        assert ok(base64.decode_lenient(prefix + "+w")) == data[:-1]
+        assert base64.encode_unpadded(data) == prefix + "+/8"
+
+
+def test_rejects_invalid_lenient_input_and_preserves_the_original_input() -> None:
+    """rejects invalid lenient input and preserves the original input"""
+    for prefix in ["", "AAAA" * 48]:
+        # The last two mix the alphabets.
+        for suffix in ["Zm9vY", "Zg=", "-_!\r\n=", "Zg=v", "+_8", "-/8="]:
+            text = prefix + suffix
+            result = base64.decode_lenient(text)
+            assert isinstance(result, Err), text
+            error = result.error
+            assert (error.kind, error.module, error.input) == ("Decode", "Base64", text)
+
+
+def test_base64_rejects_invalid_input_with_both_decoders() -> None:
+    """rejects invalid input with both decoders"""
+    for char in ["-", "_", "!", "{", "\u00e9", " ", "\t", "\f"]:
+        for text in [f"Zm9{char}", f"{'Zm9v' * 64}Zm9{char}"]:
+            for result in [base64.decode(text), base64.decode_string(text)]:
+                assert isinstance(result, Err), text
+                error = result.error
+                assert (error.kind, error.module, error.input, error.message) == (
+                    "Decode",
+                    "Base64",
+                    text,
+                    f"Invalid character {char}",
+                )
+
+
 # --- Base64Url -------------------------------------------------------------------
 
 
@@ -84,6 +138,22 @@ def test_encode_padded_keeps_the_padding() -> None:
     """encodePadded keeps the padding"""
     assert base64_url.encode_padded("f") == "Zg=="
     assert base64_url.encode_padded(bytes([251, 255])) == "-_8="
+
+
+def test_encodes_long_input_exactly_with_every_remainder() -> None:
+    """encodes long input exactly with every remainder"""
+    data = bytes((i * 151 + 1) & 0xFF for i in range(257))
+    for length in (255, 256, 257):
+        view = data[:length]
+        padded = std_base64.urlsafe_b64encode(view).decode()
+        assert base64_url.encode_padded(view) == padded, length
+        assert base64_url.encode(view) == padded.rstrip("="), length
+
+
+def test_base64_url_preserves_a_leading_u_feff_when_round_tripping_strings() -> None:
+    """preserves a leading U+FEFF when round-tripping strings"""
+    assert ok(base64_url.decode_string(base64_url.encode("\ufeffa"))) == "\ufeffa"
+    assert ok(base64_url.decode_string("77u_cmVwb3J0")) == "\ufeffreport"
 
 
 def test_decodes_padded_and_unpadded_input() -> None:
@@ -119,6 +189,8 @@ def test_round_trips_every_byte_value_through_both_decoders() -> None:
             assert ok(base64_url.decode(encoded)) == view, encoded
     for encoded in [base64_url.encode(data), base64_url.encode_padded(data)]:
         assert ok(base64_url.decode(encoded)) == data
+        # MIME-style 76-character lines
+        assert ok(base64_url.decode(re.sub(r".{76}", "\\g<0>\r\n", encoded))) == data
         assert ok(base64_url.decode_string(encoded)) == data.decode("utf-8", errors="replace")
 
 
@@ -177,6 +249,11 @@ def test_base64_url_rejects_invalid_input_with_both_decoders() -> None:
     assert_url_failure("Zm\t9v", "Zm\t9v", unpadded(5))
     for text in ["Zm+v", "Zm/v", "Zm9!", "Zm9{", "Zm9\u00e9", "Zm9\u0000", "Zm9\u2028", "Z=g="]:
         assert_url_failure(text, text, "Invalid input")
+    for char in [" ", "\t", "\f"]:
+        assert_url_failure(f"Zm9{char}", f"Zm9{char}", "Invalid input")
+        # Long enough for size-gated decoders
+        long = f"{'Zm9v' * 64}Zm9{char}"
+        assert_url_failure(long, long, "Invalid input")
 
 
 def assert_url_failure(raw: str, stripped: str, expected: str) -> None:
@@ -227,6 +304,50 @@ def test_rejects_odd_lengths_and_non_hexadecimal_characters() -> None:
     utf8_odd = hex.decode("a\u00e9")
     assert isinstance(utf8_odd, Err)
     assert utf8_odd.error.message == "Length must be a multiple of 2, but is 3"
+
+
+def test_hex_preserves_a_leading_u_feff_when_round_tripping_strings() -> None:
+    """preserves a leading U+FEFF when round-tripping strings"""
+    assert ok(hex.decode_string(hex.encode("\ufeffa"))) == "\ufeffa"
+    assert ok(hex.decode_string("efbbbf7265706f7274")) == "\ufeffreport"
+
+
+def test_hex_round_trips_every_byte_value() -> None:
+    """round trips every byte value"""
+    # 600 bytes encode to more than 1,024 characters, Effect's long-input decoder cutoff
+    for length in (256, 600):
+        data = bytes(i & 0xFF for i in range(length))
+        encoded = hex.encode(data)
+        assert encoded == "".join(f"{byte:02x}" for byte in data)
+        assert ok(hex.decode(encoded)) == data
+        assert ok(hex.decode(encoded.upper())) == data
+
+
+def test_reports_the_decoding_failure() -> None:
+    """reports the decoding failure"""
+    long = "00" * 64
+    longer = "00" * 600
+    vectors = [
+        ("abc", "Length must be a multiple of 2, but is 3"),
+        (f"{long}0", "Length must be a multiple of 2, but is 129"),
+        # Lengths count UTF-8 bytes
+        ("\u00e9", "Invalid input"),
+        ("0g", "Invalid input"),
+        ("0 ", "Invalid input"),
+        (f"{long}0g", "Invalid input"),
+        (f"{longer}0g", "Invalid input"),
+        (f"{longer}\u00e90", "Length must be a multiple of 2, but is 1203"),
+    ]
+    for text, message in vectors:
+        for result in [hex.decode(text), hex.decode_string(text)]:
+            assert isinstance(result, Err), text
+            error = result.error
+            assert (error.kind, error.module, error.input, error.message) == (
+                "Decode",
+                "Hex",
+                text,
+                message,
+            )
 
 
 def test_generates_lowercase_hexadecimal_words() -> None:

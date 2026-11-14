@@ -21,6 +21,9 @@
 - `pyfect.testing.test_clock_with(f)`, Effect's `TestClock.testClockWith`.
 - `for_each(..., discard=True)`, Effect's `forEach` `discard` option: runs every item and
   keeps no results.
+- `encoding.base64.encode_unpadded`, standard Base64 without the `=` padding, and
+  `encoding.base64.decode_lenient`, which reads either Base64 alphabet, padded or not (CR and
+  LF ignored, other whitespace rejected), as on Effect main (#10557).
 
 ### Fixed
 
@@ -192,6 +195,11 @@
 - A dispatcher whose `schedule_task` raises during an automatic yield makes the fiber die with
   that defect, as in Effect 4.1.4 (#10463). The exception escaped to whoever was running the
   fiber, killing the forking parent instead and leaving the child stuck.
+- `encoding.base64`, `base64_url` and `hex`'s `decode_string` keep a leading U+FEFF, as in
+  Effect 4.1.4 (#10350); they dropped it as a byte-order mark, so `decode_string(encode(s))`
+  lost the first character of a string starting with one. The shared UTF-8 helper now takes
+  `ignore_bom` with no default, and `tests/properties/test_encoding_properties.py` round-trips
+  generated text through every module.
 
 ### Performance
 

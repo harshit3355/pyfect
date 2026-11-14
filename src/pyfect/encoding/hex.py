@@ -7,15 +7,15 @@ from __future__ import annotations
 
 import random as random_
 
-from pyfect._binary_codecs import EncodingError, utf8_text
+from pyfect._binary_codecs import EncodingError, decoded_text
 from pyfect._binary_codecs import hex_decode as decode
 from pyfect._binary_codecs import hex_encode as encode
 from pyfect.result import Result
 
 
 def decode_string(text: str) -> Result[str, EncodingError]:
-    """``decode``, then the bytes as UTF-8 (bad bytes replaced)."""
-    return decode(text).map(utf8_text)
+    """``decode``, then the bytes as UTF-8 (bad bytes replaced, a leading U+FEFF kept)."""
+    return decoded_text(decode(text))
 
 
 def random(length: int) -> str:
