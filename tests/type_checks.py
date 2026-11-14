@@ -7486,7 +7486,7 @@ def check_ai_toolkit() -> None:
         fx.Effect[lm.GenerateObjectResponse[Never, Never, AiWeather], AiError, lm.LanguageModel],
     )
     # allow_empty=True wraps the value in an Option; a widened bool gives either, as in Effect.
-    allow_empty: bool = bool(len("hi"))
+    allow_empty: bool = "hi".startswith("h")
     assert_type(
         lm.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=allow_empty).map(
             lambda response: response.value
