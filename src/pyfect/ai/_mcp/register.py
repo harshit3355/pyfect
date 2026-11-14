@@ -342,7 +342,7 @@ def _resolve_content(
 ) -> ReadResourceResult:
     """A string or bytes handler answer, as the one content of ``uri``, carrying the
     registered MIME type; a full result is the handler's own answer and is kept as is."""
-    if isinstance(content, str | bytes):
+    if isinstance(content, (str, bytes)):
         part: dict[str, Any] = {"uri": uri}
         if mime_type is not None:
             part["mimeType"] = mime_type

@@ -28,7 +28,7 @@ def compat_options(options: Pr.ProviderOptions) -> P.JsonObject:
     return P.obj(options.get(KEY))
 
 
-_DEVELOPER_ROLE_MODELS = re.compile(r"o\d|gpt-5|codex-|computer-use")
+_DEVELOPER_ROLE_MODELS = re.compile(r"o[0-9]|gpt-5|codex-|computer-use")
 """OpenAI's reasoning model families, matched at the start of a model name:
 ``o3`` takes ``developer``; ``olmo-2`` and ``openai/o3`` (another host's name
 for it) take ``system``."""
