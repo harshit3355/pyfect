@@ -4,9 +4,9 @@ reasons, citations, tool-call parameters and server tool results."""
 
 from __future__ import annotations
 
-from collections.abc import Callable, Generator, Iterator
+from collections.abc import Generator, Iterator
 from dataclasses import dataclass, field
-from typing import Any, Literal, get_args
+from typing import Any, assert_never
 
 import pyfect as fx
 from pyfect import date_time
@@ -18,6 +18,11 @@ from pyfect.ai import prompt as Pr
 from pyfect.ai.ai_error import AiError
 from pyfect.ai.anthropic import _schema as W
 from pyfect.ai.anthropic._prompt import is_citation_part
+from pyfect.ai.anthropic._server_tools import (
+    SERVER_CALLS,
+    SERVER_RESULT_BLOCKS,
+    is_code_execution_failure,
+)
 from pyfect.ai.anthropic._tools import to_codec_lenient
 from pyfect.ai.id_generator import IdGenerator
 from pyfect.ai.response import FinishReason
@@ -38,9 +43,10 @@ _FINISH_REASONS: dict[str, FinishReason] = {
 }
 
 
-def resolve_finish_reason(reason: str, is_json_response: bool = False) -> FinishReason:
+def resolve_finish_reason(reason: str, has_response_tool: bool = False) -> FinishReason:
+    """``tool_use`` is ``stop`` when the tool used is the structured-output response tool."""
     resolved = _FINISH_REASONS.get(reason, "unknown")
-    return "stop" if is_json_response and resolved == "tool-calls" else resolved
+    return "stop" if has_response_tool and resolved == "tool-calls" else resolved
 
 
 @dataclass
@@ -164,24 +170,9 @@ def server_tool_result(id: str, name: str, is_failure: bool, result: object) -> 
 
 
 def provider_tool_name(server_tool: str) -> str:
-    """The provider-defined tool a ``server_tool_use`` name belongs to:
-    code execution's ``bash_code_execution`` and ``text_editor_code_execution``
-    sub-tools are calls of ``code_execution`` (as Effect's stream decoder
-    names them; its non-streaming decoder leaves them unmapped, so the call
-    matches no tool)."""
-    return "code_execution" if server_tool.endswith("_code_execution") else server_tool
-
-
-type ServerResultBlock = Literal[
-    "mcp_tool_result",
-    "code_execution_tool_result",
-    "bash_code_execution_tool_result",
-    "text_editor_code_execution_tool_result",
-    "tool_search_tool_result",
-    "web_fetch_tool_result",
-    "web_search_tool_result",
-]
-SERVER_RESULT_BLOCKS: tuple[ServerResultBlock, ...] = get_args(ServerResultBlock.__value__)
+    """The provider-defined tool a ``server_tool_use`` name belongs to (code execution's
+    sub-tools are calls of ``code_execution``)."""
+    return SERVER_CALLS.get(server_tool, server_tool)
 
 
 @dataclass
@@ -219,13 +210,7 @@ class ServerResults:
 
     def code_execution(self, block: W.ContentBlock) -> list[Part]:
         content = P.obj(block.get("content"))
-        if block["type"] == "code_execution_tool_result":
-            failed = content.get("type") != "code_execution_result"
-        else:
-            failed = content.get("type") in (
-                "bash_code_execution_tool_result_error",
-                "text_editor_code_execution_tool_result_error",
-            )
+        failed = is_code_execution_failure(str(content.get("type")))
         name = self.names.get_custom_name("code_execution")
         return [server_tool_result(block["tool_use_id"], name, failed, content)]
 
@@ -282,20 +267,26 @@ class ServerResults:
     def result_parts(self, block: W.ContentBlock) -> Gen[list[Part] | None]:
         """The parts of a server tool result block, ``None`` for another
         block."""
-        handlers: dict[ServerResultBlock, Callable[[W.ContentBlock], list[Part]]] = {
-            "mcp_tool_result": self.mcp_result,
-            "code_execution_tool_result": self.code_execution,
-            "bash_code_execution_tool_result": self.code_execution,
-            "text_editor_code_execution_tool_result": self.code_execution,
-            "tool_search_tool_result": self.tool_search,
-            "web_fetch_tool_result": self.web_fetch,
-        }
-        handler = handlers.get(block["type"])
-        if handler is not None:
-            return handler(block)
-        if block["type"] == "web_search_tool_result":
-            return (yield from self.web_search(block))
-        return None
+        kind = block["type"]
+        if kind not in SERVER_RESULT_BLOCKS:
+            return None
+        match kind:
+            case "mcp_tool_result":
+                return self.mcp_result(block)
+            case (
+                "code_execution_tool_result"
+                | "bash_code_execution_tool_result"
+                | "text_editor_code_execution_tool_result"
+            ):
+                return self.code_execution(block)
+            case "tool_search_tool_result":
+                return self.tool_search(block)
+            case "web_fetch_tool_result":
+                return self.web_fetch(block)
+            case "web_search_tool_result":
+                return (yield from self.web_search(block))
+            case _:
+                assert_never(kind)
 
 
 def caller_metadata(block: W.ContentBlock) -> dict[str, Any] | None:
@@ -367,19 +358,19 @@ class _Response:
 
     def server_tool_use(self, block: W.ContentBlock) -> None:
         provider = block["name"]
-        name = self.results.names.get_custom_name(provider_tool_name(provider))
-        input = P.obj(block.get("input"))
-        if provider in ("bash_code_execution", "text_editor_code_execution"):
-            params: dict[str, Any] = {"type": provider, **input}
-        elif provider in ("code_execution", "web_fetch", "web_search"):
-            params = input
-            if provider == "code_execution" and "code" in input and "type" not in input:
-                params = {**input, "type": "programmatic-tool-call"}
-        elif provider in ("tool_search_tool_bm25", "tool_search_tool_regex"):
-            self.results.search_calls[block["id"]] = provider
-            params = input
-        else:
+        tool = SERVER_CALLS.get(provider)
+        if tool is None:
             return
+        name = self.results.names.get_custom_name(tool)
+        input = P.obj(block.get("input"))
+        if provider != tool:
+            params: dict[str, Any] = {"type": provider, **input}
+        elif provider == "code_execution" and "code" in input and "type" not in input:
+            params = {**input, "type": "programmatic-tool-call"}
+        else:
+            params = input
+        if provider.startswith("tool_search_tool_"):
+            self.results.search_calls[block["id"]] = provider
         self.parts.append(
             {
                 "type": "tool-call",
@@ -431,9 +422,7 @@ class _Response:
         usage = message["usage"]
         return {
             "type": "finish",
-            "reason": resolve_finish_reason(
-                message["stop_reason"] or "", self.json_format is not None
-            ),
+            "reason": resolve_finish_reason(message["stop_reason"] or "", self.has_response_tool()),
             "usage": usage_part(
                 usage["input_tokens"],
                 usage["output_tokens"],

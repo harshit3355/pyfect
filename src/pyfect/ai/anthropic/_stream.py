@@ -25,21 +25,11 @@ from pyfect.ai.anthropic._response import (
     transform_params,
     usage_part,
 )
+from pyfect.ai.anthropic._server_tools import SERVER_CALLS
 from pyfect.ai.response import FinishReason
 from pyfect.ai.tool import NameMapper, unsafe_secure_json_parse
 from pyfect.http.response import HttpClientResponse
 from pyfect.stream import Stream
-
-_SERVER_CALLS = frozenset(
-    {
-        "code_execution",
-        "bash_code_execution",
-        "text_editor_code_execution",
-        "web_fetch",
-        "web_search",
-    }
-)
-_SEARCH_CALLS = frozenset({"tool_search_tool_bm25", "tool_search_tool_regex"})
 
 
 @dataclass
@@ -186,14 +176,11 @@ class _State:
 
     def _server_tool_use_start(self, index: int, block: W.ContentBlock) -> list[Part]:
         provider = block["name"]
-        if provider in _SERVER_CALLS:
-            custom = provider_tool_name(provider)
-        elif provider in _SEARCH_CALLS:
-            self.results.search_calls[block["id"]] = provider
-            custom = provider
-        else:
+        if provider not in SERVER_CALLS:
             return []
-        name = self.names.get_custom_name(custom)
+        if provider.startswith("tool_search_tool_"):
+            self.results.search_calls[block["id"]] = provider
+        name = self.names.get_custom_name(provider_tool_name(provider))
         self.blocks[index] = _ToolBlock(
             block["id"], name, P.TextBuffer("", self.max_chars), True, provider, True
         )

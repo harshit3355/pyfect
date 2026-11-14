@@ -785,6 +785,7 @@ def test_object_fallback_response_tool():
         "disable_parallel_tool_use": True,
     }
     assert response.value == {"title": "Rain"}
+    assert response.finish_reason == "stop"
 
 
 @testing.effect
@@ -819,6 +820,7 @@ def test_object_native_json_with_tool_call():
     )
     assert response.value == {"title": "Rain"}
     assert response.tool_calls[0].name == "Weather"
+    assert response.finish_reason == "tool-calls"
 
 
 # system messages -----------------------------------------------------------------------
@@ -1260,6 +1262,8 @@ _SEARCH_TOOLKIT = K.make(
     AT.ToolSearchRegex_20251119(),
     AT.ToolSearchBM25_20251119(),
     AT.WebSearch_20250305({}),
+    AT.WebFetch_20250910({}),
+    AT.CodeExecution_20250522(),
 )
 _SEARCH_LAYER = _SEARCH_TOOLKIT.to_layer(ListContacts.handler(lambda _, __: fx.succeed(())))
 _TOOL_REFERENCES = [{"type": "tool_reference", "tool_name": "ListContacts"}]
@@ -1308,6 +1312,83 @@ _SEARCH_CONTENT: list[dict[str, Any]] = [
                 "page_age": None,
             }
         ],
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_4",
+        "name": "web_fetch",
+        "input": {"url": "https://example.com/contacts"},
+    },
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_4",
+        "content": {
+            "type": "web_fetch_result",
+            "url": "https://example.com/contacts",
+            "retrieved_at": None,
+            "content": {
+                "type": "document",
+                "source": {"type": "text", "media_type": "text/plain", "data": "Anna"},
+                "title": None,
+                "citations": {"enabled": True},
+            },
+        },
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_5",
+        "name": "web_fetch",
+        "input": {"url": "https://example.com/missing"},
+    },
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_5",
+        "content": {"type": "web_fetch_tool_result_error", "error_code": "url_not_accessible"},
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_6",
+        "name": "code_execution",
+        "input": {"code": "print(1)"},
+    },
+    {
+        "type": "code_execution_tool_result",
+        "tool_use_id": "srvtoolu_6",
+        "content": {
+            "type": "code_execution_result",
+            "stdout": "1\n",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_7",
+        "name": "code_execution",
+        "input": {"code": "print(2)"},
+    },
+    {
+        "type": "code_execution_tool_result",
+        "tool_use_id": "srvtoolu_7",
+        "content": {"type": "code_execution_tool_result_error", "error_code": "unavailable"},
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_8",
+        "name": "code_execution",
+        "input": {"code": "print(3)"},
+    },
+    {
+        "type": "code_execution_tool_result",
+        "tool_use_id": "srvtoolu_8",
+        "content": {
+            "type": "encrypted_code_execution_result",
+            "encrypted_stdout": "encrypted",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
     },
     {"type": "tool_use", "id": "toolu_1", "name": "ListContacts", "input": {"name": "Anna"}},
 ]
@@ -1378,6 +1459,12 @@ def test_tool_search_replays_provider_executed_results(mode: str):
             if isinstance(p, R.ToolResultSuccess | R.ToolResultFailure) and p.id == "srvtoolu_1"
         )
         assert list(search.result) == _TOOL_REFERENCES
+        encrypted = next(
+            p
+            for p in first_parts
+            if isinstance(p, R.ToolResultSuccess | R.ToolResultFailure) and p.id == "srvtoolu_8"
+        )
+        assert not encrypted.is_failure
         yield from lm.generate_text(
             prompt.concat(Pr.from_response_parts(first_parts)),
             toolkit=_SEARCH_TOOLKIT,
@@ -1389,6 +1476,116 @@ def test_tool_search_replays_provider_executed_results(mode: str):
     assert [m["role"] for m in body["messages"]] == ["user", "assistant", "user"]
     assert body["messages"][1]["content"] == _SEARCH_CONTENT
     assert [b["tool_use_id"] for b in body["messages"][2]["content"]] == ["toolu_1"]
+
+
+_CODE_EXECUTION_OPERATIONS: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
+    (
+        "code_execution",
+        {"code": "print(1)"},
+        {
+            "type": "code_execution_result",
+            "stdout": "1\n",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
+    ),
+    (
+        "bash_code_execution",
+        {"command": "printf hello"},
+        {
+            "type": "bash_code_execution_result",
+            "stdout": "hello",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
+    ),
+    (
+        "text_editor_code_execution",
+        {"command": "create", "path": "/tmp/example.txt", "file_text": "hello"},
+        {"type": "text_editor_code_execution_create_result", "is_file_update": False},
+    ),
+    (
+        "text_editor_code_execution",
+        {"command": "view", "path": "/tmp/example.txt"},
+        {
+            "type": "text_editor_code_execution_view_result",
+            "content": "hello",
+            "file_type": "text",
+            "num_lines": 1,
+            "start_line": 1,
+            "total_lines": 1,
+        },
+    ),
+    (
+        "text_editor_code_execution",
+        {
+            "command": "str_replace",
+            "path": "/tmp/example.txt",
+            "old_str": "hello",
+            "new_str": "world",
+        },
+        {
+            "type": "text_editor_code_execution_str_replace_result",
+            "lines": ["world"],
+            "new_lines": 1,
+            "new_start": 1,
+            "old_lines": 1,
+            "old_start": 1,
+        },
+    ),
+    (
+        "bash_code_execution",
+        {"command": "pwd"},
+        {"type": "bash_code_execution_tool_result_error", "error_code": "unavailable"},
+    ),
+    (
+        "text_editor_code_execution",
+        {"command": "view", "path": "/tmp/missing.txt"},
+        {
+            "type": "text_editor_code_execution_tool_result_error",
+            "error_code": "file_not_found",
+            "error_message": None,
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize("mode", ["generateText", "streamText"])
+@testing.effect
+def test_code_execution_20250825_operations(mode: str):
+    """tool search / completes and replays CodeExecution_20250825 operations (${mode})"""
+    toolkit = K.make(AT.CodeExecution_20250825())
+    content = [
+        block
+        for index, (name, input, result) in enumerate(_CODE_EXECUTION_OPERATIONS)
+        for block in (
+            {"type": "server_tool_use", "id": f"srvtoolu_{index}", "name": name, "input": input},
+            {"type": f"{name}_tool_result", "tool_use_id": f"srvtoolu_{index}", "content": result},
+        )
+    ]
+    mock = _search_mock(content)
+    prompt = Pr.make("Create, read, and edit a file, then run a command")
+
+    def program() -> Any:
+        if mode == "generateText":
+            parts = list((yield from lm.generate_text(prompt, toolkit=toolkit)).content)
+        else:
+            parts = list((yield from lm.stream_text(prompt, toolkit=toolkit).run_collect()))
+        failures = [
+            p.is_failure for p in parts if isinstance(p, R.ToolResultSuccess | R.ToolResultFailure)
+        ]
+        assert failures == [False, False, False, False, False, True, True]
+        yield from lm.generate_text(prompt.concat(Pr.from_response_parts(parts)), toolkit=toolkit)
+
+    yield from _provided(fx.gen(program), mock, _LEGACY, None, toolkit.to_layer())
+    assert mock.bodies[0]["tools"] == [
+        {"name": "code_execution", "type": "code_execution_20250825"}
+    ]
+    body = mock.bodies[1]
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+    assert body["messages"][1]["content"] == content
 
 
 class _Host(TypedDict):
