@@ -387,7 +387,7 @@ class _Messages:
                     "id": id,
                     "type": f"{kind}_call_output",
                     "call_id": part.id,
-                    "output": part.result,
+                    "output": _shell_output(part),
                 }
                 self.items.append(_with_status(item, status))
                 return
@@ -549,3 +549,9 @@ def prepare_messages(
 
 
 __all__ = ["KEY", "MODULE", "Item", "is_reasoning_model", "prepare_messages", "provider_tool"]
+
+
+def _shell_output(part: Pr.ToolResultPart) -> object:
+    """A Shell / LocalShell result as OpenAI takes it: a success is the tool's
+    ``{output}`` and is sent unwrapped; a returned failure goes as it is."""
+    return part.result if part.is_failure else P.obj(part.result).get("output")

@@ -449,6 +449,9 @@ class _Output:
 
     def message(self, item: W.OutputItem) -> Gen[list[Part]]:
         parts: list[Part] = []
+        # Commentary text would be joined with the final answer and break JSON decoding.
+        if self.options.response_format.type == "json" and item.get("phase") == "commentary":
+            return parts
         for content in item["content"]:
             if content["type"] == "output_text":
                 annotations = content["annotations"]

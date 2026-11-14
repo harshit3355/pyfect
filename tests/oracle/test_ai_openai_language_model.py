@@ -1135,6 +1135,10 @@ def test_shell_output():
     )
     body = yield from _with_tools(history, K.make(OT.Shell()), disable_tool_call_resolution=True)
     assert _output_types(body, "call_shell") == ["shell_call_output"]
+    sent = next(i for i in body["input"] if i.get("type") == "shell_call_output")
+    assert sent["output"] == [
+        {"stdout": "hello\n", "stderr": "", "outcome": {"type": "exit", "exit_code": 0}}
+    ]
 
 
 @testing.effect
@@ -1151,6 +1155,25 @@ def test_local_shell_output():
         history, K.make(OT.LocalShell()), disable_tool_call_resolution=True
     )
     assert _output_types(body, "call_local_shell") == ["local_shell_call_output"]
+    sent = next(i for i in body["input"] if i.get("type") == "local_shell_call_output")
+    assert sent["output"] == "hello\n"
+
+
+@testing.effect
+def test_local_shell_failure_output():
+    """generateText / message preparation / tool messages / sends returned local_shell failures as the output string"""  # noqa: E501
+    history = _tool_history(
+        "call_local_shell",
+        "permission denied",
+        "OpenAiLocalShell",
+        {"action": {"type": "exec", "command": ["echo", "hello"], "env": {}}},
+        "Run a local shell command",
+    )
+    history[2]["content"][0]["isFailure"] = True
+    toolkit = K.make(OT.LocalShell(failure_mode="return").set_failure(S.String))
+    body = yield from _with_tools(history, toolkit, disable_tool_call_resolution=True)
+    sent = next(i for i in body["input"] if i.get("type") == "local_shell_call_output")
+    assert sent["output"] == "permission denied"
 
 
 # generateText / tool preparation --------------------------------------------------------
@@ -1295,6 +1318,34 @@ def test_json_schema_format():
     format = mock.bodies[0]["text"]["format"]
     assert format["type"] == "json_schema"
     assert format["strict"] is True
+
+
+@testing.effect
+def test_commentary_ignored_for_structured_output():
+    """generateText / response format / ignores commentary messages for structured output"""
+    mock = _mock(
+        output=[
+            text_output("Building the person.", id="msg_commentary", phase="commentary"),
+            text_output(json.dumps({"name": "John", "age": 30}), phase="final_answer"),
+        ]
+    )
+    result = yield from _provided(
+        lm.generate_object("Give me a person", schema=S.Struct(Person)), mock, "gpt-5.6"
+    )
+    assert result.value == {"name": "John", "age": 30}
+
+
+@testing.effect
+def test_commentary_kept_for_text_output():
+    """generateText / response format / keeps commentary messages for text output"""
+    mock = _mock(
+        output=[
+            text_output("Thinking. ", id="msg_commentary", phase="commentary"),
+            text_output("Hello!", phase="final_answer"),
+        ]
+    )
+    result = yield from _provided(lm.generate_text("Hello"), mock, "gpt-5.6")
+    assert result.text == "Thinking. Hello!"
 
 
 # generateText / response handling -------------------------------------------------------
@@ -1822,6 +1873,33 @@ def test_stream_usage():
     assert _first(parts, R.FinishPart).usage.input_tokens == _CACHED_INPUT
 
 
+@testing.effect
+def test_stream_shell_call_ids():
+    """streamText / uses call_id for streamed shell calls and keeps the item ID in metadata"""
+    item = {
+        "type": "shell_call",
+        "id": "shell_item_123",
+        "call_id": "call_shell_456",
+        "status": "completed",
+        "environment": None,
+        "action": {"commands": ["ls"], "timeout_ms": None, "max_output_length": None},
+    }
+    parts = yield from _stream_parts(
+        [
+            {
+                "type": "response.output_item.done",
+                "sequence_number": 1,
+                "output_index": 0,
+                "item": item,
+            }
+        ],
+        prompt="Run a shell command",
+        toolkit=K.make(OT.Shell()),
+        disable_tool_call_resolution=True,
+    )
+    assert _call_ids(parts) == ("call_shell_456", "shell_item_123")
+
+
 def _stream_params(parts: Sequence[object], id: str) -> Any:
     """Effect's ``decodeToolParamsFromStream``."""
     assert any(isinstance(p, R.ToolParamsStartPart) and p.id == id for p in parts)
@@ -2250,3 +2328,68 @@ def test_reasoning_model_override():
     )
     assert mock.bodies[0]["include"] == ["reasoning.encrypted_content"]
     assert mock.bodies[0]["input"][0]["role"] == "developer"
+
+
+# Guard: generate and stream name a client-executed call alike --------------------------
+# A tool call the application answers is answered by ``call_id`` (the stored chat sends it back
+# as the result's ``call_id``); Effect #10358 fixed streamed ``shell_call`` parts, which used the
+# item id. Each client-executed call item is decoded from a response and from a stream, and both
+# must give the ``call_id`` as the part id and keep the item id in metadata. Add a row for each
+# call item OpenAI adds.
+
+
+def _call_ids(parts: Sequence[object]) -> tuple[str, object]:
+    call = _first(parts, R.ToolCallPart)
+    metadata: Any = call.metadata
+    return call.id, metadata["openai"]["itemId"]
+
+
+_ITEMS: list[tuple[Any, dict[str, Any]]] = [
+    (
+        K.make(OT.Shell()),
+        {
+            "type": "shell_call",
+            "action": {"commands": ["ls"], "timeout_ms": None, "max_output_length": None},
+            "environment": None,
+        },
+    ),
+    (
+        K.make(OT.LocalShell()),
+        {
+            "type": "local_shell_call",
+            "action": {"type": "exec", "command": ["ls"], "env": {}},
+        },
+    ),
+    (
+        K.make(OT.ApplyPatch()),
+        {
+            "type": "apply_patch_call",
+            "operation": {"type": "delete_file", "path": "old.ts"},
+        },
+    ),
+]
+
+
+def _item(fields: dict[str, Any]) -> dict[str, Any]:
+    return {"id": "item_1", "call_id": "call_1", "status": "completed", **fields}
+
+
+@pytest.mark.parametrize(("toolkit", "fields"), _ITEMS, ids=[i[1]["type"] for i in _ITEMS])
+@testing.effect
+def test_client_executed_call_ids_match_between_generate_and_stream(
+    toolkit: Any, fields: dict[str, Any]
+):
+    item = _item(fields)
+    options: dict[str, Any] = {
+        "prompt": "Go",
+        "toolkit": toolkit,
+        "disable_tool_call_resolution": True,
+    }
+    generated = yield from _provided(
+        lm.generate_text(**options).map(lambda r: list(r.content)), _mock(output=[item])
+    )
+    streamed = yield from _stream_parts(
+        [_created(), _item_event("added", 2, item), _item_event("done", 3, item), _completed(4)],
+        **options,
+    )
+    assert _call_ids(generated) == _call_ids(streamed) == ("call_1", "item_1")

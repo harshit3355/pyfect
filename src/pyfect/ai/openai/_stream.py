@@ -430,7 +430,7 @@ def _added_reasoning(state: _Stream, _index: int, item: Any) -> list[Part]:
 
 
 def _added_shell(state: _Stream, index: int, item: Any) -> list[Part]:
-    id = P.or_default(item.get("id"), item["call_id"])
+    id = item["call_id"]
     state.tool_calls[index] = _ToolCall(id, state.names.get_custom_name("shell"))
     return []
 
@@ -676,7 +676,7 @@ def _done_shell(state: _Stream, index: int, item: Any) -> Gen[list[Part]]:
     return [
         {
             "type": "tool-call",
-            "id": P.or_default(item.get("id"), item["call_id"]),
+            "id": item["call_id"],
             "name": state.names.get_custom_name("shell"),
             "params": {"action": item["action"]},
             "metadata": {KEY: item_metadata(item.get("id"))},

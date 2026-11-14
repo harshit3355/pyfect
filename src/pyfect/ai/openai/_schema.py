@@ -273,6 +273,7 @@ class _OutputMessage(TypedDict):
     type: Literal["message"]
     role: Literal["assistant"]
     content: list[dict[str, Any]]
+    phase: NotRequired[Literal["commentary", "final_answer"] | None]
     status: MessageStatus
 
 
