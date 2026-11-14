@@ -34,6 +34,7 @@ import argparse
 import json
 import os
 import re
+import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -55,6 +56,9 @@ class Target:
     example: str
     """A schema the package docstring decodes."""
     client_title: str | None = None
+    revision: str | None = None
+    """The Effect commit whose Generated.ts the package follows, when it is not the reference
+    checkout's own: a fix Effect made after the release the checkout is on."""
 
     @property
     def package(self) -> str:
@@ -65,12 +69,34 @@ class Target:
         return ROOT / "src" / "pyfect" / "ai" / self.name / "generated"
 
     def default_source(self) -> Path:
-        ref = Path(os.environ.get("PYFECT_REF", Path.home() / "pyfect-ref" / "effect"))
-        return ref / "packages" / "ai" / self.name / "src" / "Generated.ts"
+        return _reference() / self.source_path
+
+    @property
+    def source_path(self) -> str:
+        return f"packages/ai/{self.name}/src/Generated.ts"
+
+    def read_source(self) -> str:
+        """The Generated.ts the package follows: ``revision``'s, read from the reference
+        checkout's history, or else the checkout's own."""
+        if self.revision is None:
+            return self.default_source().read_text()
+        shown = subprocess.run(
+            ["git", "-C", str(_reference()), "show", f"{self.revision}:{self.source_path}"],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return shown.stdout
+
+
+def _reference() -> Path:
+    return Path(os.environ.get("PYFECT_REF", Path.home() / "pyfect-ref" / "effect"))
 
 
 OPENAI = Target("openai", "OpenAI", "FunctionToolCall", "OpenAi")
-OPENROUTER = Target("openrouter", "OpenRouter", "ChatResult", "OpenRouter")
+# fb998b526 (Effect 4.1.4, #10505): tool calls without an `id` and stream deltas without an
+# `index` decode. The rest of 4.1.4's regeneration changes the API, so it waits for a minor.
+OPENROUTER = Target("openrouter", "OpenRouter", "ChatResult", "OpenRouter", revision="fb998b526")
 TARGETS = {target.name: target for target in (OPENAI, OPENROUTER)}
 
 
@@ -850,8 +876,8 @@ def main(argv: list[str] | None = None) -> int:
     targets = [TARGETS[args.provider]] if args.provider else list(TARGETS.values())
     failed = False
     for target in targets:
-        source_path: Path = args.source or target.default_source()
-        files = generate(source_path.read_text(), target)
+        source = args.source.read_text() if args.source else target.read_source()
+        files = generate(source, target)
         if not args.check:
             _write(target, files)
             continue
