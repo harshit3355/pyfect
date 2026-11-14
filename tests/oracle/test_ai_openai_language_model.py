@@ -1384,7 +1384,8 @@ class Person(TypedDict):
 
 @testing.effect
 def test_text_format_default():
-    """generateText / response format / omits text configuration for plain text by default"""
+    """generateText / response format / omits text configuration for plain text by default /
+    uses text format by default: Effect 4.1.2's title, before plain text stopped sending it"""
     body = yield from _generate("Hello")
     assert "text" not in body
 
