@@ -21,6 +21,10 @@
 - `pyfect.testing.test_clock_with(f)`, Effect's `TestClock.testClockWith`.
 - `for_each(..., discard=True)`, Effect's `forEach` `discard` option: runs every item and
   keeps no results.
+- `language_model.generate_object(..., allow_empty=True)` and `Chat.generate_object(...,
+  allow_empty=True)`: the value is an `Option`, `None` for empty or whitespace-only text and
+  `Some` of the decoded object otherwise, as in Effect 4.1.4 (#10527).
+- Anthropic: `OutputConfig.effort` accepts `"xhigh"` and `"max"`, as in Effect 4.1.4 (#10421).
 
 ### Fixed
 
@@ -192,6 +196,80 @@
 - A dispatcher whose `schedule_task` raises during an automatic yield makes the fiber die with
   that defect, as in Effect 4.1.4 (#10463). The exception escaped to whoever was running the
   fiber, killing the forking parent instead and leaving the child stuck.
+- `Toolkit.handle`: a stream stopped early dies with the defects of its tool handler's
+  interrupt finalizers instead of dropping them, as in Effect 4.1.4 (#10437).
+- MCP: `resources/read` includes the registered `mimeType` when a resource returns a string or
+  bytes, as in Effect 4.1.4 (#10398).
+- MCP: `tools/list`, `resources/list`, `resources/templates/list` and `prompts/list` fail with
+  InvalidParams "Unknown cursor" when given any cursor, including `""`; lists are one complete
+  page, as in Effect 4.1.4 (#10447).
+- MCP: progress for a request is dropped once the request is answered, cancelled or its client
+  disconnects, also when it was already queued behind a slow stdio, RPC or HTTP client.
+  Background progress is kept, as in Effect 4.1.4 (#10509).
+- MCP: an open 2026-07-28 `subscriptions/listen` over stdio completes with a
+  `resultType: "complete"` result carrying its subscription id when stdin ends; it was
+  interrupted without an answer. Requests in flight still drain, as in Effect 4.1.4 (#10477).
+- MCP: on 2026-07-28 over HTTP, a tool hidden by `McpServer.visibility` answers "Tool 'X' not
+  found" before its `Mcp-Param-*` headers are checked, instead of a 400 header mismatch, as in
+  Effect 4.1.4 (#10504).
+- OpenAI WebSocket mode: a client transform that fails to prepare the `/responses` connection
+  request fails the response stream with an `AiError` instead of dying, building the layer no
+  longer fails when priming the socket fails, and later turns reuse the request the connection
+  was opened with, as in Effect 4.1.4 (#10512).
+- Anthropic: encrypted code execution results (`encrypted_code_execution_result`) decode as
+  successes and are sent back in the next request; they were failures and were dropped from the
+  replayed history, as in Effect 4.1.4 (#10322).
+- Anthropic: successful text editor results of code execution 20250825 (view, create,
+  str_replace) are sent back in the next request; they were dropped, so Anthropic rejected the
+  history, as on Effect main (#10552).
+- Anthropic: non-strict tools (`strict_json_schema=False`, `Tool.Strict` false, or a model
+  without strict tools) are advertised with their plain JSON Schema and their calls decode with
+  it, keeping optional properties, constraints, records and explicit `null`s; they got the
+  strict Anthropic schema and lost `null` parameters, as in Effect 4.1.4 (#10499).
+- Anthropic: with native structured output, a response that stops on a tool call finishes as
+  `tool-calls`; it finished as `stop`, so the toolkit didn't run. Only the structured-output
+  response tool maps to `stop`, as in Effect 4.1.4 (#10527).
+- `to_codec_openai` / `to_codec_anthropic`: optional records and tuples encode and decode (they
+  failed "Expected object" / "Expected array | null"), and an optional property whose schema
+  already accepts `null` gets one `null` branch instead of `anyOf [T, null, null]`, as in
+  Effect 4.1.4 (#10502, #10522).
+- OpenAI: successful `Shell` / `LocalShell` results are sent as the tool's `output`, not wrapped
+  in another `{output}`, as in Effect 4.1.4 (#10321).
+- OpenAI: `generate_object` ignores `phase: "commentary"` messages, which were joined with the
+  answer and broke JSON decoding; text output keeps them, as in Effect 4.1.4 (#10329).
+- OpenAI: streamed `shell_call` tool calls use `call_id` as their id (the item id stays in
+  metadata), so a stored chat answers them with the right `call_id`, as in Effect 4.1.4
+  (#10358).
+- OpenAI: with item references, a stored provider-executed call and its result send one
+  `item_reference`, not two, as in Effect 4.1.4 (#10429).
+- OpenAI: plain-text requests no longer send `text: {format: {type: "text"}}`, which some
+  OpenAI-compatible Responses backends reject; `text` carries only `verbosity` unless there is a
+  JSON format, as in Effect 4.1.4 (#10484).
+- OpenAI, OpenAI-compatible: a non-strict tool (`strict=False` or `strict_json_schema=False`) is
+  advertised with its plain JSON Schema and its call parameters are taken as sent; records were
+  sent as arrays of pairs and optional keys as required nullables, as in Effect 4.1.4 (#10533).
+- OpenAI-compatible: the system prompt is sent as `developer` only for `o<digit>`, `gpt-5`,
+  `codex-` and `computer-use` models; `olmo-2`, `openai/gpt-oss-120b` and `openai/o3` get
+  `system`, as in Effect 4.1.4 (#10516).
+- OpenRouter: tool call parameters are decoded with the codec their schema was sent with, so
+  record and tuple parameters on OpenAI and Anthropic models reach the handler (they failed
+  "Expected object"). Strict tools on other models get OpenAI's strict schema, and a dynamic
+  tool's own JSON Schema is sent unchanged, as in Effect 4.1.4 (#10486).
+- OpenRouter: a tool call without an `id` gets `<response id>_tool_<n>`, and a streamed tool
+  call without an `index` uses its position in the chunk; both failed to decode, as in Effect
+  4.1.4 (#10505).
+- OpenRouter: a response with tool calls but no finish reason finishes with `tool-calls`, so the
+  tools run (it finished `other`); a stream does so only when every call parsed, as in Effect
+  4.1.4 (#10489).
+- OpenRouter: a stream that ends before a tool call's parameters are complete fails with
+  `ToolParameterValidationError` unless it finished with `tool-calls`; the call was dropped
+  silently, as in Effect 4.1.4 (#10488).
+- OpenRouter: an empty tool-call fragment after its call completed is ignored; it failed the
+  stream with `InvalidOutputError`, as in Effect 4.1.4 (#10487).
+- OpenRouter: empty streamed `content` deltas no longer split reasoning into several parts or
+  emit empty text deltas, as in Effect 4.1.4 (#10370).
+- OpenRouter: base64 string image and file data is sent as a `data:` URL; it was sent bare, as
+  in Effect 4.1.4 (#10485).
 
 ### Performance
 
