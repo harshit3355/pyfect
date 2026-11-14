@@ -38,6 +38,7 @@ from pyfect import sink, stdio, stream, testing
 from pyfect.ai import mcp_protocol as P
 from pyfect.ai import mcp_schema as MS
 from pyfect.ai import mcp_server as M
+from pyfect.ai import mcp_test
 from pyfect.ai import tool as T
 from pyfect.ai import toolkit as K
 from pyfect.ai._mcp.core import PromptEntry, ToolEntry
@@ -1285,3 +1286,46 @@ def test_the_direct_service_has_no_client_to_ask():
     prompted = yield from _direct(server.get_prompt_result("P", {})).flip()
     assert isinstance(prompted, MS.InvalidParams)
     assert prompted.message == "Client input is not supported by this MCP protocol"
+
+
+@testing.effect
+def test_reads_string_and_byte_content_with_the_registered_mime_type():
+    """McpServer / resources / reads string and byte content with the registered MIME type"""
+    data = bytes([1, 2, 3])
+    registrations = fx.layer.merge(
+        M.resource(
+            uri="test://app",
+            name="app",
+            mime_type="text/html;profile=mcp-app",
+            content=fx.succeed("<p>app</p>"),
+        ),
+        M.resource_template(
+            M.uri_template("test://bytes/", S.String),
+            name="bytes",
+            mime_type="application/octet-stream",
+            content=lambda _uri, _name: fx.succeed(data),
+        ),
+        M.resource(uri="test://plain", name="plain", content=fx.succeed("plain")),
+        M.resource(
+            uri="test://result",
+            name="result",
+            mime_type="text/plain",
+            content=fx.succeed(
+                MS.ReadResourceResult(contents=[{"uri": "test://result#part", "text": "part"}])
+            ),
+        ),
+    )
+    client = yield from mcp_test.make_client(registrations, protocols=(P.v2025_11_25,))
+
+    def read(uri: str) -> fx.Effect[list[Any], Any]:
+        return client.read_resource({"uri": uri}).map(lambda result: list(result["contents"]))
+
+    assert (yield from read("test://app")) == [
+        {"uri": "test://app", "mimeType": "text/html;profile=mcp-app", "text": "<p>app</p>"}
+    ]
+    assert (yield from read("test://bytes/data")) == [
+        {"uri": "test://bytes/data", "mimeType": "application/octet-stream", "blob": "AQID"}
+    ]
+    assert (yield from read("test://plain")) == [{"uri": "test://plain", "text": "plain"}]
+    # A full result is the handler's own answer and is returned as is.
+    assert (yield from read("test://result")) == [{"uri": "test://result#part", "text": "part"}]
