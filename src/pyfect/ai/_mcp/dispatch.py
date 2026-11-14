@@ -21,6 +21,7 @@ from pyfect._core import Effect
 from pyfect._fiber import Fiber
 from pyfect.ai._mcp import (
     log_levels,
+    pages,
     param_headers,
     projection,
     reverse_policy,
@@ -43,6 +44,9 @@ from pyfect.ai.mcp_schema import (
     HEADER_MISMATCH_ERROR_CODE,
     IMPLEMENTATION,
     INITIALIZE_PARAMS,
+    LIST_PROMPTS,
+    LIST_RESOURCE_TEMPLATES,
+    LIST_RESOURCES,
     LIST_ROOTS_RESULT,
     LIST_TOOLS,
     METHOD_NOT_FOUND_ERROR_CODE,
@@ -75,6 +79,7 @@ from pyfect.ai.mcp_schema import (
     McpReverseOperationError,
     McpReverseOperationUnsupported,
     McpServerClient,
+    Method,
     ProtocolError,
     RequestContext,
     RequestId,
@@ -777,12 +782,22 @@ class Connection:
             )
 
         def listed[D](
+            list_method: Method[Any, Any],
             key: str,
             items: Callable[[RequestContext], Effect[list[D], RequestRejected, RequestServices]],
             project: Callable[[D], Any],
         ) -> Effect[Wire, McpError]:
-            return serve(
-                lambda c: unwrap_rejected(items(c).map(lambda xs: {key: [project(x) for x in xs]}))
+            """A core list: one complete page, so a supplied cursor is unknown."""
+            return (
+                _decode(list_method.payload_schema, params)
+                .flat_map(lambda request: pages.reject_cursor(request.get("cursor")))
+                .and_then(
+                    serve(
+                        lambda c: unwrap_rejected(
+                            items(c).map(lambda xs: {key: [project(x) for x in xs]})
+                        )
+                    )
+                )
             )
 
         match method:
@@ -794,8 +809,8 @@ class Connection:
                     lambda decoded: self._subscribe(decoded["uri"], subscribe)
                 )
             case "tools/list":
-                return _decode(LIST_TOOLS.payload_schema, params).and_then(
-                    listed("tools", server.list_tools, lambda t: projection.tool(protocol, t))
+                return listed(
+                    LIST_TOOLS, "tools", server.list_tools, lambda t: projection.tool(protocol, t)
                 )
             case "tools/call":
                 return _decode(CALL_TOOL_PARAMS, params).flat_map(
@@ -803,10 +818,14 @@ class Connection:
                 )
             case "resources/list":
                 return listed(
-                    "resources", server.list_resources, lambda r: projection.resource(protocol, r)
+                    LIST_RESOURCES,
+                    "resources",
+                    server.list_resources,
+                    lambda r: projection.resource(protocol, r),
                 )
             case "resources/templates/list":
                 return listed(
+                    LIST_RESOURCE_TEMPLATES,
                     "resourceTemplates",
                     server.list_resource_templates,
                     lambda t: projection.resource_template(protocol, t),
@@ -819,7 +838,10 @@ class Connection:
                 )
             case "prompts/list":
                 return listed(
-                    "prompts", server.list_prompts, lambda p: projection.prompt(protocol, p)
+                    LIST_PROMPTS,
+                    "prompts",
+                    server.list_prompts,
+                    lambda p: projection.prompt(protocol, p),
                 )
             case "prompts/get":
                 return _decode(GET_PROMPT.payload_schema, params).flat_map(
