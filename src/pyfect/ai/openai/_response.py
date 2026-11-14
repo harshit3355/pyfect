@@ -23,7 +23,6 @@ from pyfect.ai.id_generator import IdGenerator
 from pyfect.ai.id_generator import Service as IdService
 from pyfect.ai.openai import _schema as W
 from pyfect.ai.openai._prompt import KEY, MODULE, openai_options, provider_tool
-from pyfect.ai.openai_structured_output import to_codec_openai
 from pyfect.ai.response import FinishReason
 from pyfect.ai.tool import NameMapper, unsafe_secure_json_parse
 from pyfect.http import url
@@ -230,10 +229,10 @@ def parse_params(name: str, text: str, method: str) -> Effect[object, AiError]:
 
 
 def function_params(
-    options: lm.ProviderOptions, name: str, arguments: str, method: str
+    options: lm.ProviderOptions, strict: PT.StrictTools, name: str, arguments: str, method: str
 ) -> Gen[object]:
     raw = yield from parse_params(name, arguments, method)
-    return (yield from PT.transform_params(MODULE, options, name, raw, transformer=to_codec_openai))
+    return (yield from strict.transform_params(MODULE, options, name, raw))
 
 
 def mcp_call(names: NameMapper, arguments: object, method: str) -> Gen[tuple[str, object]]:
@@ -287,8 +286,15 @@ def _web_search_result(item: W.OutputItem) -> dict[str, Any]:
 class _Output:
     """The parts of each output item."""
 
-    def __init__(self, options: lm.ProviderOptions, names: NameMapper, ids: IdService) -> None:
+    def __init__(
+        self,
+        options: lm.ProviderOptions,
+        names: NameMapper,
+        ids: IdService,
+        strict: PT.StrictTools,
+    ) -> None:
         self.options = options
+        self.strict = strict
         self.names = names
         self.ids = ids
         self.approvals = approval_request_ids(options.prompt)
@@ -362,7 +368,9 @@ class _Output:
     def function_call(self, item: W.OutputItem) -> Gen[list[Part]]:
         self.has_tool_calls = True
         name = item["name"]
-        params = yield from function_params(self.options, name, item["arguments"], "makeResponse")
+        params = yield from function_params(
+            self.options, self.strict, name, item["arguments"], "makeResponse"
+        )
         return [
             {
                 "type": "tool-call",
@@ -539,9 +547,10 @@ def _make_response(
     raw: W.Response,
     response: HttpClientResponse,
     names: NameMapper,
+    strict: PT.StrictTools,
 ) -> Gen[list[Part]]:
     ids: IdService = yield from IdGenerator()
-    output = _Output(options, names, ids)
+    output = _Output(options, names, ids, strict)
     parts: list[Part] = [
         {
             "type": "response-metadata",
@@ -562,5 +571,6 @@ def make_response(
     raw: W.Response,
     response: HttpClientResponse,
     names: NameMapper,
+    strict: PT.StrictTools,
 ) -> Effect[list[Part], AiError, Any]:
-    return fx.gen(lambda: _make_response(options, raw, response, names))
+    return fx.gen(lambda: _make_response(options, raw, response, names, strict))

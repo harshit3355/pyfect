@@ -26,7 +26,6 @@ from pyfect.ai import _provider as P
 from pyfect.ai import _provider_tools as PT
 from pyfect.ai import language_model as lm
 from pyfect.ai import model as M
-from pyfect.ai import tool as T
 from pyfect.ai._provider_tools import UnsupportedInput
 from pyfect.ai.ai_error import AiError
 from pyfect.ai.openai_compat import _schema as W
@@ -88,13 +87,19 @@ def _make_request(
     config: Mapping[str, Any],
     options: lm.ProviderOptions,
     names: NameMapper,
-    codecs: T.CodecTransformer,
+    strict: PT.StrictTools,
 ) -> Effect[dict[str, Any], AiError]:
     try:
         messages = prepare_messages(options.prompt, config, names)
-        return fx.succeed(chat_request(config, options, messages, names, codecs))
+        return fx.succeed(chat_request(config, options, messages, names, strict))
     except UnsupportedInput as error:
         return fx.fail(error.error)
+
+
+def _strict_tools(config: Mapping[str, Any]) -> PT.StrictTools:
+    """How a request's tools are advertised and their calls decoded; a tool's
+    codec is made once per request."""
+    return PT.StrictTools.of(PT.memoized(to_codec_openai), config)
 
 
 def _annotate_request(span: Span | None, request: Mapping[str, Any]) -> None:
@@ -175,38 +180,45 @@ def make(
     def build(client: ClientService) -> Effect[lm.Service]:
         def generate(options: lm.ProviderOptions) -> Effect[Sequence[lm.EncodedPart], AiError, Any]:
             names = NameMapper(options.tools)
-            codecs = PT.memoized(to_codec_openai)
 
-            def send(request: dict[str, Any]) -> Effect[list[Part], AiError, Any]:
-                _annotate_request(options.span, request)
+            def send(cfg: ConfigService) -> Effect[list[Part], AiError, Any]:
+                strict = _strict_tools(cfg)
 
                 def respond(sent: tuple[W.ChatCompletion, Any]) -> Effect[list[Part], AiError, Any]:
                     completion, response = sent
                     _annotate_response(options.span, completion)
-                    return make_response(options, completion, response, names, codecs)
+                    return make_response(options, completion, response, names, strict)
 
-                return client.create_response(request).flat_map(respond)
+                def post(request: dict[str, Any]) -> Effect[list[Part], AiError, Any]:
+                    _annotate_request(options.span, request)
+                    return client.create_response(request).flat_map(respond)
 
-            request = current().flat_map(lambda cfg: _make_request(cfg, options, names, codecs))
-            return request.flat_map(send)
+                return _make_request(cfg, options, names, strict).flat_map(post)
+
+            return current().flat_map(send)
 
         def stream(options: lm.ProviderOptions) -> Stream[lm.EncodedPart, AiError, Any]:
             names = NameMapper(options.tools)
-            codecs = PT.memoized(to_codec_openai)
 
-            def send(request: dict[str, Any]) -> Effect[Stream[Part, AiError, Any], AiError]:
-                _annotate_request(options.span, request)
-                return client.create_response_stream(request).map(
-                    lambda sent: make_stream_response(
-                        options, sent[1], sent[0], names, client.max_response_bytes, codecs=codecs
+            def send(cfg: ConfigService) -> Effect[Stream[Part, AiError, Any], AiError]:
+                strict = _strict_tools(cfg)
+
+                def post(request: dict[str, Any]) -> Effect[Stream[Part, AiError, Any], AiError]:
+                    _annotate_request(options.span, request)
+                    return client.create_response_stream(request).map(
+                        lambda sent: make_stream_response(
+                            options,
+                            sent[1],
+                            sent[0],
+                            names,
+                            client.max_response_bytes,
+                            strict=strict,
+                        )
                     )
-                )
 
-            built: Effect[Stream[Part, AiError, Any], AiError] = (
-                current()
-                .flat_map(lambda cfg: _make_request(cfg, options, names, codecs))
-                .flat_map(send)
-            )
+                return _make_request(cfg, options, names, strict).flat_map(post)
+
+            built: Effect[Stream[Part, AiError, Any], AiError] = current().flat_map(send)
             return St.unwrap(built).map(lambda part: _annotate_stream_part(options.span, part))
 
         return lm.make(

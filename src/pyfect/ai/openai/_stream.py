@@ -17,6 +17,7 @@ from typing import Any, Literal
 import pyfect as fx
 from pyfect._core import Effect
 from pyfect.ai import _provider as P
+from pyfect.ai import _provider_tools as PT
 from pyfect.ai import language_model as lm
 from pyfect.ai.ai_error import AiError
 from pyfect.ai.id_generator import Service as IdService
@@ -87,6 +88,7 @@ class _Stream:
     response: HttpClientResponse
     names: NameMapper
     ids: IdService
+    strict: PT.StrictTools
     concludes_summaries: bool
     """Whether summary parts end at once (stored item references over HTTP
     need no encrypted content)."""
@@ -206,7 +208,7 @@ class _Stream:
             return []
         self.has_tool_calls = True
         params = yield from function_params(
-            self.options, call.name, event["arguments"], "makeStreamResponse"
+            self.options, self.strict, call.name, event["arguments"], "makeStreamResponse"
         )
         call.function_emitted = True
         return [
@@ -572,7 +574,7 @@ def _done_function(state: _Stream, index: int, item: Any) -> Gen[list[Part]]:
     state.has_tool_calls = True
     name = item["name"]
     params = yield from function_params(
-        state.options, name, item["arguments"], "makeStreamResponse"
+        state.options, state.strict, name, item["arguments"], "makeStreamResponse"
     )
     return [
         {"type": "tool-params-end", "id": item["call_id"]},
@@ -763,7 +765,8 @@ def make_stream_response(
     names: NameMapper,
     ids: IdService,
     *,
+    strict: PT.StrictTools,
     concludes_summaries: bool,
 ) -> Stream[Part, AiError, Any]:
-    state = _Stream(options, response, names, ids, concludes_summaries)
+    state = _Stream(options, response, names, ids, strict, concludes_summaries)
     return events.map_effect(state.event).flatten_iterable()

@@ -164,6 +164,33 @@ def _types(parts: Sequence[Any]) -> list[str]:
 # generateText --------------------------------------------------------------------------
 
 
+SearchTool = T.make("Search", parameters=S.Record(S.String, S.String))
+
+
+@testing.effect
+def test_non_strict_record_params():
+    """generateText / advertises and handles non-strict record parameters"""
+    received: list[object] = []
+    toolkit = K.make(SearchTool)
+
+    def handle(params: object, _: Any) -> Any:
+        received.append(params)
+        return fx.void
+
+    mock = mock_json(_calls(("call_1", "Search", {"status": "open"})))
+    yield from _provided(
+        lm.generate_text("Search", toolkit=toolkit),
+        mock,
+        "gpt-4o-mini",
+        {"strict_json_schema": False},
+        toolkit.to_layer(SearchTool.handler(handle)),
+    )
+    function = mock.bodies[0]["tools"][0]["function"]
+    assert function["strict"] is False
+    assert function["parameters"] == {"type": "object", "additionalProperties": {"type": "string"}}
+    assert received == [{"status": "open"}]
+
+
 @testing.effect
 def test_text_only_user_messages():
     """generateText / serializes text-only user messages and decodes text output"""

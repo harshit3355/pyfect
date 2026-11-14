@@ -1599,6 +1599,33 @@ TransformParamsTool = T.make(
 )
 
 
+SearchTool = T.make("Search", parameters=S.Record(S.String, S.String))
+
+
+@testing.effect
+def test_non_strict_record_params():
+    """generateText / response handling / advertises and handles non-strict record parameters"""
+    received: list[object] = []
+    toolkit = K.make(SearchTool)
+
+    def handle(params: object, _: Any) -> Any:
+        received.append(params)
+        return fx.void
+
+    mock = _mock(output=[function_call("Search", {"status": "open"})])
+    yield from _provided(
+        lm.generate_text("Search", toolkit=toolkit),
+        mock,
+        "gpt-4o-mini",
+        {"strict_json_schema": False},
+        toolkit.to_layer(SearchTool.handler(handle)),
+    )
+    tool = mock.bodies[0]["tools"][0]
+    assert tool["strict"] is False
+    assert tool["parameters"] == {"type": "object", "additionalProperties": {"type": "string"}}
+    assert received == [{"status": "open"}]
+
+
 @testing.effect
 def test_transformed_params():
     """generateText / response handling / converts transformed tool call params to the tool's standard encoded form"""  # noqa: E501

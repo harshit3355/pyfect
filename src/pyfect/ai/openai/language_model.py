@@ -30,6 +30,7 @@ from pyfect import layer as L
 from pyfect import stream as St
 from pyfect._core import Effect
 from pyfect.ai import _provider as P
+from pyfect.ai import _provider_tools as PT
 from pyfect.ai import language_model as lm
 from pyfect.ai import model as M
 from pyfect.ai._provider_tools import UnsupportedInput
@@ -40,7 +41,7 @@ from pyfect.ai.openai import _schema as W
 from pyfect.ai.openai._prompt import KEY, prepare_messages
 from pyfect.ai.openai._response import Part, make_response
 from pyfect.ai.openai._stream import make_stream_response
-from pyfect.ai.openai._tools import prepare_response_format, prepare_tools
+from pyfect.ai.openai._tools import prepare_response_format, prepare_tools, strict_tools
 from pyfect.ai.openai.client import OpenAiClient, OpenAiSocket
 from pyfect.ai.openai.client import Service as ClientService
 from pyfect.ai.openai.telemetry import add_gen_ai_annotations
@@ -104,6 +105,7 @@ def _make_request(
     config: Mapping[str, Any],
     options: lm.ProviderOptions,
     names: NameMapper,
+    strict: PT.StrictTools,
     web_socket_mode: bool,
 ) -> Effect[W.CreateResponse, AiError]:
     include: dict[str, None] = dict.fromkeys(config.get("include") or ())
@@ -111,7 +113,7 @@ def _make_request(
         messages = prepare_messages(
             config, options, names, include, web_socket_mode=web_socket_mode
         )
-        tools = prepare_tools(config, options, names)
+        tools = prepare_tools(strict, options, names)
         response_format = prepare_response_format(config, options)
     except UnsupportedInput as error:
         return fx.fail(error.error)
@@ -220,11 +222,12 @@ def make(
 
     def request(
         options: lm.ProviderOptions, names: NameMapper
-    ) -> Effect[tuple[ConfigService, W.CreateResponse, bool], AiError]:
+    ) -> Effect[tuple[ConfigService, W.CreateResponse, bool, PT.StrictTools], AiError]:
         def build(cfg: ConfigService, socket: object) -> Effect[Any, AiError]:
             web_socket_mode = socket is not None
-            made = _make_request(cfg, options, names, web_socket_mode)
-            return made.map(lambda payload: (cfg, payload, web_socket_mode))
+            strict = strict_tools(cfg)
+            made = _make_request(cfg, options, names, strict, web_socket_mode)
+            return made.map(lambda payload: (cfg, payload, web_socket_mode, strict))
 
         return current().flat_map(
             lambda cfg: fx.service_option(OpenAiSocket).flat_map(lambda s: build(cfg, s))
@@ -234,14 +237,16 @@ def make(
         def generate(options: lm.ProviderOptions) -> Effect[Sequence[lm.EncodedPart], AiError, Any]:
             names = NameMapper(options.tools)
 
-            def send(made: tuple[ConfigService, W.CreateResponse, bool]) -> Effect[Any, AiError]:
-                payload = made[1]
+            def send(
+                made: tuple[ConfigService, W.CreateResponse, bool, PT.StrictTools],
+            ) -> Effect[Any, AiError]:
+                _, payload, _, strict = made
                 _annotate_request(options.span, payload)
 
                 def respond(sent: tuple[W.Response, Any]) -> Effect[list[Part], AiError, Any]:
                     raw, response = sent
                     _annotate_response(options.span, raw)
-                    return make_response(options, raw, response, names)
+                    return make_response(options, raw, response, names, strict)
 
                 return client.create_response(payload).flat_map(respond)
 
@@ -251,9 +256,9 @@ def make(
             names = NameMapper(options.tools)
 
             def send(
-                made: tuple[ConfigService, W.CreateResponse, bool], ids: IdService
+                made: tuple[ConfigService, W.CreateResponse, bool, PT.StrictTools], ids: IdService
             ) -> Effect[Stream[Part, AiError, Any], AiError]:
-                cfg, payload, web_socket_mode = made
+                cfg, payload, web_socket_mode, strict = made
                 _annotate_request(options.span, payload)
                 concludes = (
                     not web_socket_mode
@@ -262,7 +267,13 @@ def make(
                 )
                 return client.create_response_stream(payload).map(
                     lambda sent: make_stream_response(
-                        options, sent[1], sent[0], names, ids, concludes_summaries=concludes
+                        options,
+                        sent[1],
+                        sent[0],
+                        names,
+                        ids,
+                        strict=strict,
+                        concludes_summaries=concludes,
                     )
                 )
 

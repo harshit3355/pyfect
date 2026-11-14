@@ -68,7 +68,7 @@ def _function(name: str, description: str | None, parameters: Any, strict: bool)
 
 
 def _tools(
-    options: lm.ProviderOptions, config: Mapping[str, Any], codecs: T.CodecTransformer
+    options: lm.ProviderOptions, config: Mapping[str, Any], strict_tools: PT.StrictTools
 ) -> list[Block]:
     allowed = options.tools
     choice = options.tool_choice
@@ -84,12 +84,10 @@ def _tools(
             strict = default_strict if default_strict is not None else True
             tools.append(_function(tool.provider_name, description, schema, strict))
         else:
-            schema = PT.tool_json_schema(MODULE, tool, require_object=True, transformer=codecs)
-            mode = T.get_strict_mode(tool)
-            strict = mode if mode is not None else default_strict
-            tools.append(
-                _function(tool.name, description, schema, strict if strict is not None else True)
+            schema = PT.tool_json_schema(
+                MODULE, tool, require_object=True, transformer=strict_tools.advertised(tool)
             )
+            tools.append(_function(tool.name, description, schema, strict_tools.is_strict(tool)))
     return tools
 
 
@@ -130,10 +128,11 @@ def chat_request(
     options: lm.ProviderOptions,
     messages: list[Block],
     names: NameMapper,
-    codecs: T.CodecTransformer,
+    strict: PT.StrictTools,
 ) -> Block:
     """Raises ``UnsupportedInput`` for a schema that has no JSON Schema.
-    ``codecs`` makes the tools' codecs (the response reuses them)."""
+    ``strict`` decides how each tool is advertised (the response decodes
+    their calls with it)."""
     request: Block = {
         key: value for key, value in config.items() if key not in _KNOWN and key not in LIBRARY_KEYS
     }
@@ -146,7 +145,7 @@ def chat_request(
     if response_format is not None:
         request["response_format"] = response_format
     if options.tools:
-        tools = _tools(options, config, codecs)
+        tools = _tools(options, config, strict)
         if tools:
             request["tools"] = tools
         request["tool_choice"] = _tool_choice(options.tool_choice, names)
