@@ -40,7 +40,7 @@ from pyfect.duration import Duration
 from pyfect.encoding import tar
 from pyfect.encoding import zip as encoding_zip
 from pyfect.pull import catch_done
-from pyfect.scheduler import Cancel, Scheduler, Task
+from pyfect.scheduler import BACKGROUND, Cancel, Scheduler, Task
 
 _BUDGETS = (1, 2, 3, 31, 32, 33)
 _PREFIXES = range(0, 36)
@@ -782,3 +782,62 @@ _CROSS_THREAD_CASES: dict[str, _Case] = {
 @pytest.mark.parametrize("name", list(_CROSS_THREAD_CASES))
 def test_a_wake_from_another_threads_run_claims_nothing_after_an_interrupt(name: str):
     assert _woken_from_another_thread(_CROSS_THREAD_CASES[name]) is None
+
+
+def _woken_in_a_returned_run(case: _Case) -> str | None:
+    """``_woken_from_another_thread`` with the target in a run whose caller has
+    returned, so its scheduler is adopted and the background thread runs it. A
+    task there keeps that thread busy while another thread's run wakes the
+    target, then interrupts it from the background thread, its own."""
+    seen: list[Any] = []
+
+    @fx.gen
+    def start():
+        state = yield from case.setup()
+        target = yield from case.op(state, seen).fork_daemon()
+        for _ in range(8):  # let it park
+            yield from fx.yield_now()
+        return state, target
+
+    # The case's scoped state outlives the run that made it.
+    scope = fx.scope.CloseableScope()
+    try:
+        return _wake_returned(
+            case, seen, fx.run_blocking(start.pipe(fx.provide_service(fx.Scope, scope)))
+        )
+    finally:
+        fx.run_blocking(scope.close(fx.Success(None)))
+
+
+def _wake_returned(
+    case: _Case, seen: list[Any], started: tuple[Any, fx.Fiber[Any, Any]]
+) -> str | None:
+    state, target = started
+    if target.poll_unsafe() is not None:
+        return "the target did not park"
+    busy, go = threading.Event(), threading.Event()
+
+    def hold_then_interrupt() -> None:
+        busy.set()
+        assert go.wait(10)
+        target.interrupt_as_unsafe(None)
+
+    BACKGROUND.schedule(hold_then_interrupt)
+    if not busy.wait(10):
+        return "the background thread did not run the adopted run's tasks"
+    fx.run_blocking(fx.scoped(case.wake(state)))
+    go.set()
+    ex = fx.run_blocking(target.await_exit())
+    settle = fx.yield_now()
+    for _ in range(3):
+        settle = settle.and_then(fx.yield_now())
+    lost = fx.run_blocking(settle.and_then(case.check(state, seen)))
+    won = isinstance(ex, fx.Failure) and ex.cause.has_interrupts_only
+    if not won:
+        return f"the wake-up won: {ex}"
+    return lost or (f"ran {seen} although interrupted" if seen else None)
+
+
+@pytest.mark.parametrize("name", list(_CROSS_THREAD_CASES))
+def test_a_wake_of_a_returned_runs_fiber_claims_nothing_after_an_interrupt(name: str):
+    assert _woken_in_a_returned_run(_CROSS_THREAD_CASES[name]) is None

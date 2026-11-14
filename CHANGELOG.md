@@ -18,7 +18,9 @@
   first needed): its ready tasks and timers move there, and every later wake goes there too.
   `tests/cross_run/test_run_ownership.py` ports each dogfood repro, on both builds, and
   `tests/test_run_adoption_guard.py` allows only the functions that hand their scheduler on to
-  drive one and checks every public run function leaves a waiting fork running. Docs:
+  drive one and checks every public run function leaves a waiting fork running;
+  `tests/test_decided_results.py` wakes a returned run's parked fiber from another thread
+  and interrupts it first, for every primitive, as 0.6.4 does for a run still driven. Docs:
   [Threads](/docs/threads#sharing-state-between-runs) drops the limits this lifts. Found by
   dogfooding (pyfect-39).
 - A `ManagedRuntime`'s `run_blocking` calls on different threads no longer wait for each
