@@ -34,6 +34,14 @@ def is_dead_letter(error: object) -> bool:
     return isinstance(error, DeadLetter)
 
 
+def is_dead_letter_cause(cause: Cause[Any]) -> bool:
+    """Whether a take scope failed because the queue could not decode the
+    element's stored payload. Such an element can never be processed, so a
+    custom store's take finalizer marks it failed at once, whatever attempts
+    remain (which also releases its id for an ``"untilExecuted"`` offer)."""
+    return dead_letter_from_cause(cause) is not None
+
+
 def dead_letter_from_cause(cause: Cause[Any]) -> DeadLetter | None:
     """The ``DeadLetter`` a take's exit failed with, if any."""
     for reason in cause.reasons:

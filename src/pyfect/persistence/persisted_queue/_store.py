@@ -162,9 +162,10 @@ class PersistedQueueStoreService:
         """Claims the next visible element of queue ``options.name``,
         counting an attempt, and waits while there is none. When the scope
         closes, a success marks it completed, an interruption releases it
-        without the attempt, a ``DeadLetter`` failure marks it failed, and
-        any other failure retries it after ``options.retry_delay`` or, on
-        attempt ``options.max_attempts``, marks it failed. Fails with
+        without the attempt, a failure ``is_dead_letter_cause`` accepts marks
+        it failed at once, and any other failure retries it after
+        ``options.retry_delay`` or, on attempt ``options.max_attempts``,
+        marks it failed. Fails with
         ``PersistedQueueError`` when the backend does."""
         return self._take(options)
 

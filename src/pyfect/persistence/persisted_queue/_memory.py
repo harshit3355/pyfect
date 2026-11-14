@@ -15,7 +15,7 @@ from pyfect.exit import Exit, Success
 from pyfect.latch import Latch
 from pyfect.layer import Layer
 from pyfect.layer import effect as layer_effect
-from pyfect.persistence.persisted_queue._error import PersistedQueueError, dead_letter_from_cause
+from pyfect.persistence.persisted_queue._error import PersistedQueueError, is_dead_letter_cause
 from pyfect.persistence.persisted_queue._store import (
     Deduplicate,
     PersistedQueueStore,
@@ -110,7 +110,7 @@ class _MemoryStore:
 
         if isinstance(exit_, Success):
             return finish("completed")
-        if dead_letter_from_cause(exit_.cause) is not None:
+        if is_dead_letter_cause(exit_.cause):
             return finish("failed")
         if exit_.cause.has_interrupts_only:
             entry.attempts -= 1

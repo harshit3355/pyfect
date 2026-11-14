@@ -30,6 +30,12 @@
   Redis now parks in-flight and failed ids under finite scores, so cleanup of an old failure
   can't release a newer element of the same id; `+inf` entries left by earlier versions still
   read as in flight.
+- Hooks for runtimes and stores outside pyfect, as in Effect 4.1.4 (#7322):
+  `entity.KeepAliveHandler`, which `entity.keep_alive` calls instead of messaging the entity
+  when a runtime provides it; `persisted_queue.is_dead_letter_cause(cause)`, for a custom
+  store's take finalizer to fail an element whose payload can't be decoded at once; and
+  `durable_clock.InMemoryThreshold`, the threshold a `sleep` without `in_memory_threshold`
+  reads (60 seconds), so an engine whose timers are always durable can provide zero.
 
 ### Fixed
 

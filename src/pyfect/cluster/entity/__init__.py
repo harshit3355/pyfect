@@ -15,7 +15,12 @@ from pyfect.cluster.entity._handlers import (
 from pyfect.cluster.entity._keep_alive import KeepAliveRpc, keep_alive
 from pyfect.cluster.entity._queue import Behaviour, Replier
 from pyfect.cluster.entity._request import Request
-from pyfect.cluster.entity._services import CurrentAddress, CurrentRunnerAddress, KeepAliveLatch
+from pyfect.cluster.entity._services import (
+    CurrentAddress,
+    CurrentRunnerAddress,
+    KeepAliveHandler,
+    KeepAliveLatch,
+)
 from pyfect.cluster.entity._test_client import make_test_client
 
 __all__ = [
@@ -29,6 +34,7 @@ __all__ = [
     "EntityHandlerFn",
     "EntityHandlers",
     "EntityOptions",
+    "KeepAliveHandler",
     "KeepAliveLatch",
     "KeepAliveRpc",
     "Replier",

@@ -2,8 +2,8 @@
 
     yield from durable_clock.sleep(name="cool-off", duration="3 days")
 
-A sleep longer than ``in_memory_threshold`` (default 60 seconds) is
-scheduled with the engine and suspends the execution until the clock
+A sleep longer than ``in_memory_threshold`` (default ``InMemoryThreshold``,
+60 seconds) is scheduled with the engine and suspends the execution until the clock
 wakes it; a shorter one runs as an activity sleeping in memory.
 """
 
@@ -14,6 +14,7 @@ from typing import Never
 
 from pyfect._core import Effect
 from pyfect.clock import sleep as clock_sleep
+from pyfect.context import Reference
 from pyfect.duration import Duration, from_input_unsafe
 from pyfect.duration import Input as DurationInput
 from pyfect.effect import gen, succeed
@@ -43,18 +44,31 @@ def make(*, name: str, duration: DurationInput) -> DurableClock:
 DEFAULT_IN_MEMORY_THRESHOLD: Duration = from_input_unsafe("60 seconds")
 
 
+class InMemoryThreshold(Reference[Duration], key="effect/workflow/DurableClock/InMemoryThreshold"):
+    """The ``in_memory_threshold`` a ``sleep`` without one uses (60 seconds).
+    An engine whose timers are always durable provides zero, so every such
+    ``sleep`` schedules a durable clock."""
+
+    @classmethod
+    def default(cls) -> Duration:
+        return DEFAULT_IN_MEMORY_THRESHOLD
+
+
 def sleep(
     *, name: str, duration: DurationInput, in_memory_threshold: DurationInput | None = None
 ) -> Effect[None, Never, WorkflowEngine | WorkflowInstance]:
     """Wait ``duration`` inside a workflow. A zero duration does nothing."""
     parsed = from_input_unsafe(duration)
-    threshold = (
-        DEFAULT_IN_MEMORY_THRESHOLD
-        if in_memory_threshold is None
-        else from_input_unsafe(in_memory_threshold)
-    )
     if parsed.is_zero():
         return succeed(None)
+    if in_memory_threshold is None:
+        return InMemoryThreshold().flat_map(lambda threshold: _sleep(name, parsed, threshold))
+    return _sleep(name, parsed, from_input_unsafe(in_memory_threshold))
+
+
+def _sleep(
+    name: str, parsed: Duration, threshold: Duration
+) -> Effect[None, Never, WorkflowEngine | WorkflowInstance]:
     if parsed <= threshold:
         return make_activity(name=f"DurableClock/{name}", execute=clock_sleep(parsed))
 
@@ -70,4 +84,4 @@ def sleep(
     return gen(body)
 
 
-__all__ = ["DEFAULT_IN_MEMORY_THRESHOLD", "DurableClock", "make", "sleep"]
+__all__ = ["DEFAULT_IN_MEMORY_THRESHOLD", "DurableClock", "InMemoryThreshold", "make", "sleep"]
