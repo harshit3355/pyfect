@@ -132,6 +132,14 @@
   MySQL's advisory locks ignore case in lock names, so shards whose lock names differ only
   in case now get names of their own (the others keep Effect's). The SQL Server shard lease
   statement, which no SQL Server could parse, is fixed.
+- A child process's exit is seen only once its `stdin` is destroyed, as in Node, which
+  destroys `stdin` before it emits `'exit'`: a write made after `exit_code` (or
+  `is_running`, or `kill`) reports the exit fails with `Premature close`, as Effect's does.
+  The exit destroyed `stdin` in a later scheduler task, so a fiber that read `exit_code`
+  before that task ran could still write to the pipe while a grandchild held it open
+  (64 of 64 writes under load). Every read of a child's exit now runs its exit handler
+  first, and `tests/test_process.py` checks each way a child ends and each way its exit
+  is read. Found by dogfooding.
 
 ### Performance
 
