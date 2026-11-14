@@ -121,11 +121,14 @@ def _make_request(
         request["include"] = list(include)
     else:
         request.pop("include", None)
-    text: dict[str, Any] = {"format": response_format}
+    text: dict[str, Any] = {}
     verbosity = P.obj(config.get("text")).get("verbosity")
     if verbosity is not None:
         text["verbosity"] = verbosity
-    request["text"] = text
+    if response_format is not None:
+        text["format"] = response_format
+    if text:
+        request["text"] = text
     if tools.tools is not None:
         request["tools"] = tools.tools
     if tools.tool_choice is not None:

@@ -109,11 +109,13 @@ def prepare_tools(
     return Tools(tools, tool_choice)
 
 
-def prepare_response_format(config: Mapping[str, Any], options: lm.ProviderOptions) -> Item:
-    """Raises ``UnsupportedInput`` for a schema without a JSON Schema."""
+def prepare_response_format(config: Mapping[str, Any], options: lm.ProviderOptions) -> Item | None:
+    """The ``text.format`` of a JSON response, ``None`` for plain text (OpenAI's
+    default, which some compatible backends reject when sent). Raises
+    ``UnsupportedInput`` for a schema without a JSON Schema."""
     response_format = options.response_format
     if not isinstance(response_format, lm.JsonFormat):
-        return {"type": "text"}
+        return None
     strict = config.get("strict_json_schema")
     return {
         "type": "json_schema",

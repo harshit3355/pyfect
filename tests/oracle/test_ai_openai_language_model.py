@@ -1384,9 +1384,16 @@ class Person(TypedDict):
 
 @testing.effect
 def test_text_format_default():
-    """generateText / response format / uses text format by default"""
+    """generateText / response format / omits text configuration for plain text by default"""
     body = yield from _generate("Hello")
-    assert body["text"]["format"]["type"] == "text"
+    assert "text" not in body
+
+
+@testing.effect
+def test_text_verbosity_without_format():
+    """generateText / response format / sends verbosity without a format for plain text"""
+    body = yield from _generate("Hello", "gpt-5", {"text": {"verbosity": "low"}})
+    assert body["text"] == {"verbosity": "low"}
 
 
 @testing.effect
