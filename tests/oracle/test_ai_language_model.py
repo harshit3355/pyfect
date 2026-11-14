@@ -32,6 +32,7 @@ from pyfect.ai import response_id_tracker as tracker
 from pyfect.ai import tool as T
 from pyfect.ai import toolkit as K
 from pyfect.json_schema import JsonSchema
+from pyfect.option import Some
 from pyfect.stream import _constructors as streams
 from pyfect.stream import _sources as stream_sources
 
@@ -455,11 +456,31 @@ def test_object_span_output_type():
 def test_structured_output_error_text():
     """generateObject / includes full generated text in StructuredOutputError"""
     error = yield from _provided(
-        lm.generate_object([], schema=S.Struct(Count)),
+        lm.generate_object([], schema=S.Struct(Count), allow_empty=True),
         generate_text=[{"type": "text", "text": '{"count":"oops"}'}],
     ).flip()
     assert isinstance(error.reason, E.StructuredOutputError)
     assert error.reason.response_text == '{"count":"oops"}'
+
+
+@testing.effect
+def test_allow_empty_whitespace():
+    """generateObject / allowEmpty treats whitespace-only text as empty"""
+    response = yield from _provided(
+        lm.generate_object("hi", schema=S.Struct(Count), allow_empty=True),
+        generate_text=[{"type": "text", "text": " \n\t"}],
+    )
+    assert response.value is None
+
+
+@testing.effect
+def test_allow_empty_wraps_in_some():
+    """generateObject / wraps generated values in some when empty output is allowed"""
+    response = yield from _provided(
+        lm.generate_object("hi", schema=S.Struct(Count), allow_empty=True),
+        generate_text=[{"type": "text", "text": '{"count":1}'}],
+    )
+    assert response.value == Some({"count": 1})
 
 
 def _capture(seen: list[lm.ProviderOptions], parts: list[lm.EncodedPart]) -> Any:

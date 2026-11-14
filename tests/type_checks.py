@@ -7485,6 +7485,35 @@ def check_ai_toolkit() -> None:
         lm.generate_object("hi", schema=S.Struct(AiWeather)),
         fx.Effect[lm.GenerateObjectResponse[Never, Never, AiWeather], AiError, lm.LanguageModel],
     )
+    # allow_empty=True wraps the value in an Option; a widened bool gives either, as in Effect.
+    allow_empty: bool = bool(len("hi"))
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=allow_empty).map(
+            lambda response: response.value
+        ),
+        fx.Effect[Option[AiWeather], AiError, lm.LanguageModel]
+        | fx.Effect[AiWeather, AiError, lm.LanguageModel],
+    )
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=True),
+        fx.Effect[
+            lm.GenerateObjectResponse[Never, Never, Option[AiWeather]], AiError, lm.LanguageModel
+        ],
+    )
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=False),
+        fx.Effect[lm.GenerateObjectResponse[Never, Never, AiWeather], AiError, lm.LanguageModel],
+    )
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), toolkit=kit, allow_empty=True).map(
+            lambda response: response.value
+        ),
+        fx.Effect[
+            Option[AiWeather],
+            AiError | str,
+            lm.LanguageModel | AiDb | ai_toolkit.Handlers[Literal["Weather", "Clock"]],
+        ],
+    )
     assert_type(
         lm.stream_text("hi", toolkit=kit),
         Stream[
@@ -7520,6 +7549,12 @@ def check_ai_chat(chat: ai_chat.Service, persisted: ai_chat.PersistenceService) 
     assert_type(
         chat.generate_object("hi", schema=S.Struct(AiWeather)),
         fx.Effect[lm.GenerateObjectResponse[Never, Never, AiWeather], AiError, lm.LanguageModel],
+    )
+    assert_type(
+        chat.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=True),
+        fx.Effect[
+            lm.GenerateObjectResponse[Never, Never, Option[AiWeather]], AiError, lm.LanguageModel
+        ],
     )
     assert_type(
         chat.stream_text("hi"),
