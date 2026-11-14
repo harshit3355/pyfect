@@ -56,12 +56,24 @@ def text_literal(*, no_backslash_escapes: bool) -> Literal:
     elsewhere as its JSON text (where mysql2 writes ``'[object Object]'``); any other
     value is its ``str`` as text."""
 
-    def text(value: str) -> str:
-        if no_backslash_escapes:
+    return _Literals(no_backslash_escapes).literal
+
+
+class _Literals:
+    """``text_literal``'s writer for one quoting mode; methods rather than closures
+    calling each other, which would be a reference cycle."""
+
+    __slots__ = ("no_backslash_escapes",)
+
+    def __init__(self, no_backslash_escapes: bool) -> None:
+        self.no_backslash_escapes = no_backslash_escapes
+
+    def text(self, value: str) -> str:
+        if self.no_backslash_escapes:
             return "'" + value.replace("'", "''") + "'"
         return "'" + _backslash_escaped(value) + "'"
 
-    def value(item: object) -> str:  # noqa: PLR0911
+    def value(self, item: object) -> str:  # noqa: PLR0911
         if item is None:
             return "NULL"
         if type(item) in _FORMATTED:
@@ -69,28 +81,28 @@ def text_literal(*, no_backslash_escapes: bool) -> Literal:
         if isinstance(item, (bytes, bytearray)):
             return f"X'{bytes(item).hex()}'"
         if isinstance(item, list):
-            return listed(cast("list[object]", item))
+            return self.listed(cast("list[object]", item))
         if isinstance(item, tuple):
-            return "(" + ",".join(value(x) for x in cast("tuple[object, ...]", item)) + ")"
+            return "(" + ",".join(self.value(x) for x in cast("tuple[object, ...]", item)) + ")"
         if isinstance(item, (set, frozenset)):
-            return ",".join(value(x) for x in cast("set[object]", item))
+            return ",".join(self.value(x) for x in cast("set[object]", item))
         if isinstance(item, dict):
-            return text(json_text.stringify(cast("object", item)))
-        return text(str(item))
+            return self.text(json_text.stringify(cast("object", item)))
+        return self.text(str(item))
 
-    def listed(items: list[object]) -> str:
+    def listed(self, items: list[object]) -> str:
         return ", ".join(
-            f"({listed(cast('list[object]', item))})" if isinstance(item, list) else value(item)
+            f"({self.listed(cast('list[object]', item))})"
+            if isinstance(item, list)
+            else self.value(item)
             for item in items
         )
 
-    def literal(param: object, assigns: bool) -> str:
+    def literal(self, param: object, assigns: bool) -> str:
         if assigns and isinstance(param, dict):
             pairs = cast("dict[object, object]", param).items()
-            return ", ".join(f"{identifier(str(key))} = {value(item)}" for key, item in pairs)
-        return value(param)
-
-    return literal
+            return ", ".join(f"{identifier(str(key))} = {self.value(item)}" for key, item in pairs)
+        return self.value(param)
 
 
 __all__ = ["Literal", "identifier", "text_literal"]
