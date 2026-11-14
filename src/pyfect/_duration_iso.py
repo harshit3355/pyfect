@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import re
 
+from pyfect._digits import to_int
+from pyfect._js import int_text
+
 _PATTERN = re.compile(
     r"([+-])?P(?!\Z)(?:(\d+)W)?(?:(\d+)D)?"
     r"(?:T(?!\Z)(?:(\d+)(?:[.,](\d{1,9}))?H)?(?:(\d+)(?:[.,](\d{1,9}))?M)?"
@@ -25,8 +28,10 @@ _WEEK = 7 * _DAY
 
 def _component(whole: str | None, fraction: str | None, scale: int) -> int:
     """``scale`` is the nanoseconds in one unit."""
-    value = 0 if whole is None else int(whole) * scale
-    return value if fraction is None else value + int(fraction.ljust(9, "0")) * (scale // _SECOND)
+    value = 0 if whole is None else to_int(whole) * scale
+    return (
+        value if fraction is None else value + to_int(fraction.ljust(9, "0")) * (scale // _SECOND)
+    )
 
 
 def parse_iso_nanos(text: str) -> int | None:
@@ -65,7 +70,7 @@ def format_iso_nanos(nanos: int) -> str:
         time += f"{seconds}S"
     out = "-P" if nanos < 0 else "P"
     if days:
-        out += f"{days}D"
+        out += f"{int_text(days)}D"
     if time:
         out += f"T{time}"
     return "PT0S" if out == "P" else out

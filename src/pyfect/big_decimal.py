@@ -21,7 +21,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pyfect._digits import digits_value
+from pyfect._digits import digits_value, signed_digits_value, to_int
 from pyfect._js import int_text, js_number
 
 _MAX_SAFE = 2**53 - 1
@@ -98,9 +98,12 @@ class BigDecimal:
             out = _ZERO
         else:
             digits = int_text(self.value)
-            stripped = digits.rstrip("0")
-            trailing = len(digits) - len(stripped)
-            out = self if trailing == 0 else _normalized(int(stripped), self.scale - trailing)
+            trailing = len(digits) - len(digits.rstrip("0"))
+            out = (
+                self
+                if trailing == 0
+                else _normalized(self.value // 10**trailing, self.scale - trailing)
+            )
         object.__setattr__(self, "_normalized", out)
         return out
 
@@ -377,7 +380,7 @@ def _magnitude(a: BigDecimal, b: BigDecimal) -> Literal[-1, 0, 1]:
 
 def round_terminal(n: int) -> int:
     """``1`` when the leading digit of ``n`` is 5 or more, else ``0``."""
-    return 0 if int(int_text(abs(n))[0]) < 5 else 1
+    return 0 if int_text(abs(n))[0] < "5" else 1
 
 
 def _divide(num: int, den: int, scale: int, precision: int) -> BigDecimal:
@@ -427,13 +430,15 @@ def from_big_int(n: int) -> BigDecimal:
 def from_number(n: float) -> BigDecimal | None:
     """The decimal JavaScript prints for ``n`` (``0.1`` is ``0.1``, not the
     binary fraction); ``None`` for NaN and the infinities."""
+    if isinstance(n, int):
+        return from_big_int(n)
     if not math.isfinite(n):
         return None
     text = js_number(n)
     if "e" in text:
         return from_string(text)
     lead, _, trail = text.partition(".")
-    return BigDecimal(int(lead + trail), len(trail))
+    return BigDecimal(to_int(lead + trail), len(trail))
 
 
 def from_number_unsafe(n: float) -> BigDecimal:
@@ -444,15 +449,6 @@ def from_number_unsafe(n: float) -> BigDecimal:
     return out
 
 
-def _finite_int(text: str) -> int | None:
-    """``[+-]digits`` as an int (JavaScript's ``BigInt``), else ``None``."""
-    sign = text[:1]
-    if sign not in ("+", "-"):
-        return digits_value(text)
-    magnitude = digits_value(text[1:])
-    return None if magnitude is None else -magnitude if sign == "-" else magnitude
-
-
 def from_string(text: str) -> BigDecimal | None:
     """``[+-]digits[.digits][e[+-]digits]`` (``""`` is zero); ``None`` for
     anything else, a scale past 10,000 or a normalized scale below -10,000."""
@@ -461,7 +457,7 @@ def from_string(text: str) -> BigDecimal | None:
     base, exp = text, 0
     separator = next((i for i, c in enumerate(text) if c in "eE"), -1)
     if separator != -1:
-        base, parsed = text[:separator], _finite_int(text[separator + 1 :])
+        base, parsed = text[:separator], signed_digits_value(text[separator + 1 :])
         if base == "" or parsed is None or not -_MAX_SAFE <= parsed <= _MAX_SAFE:
             return None
         exp = parsed
@@ -469,7 +465,7 @@ def from_string(text: str) -> BigDecimal | None:
     if fraction and digits_value(fraction) is None:
         return None
     digits = lead + fraction if dot else base
-    value = _finite_int(digits)
+    value = signed_digits_value(digits)
     if value is None:
         return None
     scale = len(fraction) - exp

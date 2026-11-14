@@ -20,6 +20,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Never
 
+from pyfect._digits import to_int
 from pyfect.exit import Exit, Success
 from pyfect.exit import fail as fail_exit
 from pyfect.schema._options import ParseOptions
@@ -100,7 +101,7 @@ def match_part(node: AST, text: str, options: ParseOptions) -> bool:  # noqa: PL
         case Number():
             return _FINITE.match(text) is not None and _passes(node, _number(text), options)
         case BigInt():
-            return _BIG_INT.match(text) is not None and _passes(node, int(text), options)
+            return _BIG_INT.match(text) is not None and _passes(node, to_int(text), options)
         case Literal():
             return text == to_string(node.literal)
         case TemplateLiteral():

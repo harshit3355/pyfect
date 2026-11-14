@@ -24,6 +24,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Never, cast
 
+from pyfect._digits import to_int
 from pyfect._js import LINE_END, SPACE, js_number, trim, trim_end, trim_start
 from pyfect._nesting import parse_nested
 from pyfect._stack import with_fresh_stack
@@ -245,7 +246,7 @@ def _parse_scalar(text: str) -> object:  # noqa: PLR0911 - one return per scalar
     if _OCTAL.fullmatch(normalized):
         return sign * int(normalized.lstrip("+-")[2:], 8)
     if _INT.fullmatch(normalized):
-        return int(normalized)
+        return to_int(normalized)
     if _FLOAT.fullmatch(normalized):
         return float(normalized)
     return value

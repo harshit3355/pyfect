@@ -20,6 +20,7 @@ from collections.abc import Callable, Mapping
 from json.encoder import encode_basestring as _encode_string
 from typing import Never, cast
 
+from pyfect._digits import to_int
 from pyfect._js import int_text, js_number
 from pyfect._nesting import parse_nested
 from pyfect._redaction import NO_FORM, json_form
@@ -45,7 +46,20 @@ def parse(text: str | bytes | bytearray) -> Json:
     extensions (bytes are read as ``json.loads`` reads them). Text that is
     not JSON raises ``ValueError``, also when it nests too deeply to decode
     (where ``json.loads`` raises ``RecursionError``)."""
-    value: Json = parse_nested(lambda: json.loads(text, parse_constant=_reject_constant))
+    try:
+        return _loads(text, int)
+    except ValueError as error:
+        if isinstance(error, json.JSONDecodeError) or error.__cause__ is not None:
+            raise
+        # An integer past the 4300 digits ``int`` reads: read again through
+        # ``to_int``, which reads any length (slower, so only when needed).
+        return _loads(text, to_int)
+
+
+def _loads(text: str | bytes | bytearray, parse_int: Callable[[str], int]) -> Json:
+    value: Json = parse_nested(
+        lambda: json.loads(text, parse_constant=_reject_constant, parse_int=parse_int)
+    )
     return value
 
 

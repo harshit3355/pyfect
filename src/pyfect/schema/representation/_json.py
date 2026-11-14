@@ -19,6 +19,7 @@ import math
 from collections.abc import Mapping, Sequence
 from typing import Any, cast
 
+from pyfect._digits import to_int
 from pyfect.schema import ast
 from pyfect.schema.issue import Path
 from pyfect.schema.representation import _model as R
@@ -317,7 +318,7 @@ def _decode_typed(value: object, path: Path, types: frozenset[str]) -> Any:
         case "bigint":
             text = _string(raw, at)
             try:
-                return int(text)
+                return to_int(text)
             except ValueError:
                 raise error_with_path("Expected a string representing a bigint", at) from None
         case _:
