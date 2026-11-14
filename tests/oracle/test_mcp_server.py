@@ -1329,3 +1329,63 @@ def test_reads_string_and_byte_content_with_the_registered_mime_type():
     assert (yield from read("test://plain")) == [{"uri": "test://plain", "text": "plain"}]
     # A full result is the handler's own answer and is returned as is.
     assert (yield from read("test://result")) == [{"uri": "test://result#part", "text": "part"}]
+
+
+@testing.effect
+def test_drops_progress_queued_on_stdout_after_its_request_is_cancelled():
+    """(pyfect) The stdio form of ``drops queued progress after cancellation but preserves
+    background progress``: the progress waits in the bounded output queue behind a write the
+    client is not reading, and is dropped once its request is cancelled."""
+    blocked = Deferred[None]()
+    release = Deferred[None]()
+    queued = Deferred[None]()
+    cancelled = Deferred[None]()
+
+    def before_write(message: dict[str, Any]) -> fx.Effect[None]:
+        if message.get("method") == "notifications/message":
+            return blocked.succeed(None).and_then(release.wait())
+        return fx.void
+
+    server = yield from M.make()
+
+    def handle(_: object) -> fx.Effect[Any, Any, Any]:
+        @fx.gen
+        def run():
+            progress: MS.JsonObject = {"progressToken": "request", "progress": 1}
+            yield from server.notify("notifications/progress", progress).fork(
+                start_immediately=True
+            )
+            yield from queued.succeed(None)
+            return (yield from fx.never)
+
+        return run.ensuring(cancelled.succeed(None).as_void())
+
+    yield from server.add_tool(
+        ToolEntry({"name": "Progress", "inputSchema": {"type": "object"}}, Context.empty(), handle)
+    )
+    harness = yield from stdio_harness(P.v2025_11_25, server=server, before_write=before_write)
+    yield from harness.initialize()
+    yield from harness.send_request("ping")  # notifications/initialized is read
+    yield from server.notify(
+        "notifications/message", {"level": "error", "data": "blocked"}
+    ).fork_scoped(start_immediately=True)
+    yield from blocked.wait()
+    yield from harness.send(
+        {
+            "jsonrpc": "2.0",
+            "id": "work",
+            "method": "tools/call",
+            "params": {"name": "Progress", "_meta": {"progressToken": "request"}},
+        }
+    )
+    yield from queued.wait()
+    yield from harness.send_notification("notifications/cancelled", {"requestId": "work"})
+    yield from cancelled.wait()
+    yield from release.succeed(None)
+    yield from server.notify(
+        "notifications/progress", {"progressToken": "background", "progress": 1}
+    )
+    assert (yield from harness.receive())["method"] == "notifications/message"
+    background = yield from harness.receive()
+    assert background["params"] == {"progressToken": "background", "progress": 1}
+    assert (yield from harness.stdout.size()) == 0

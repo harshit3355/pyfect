@@ -34,6 +34,7 @@ from pyfect.ai._mcp.failure import interrupted_failure
 from pyfect.ai._mcp.http_status import fail_with_http_status
 from pyfect.ai._mcp.input_wire import CONTINUATION_PARAMS, INPUT_REQUESTS, ContinuationParams
 from pyfect.ai._mcp.invoke import RequestRejected, ResourceNotFound, unwrap_rejected
+from pyfect.ai._mcp.liveness import Liveness, Progress, RequestLiveness
 from pyfect.ai.mcp_protocol import AnyProtocolAdapter, Registry
 from pyfect.ai.mcp_schema import (
     CALL_TOOL_PARAMS,
@@ -326,6 +327,8 @@ class Connection:
     )
     _cancelled: set[RequestId] = field(default_factory=set[RequestId])
     """The requests ended without an answer (a subscription that overflowed)."""
+    _liveness: dict[RequestId, Liveness] = field(default_factory=dict[RequestId, Liveness])
+    """Each request in flight's, for the progress it sends."""
     _reverse_ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     # --- messages ----------------------------------------------------------------------
@@ -368,6 +371,8 @@ class Connection:
         @gen
         def run():
             self.closed = True
+            for liveness in self._liveness.values():
+                liveness.abandon()
             for fiber in list(self._inflight.values()):
                 yield from fiber.interrupt()
 
@@ -391,20 +396,26 @@ class Connection:
         """Serve ``request`` on its own fiber, which ends once its response
         is written or it is cancelled (writing nothing)."""
         id = request.id
+        liveness = Liveness()
 
         def done() -> None:
+            liveness.answered = True
+            if self._liveness.get(id) is liveness:
+                del self._liveness[id]
             self._inflight.pop(id, None)
             self._listening.discard(id)
             self._cancelled.discard(id)
 
         served = (
             self.answer(id, request.method, request.params, out)
+            .pipe(provide_service(RequestLiveness, liveness))
             .flat_map(lambda reply: _VOID if reply is None else out(reply))
             .ensuring(sync(done))
         )
 
         def track(fiber: Fiber[None, Never]) -> Fiber[None, Never]:
             self._inflight[id] = fiber
+            self._liveness[id] = liveness
             if request.method == SUBSCRIPTIONS_LISTEN.name:
                 self._listening.add(id)
             return fiber
@@ -466,9 +477,18 @@ class Connection:
             return sync(lambda: setattr(self, "initialized", True))
         if method == "notifications/cancelled":
             request_id = parse_request_id(params.get("requestId"))
-            fiber = None if request_id is None else self._inflight.get(request_id)
+            if request_id is None:
+                return _VOID
+            fiber = self._inflight.get(request_id)
             if fiber is not None:
-                return sync(lambda: fiber.interrupt_as_unsafe(None))
+                liveness = self._liveness.get(request_id)
+
+                def cancel() -> None:
+                    if liveness is not None:
+                        liveness.abandon()
+                    fiber.interrupt_as_unsafe(None)
+
+                return sync(cancel)
         return _VOID
 
     def _answered(self, body: JsonObject) -> Effect[None]:
@@ -524,7 +544,18 @@ class Connection:
         def deliver(method: str, params: JsonObject) -> Effect[None]:
             if not wants(method, params):
                 return _VOID
-            return out(notification(method, projection.notification(protocol, method, params)))
+            message = notification(method, projection.notification(protocol, method, params))
+            if method != "notifications/progress":
+                return out(message)
+
+            def live(liveness: Option[Liveness]) -> Effect[None]:
+                if liveness is None:
+                    return out(message)
+                if liveness.value.answered:
+                    return _VOID
+                return out(Progress(message, liveness.value))
+
+            return service_option(RequestLiveness).flat_map(live)
 
         return deliver
 

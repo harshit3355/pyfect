@@ -21,6 +21,7 @@ from typing import Any, Never, cast
 from pyfect._concurrency import for_each
 from pyfect._core import Effect
 from pyfect._json_value import JsonValue
+from pyfect.ai._mcp import liveness
 from pyfect.ai._mcp.core import McpServer, McpServerService
 from pyfect.ai._mcp.dispatch import Connection, ServerInfo
 from pyfect.ai._mcp.failure import INTERNAL_ERROR
@@ -117,7 +118,13 @@ class _Writes:
         def ordered() -> Effect[None]:
             previous, done = self.tail, Deferred[None]()
             self.tail = done
-            sent = self.protocol.send(self.client_id, _outbound(message))
+            sent = suspend(
+                lambda: (
+                    _VOID
+                    if liveness.dropped(message)
+                    else self.protocol.send(self.client_id, _outbound(message))
+                )
+            )
             waited = sent if previous is None else previous.wait().and_then(sent)
             return waited.ensuring(done.succeed(None).as_void())
 
