@@ -53,6 +53,26 @@
   follow the connection `url` (and its query parameters); the namespace defaults to the user.
   A URL-only config reported `postgres`, `localhost` and 5432, as in Effect 4.1.4 (#10500).
   An invalid config now fails `pg.make` at once, not at the first statement.
+- Loops written as nested functions that reached themselves through a closure (by name, or
+  through a variable or object holding something built from them) formed a reference cycle, so
+  the last value, error or pull they handled stayed alive until the cycle collector ran: an HTTP
+  response kept its socket open that way. Affected were stream and channel operators (`filter`,
+  `filter_map`, `map_accum`, `flat_map`, `switch_map`, `catch_cause`, `rechunk`, `drop`,
+  `debounce`, `throttle`, `repeat`, ...), the CSV, JSON array, NDJSON, XML, SSE, tar, zip and
+  binary decoders and encoders, schedule combinators, `PersistedQueue.take`, `Queue` and
+  `PubSub` takes, `Pool`, `RcMap`, socket writes, the live server's readers, SQL pools, config
+  loading, shared layer builds (which kept a run's result), and recursive walkers such as schema
+  and logger formatting. They are now module-level functions or methods on a small state object.
+  `tests/test_closure_cycles.py` fails for any nested function in `pyfect` that reaches itself
+  through a closure cell, and `tests/test_release_*.py` check that the public loops free what
+  they handled once the run ends, with the cycle collector off. The live server's request
+  `upgrade` still refers to its request this way; the fix changes its signature, so it waits
+  for 0.7.0.
+
+### Performance
+
+- `Queue.take`, `peek`, `await_done` and `take_between` re-enter through methods rather than a
+  fresh closure per call.
 
 ## 0.6.4 (2026-11-14)
 
