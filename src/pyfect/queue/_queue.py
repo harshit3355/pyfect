@@ -48,7 +48,15 @@ _REFUSED: Exit[bool, Never] = Decided(False)
 
 
 class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
-    __slots__ = ("_capacity", "_items", "_lock", "_scheduler", "_state", "_strategy")
+    __slots__ = (
+        "_capacity",
+        "_items",
+        "_lock",
+        "_scheduler",
+        "_state",
+        "_strategy",
+        "_take_effect",
+    )
 
     def __init__(self, capacity: int | None = None, strategy: Strategy = "suspend") -> None:
         self._capacity = capacity
@@ -62,6 +70,8 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         self._strategy: Strategy = strategy
         self._items: deque[A] = deque()
         self._state: st.State[A, E] = st.Open(WaitList(self._lock), deque(), WaitList(self._lock))
+        # ``take`` is the same effect every time: made once, as this is the hot path.
+        self._take_effect: Effect[A, E] = _SuspendTake(self._take_attempt)
 
     def _waker(self) -> Scheduler | None:
         """Where the queue's wakes wait: its maker's dispatcher, unless that
@@ -282,20 +292,18 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
 
     def take(self) -> Effect[A, E]:
         """Wait for an item."""
+        return self._take_effect
 
+    def _take_attempt(self) -> Effect[A, E] | Exit[A, E]:
         # As Effect's ``take``: an item there is taken in this op; otherwise
         # wait, then take again.
-        def attempt() -> Effect[A, E] | Exit[A, E]:
-            lock = self._lock  # ``acquire`` rather than ``with``, as in ``offer``
-            lock.acquire()
-            try:
-                ex = self._take()
-                return self._wait_then(1, take) if ex is None else ex
-            finally:
-                lock.release()
-
-        take: Effect[A, E] = _SuspendTake(attempt)
-        return take
+        lock = self._lock  # ``acquire`` rather than ``with``, as in ``offer``
+        lock.acquire()
+        try:
+            ex = self._take()
+            return self._wait_then(1, self._take_effect) if ex is None else ex
+        finally:
+            lock.release()
 
     def take_unsafe(self) -> Exit[A, E] | None:
         """An item, the failure of a finished queue, or ``None`` if ``take``

@@ -50,7 +50,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never, TypeVar
 
 from pyfect._core import (
     SUSPEND,
@@ -786,7 +786,7 @@ class Fiber(Generic[A_co, E_co]):
                     # ``_continue``'s common case, inlined: this runs for
                     # every frame a success reaches.
                     try:
-                        cur = frame._on_success(cast("Success[Any]", cur).value, self)
+                        cur = frame._on_success(cur.value, self)  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
                     except BaseException as exc:
                         cur = self._raised(exc)
                 else:
