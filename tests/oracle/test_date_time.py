@@ -760,12 +760,45 @@ def test_disambiguation(case: Case):
     [("europe/london", "Europe/London"), ("utc", "UTC"), ("AMERICA/NEW_YORK", "America/New_York")],
 )
 def test_zone_named_gives_the_canonical_name(written: str, canonical: str):
-    """Not an Effect title: ``zoneMakeNamed`` takes any casing and keeps
-    ``Intl``'s canonical name (link resolution, ``Asia/Kolkata`` to
-    ``Asia/Calcutta``, follows ICU's data and is not copied)."""
+    """Not an Effect title: ``zoneMakeNamed`` takes any casing and takes
+    ``Intl``'s casing when the id differs from its resolved one only in case."""
     zone = date_time.zone_named(written)
     assert zone is not None
     assert date_time.zone_to_string(zone) == canonical
+
+
+def test_keeps_the_name_of_a_renamed_zone():
+    """zoneMakeNamed / keeps the name of a renamed zone"""
+    for name in ["Europe/Kiev", "Europe/Kyiv", "Europe/Kiev", "Europe/Kyiv"]:
+        zone = date_time.zone_named(name)
+        assert zone is not None
+        assert date_time.zone_to_string(zone) == name
+    kyiv = date_time.zone_named("Europe/Kyiv")
+    assert kyiv is not None
+    zoned = datetime(2024, 1, 1, tzinfo=UTC).astimezone(kyiv)
+    assert date_time.format_iso_zoned(zoned) == "2024-01-01T02:00:00.000+02:00[Europe/Kyiv]"
+    london = date_time.zone_named("europe/london")
+    assert london is not None
+    assert date_time.zone_to_string(london) == "Europe/London"
+
+
+def test_treats_a_renamed_zone_and_its_old_name_as_equal():
+    """zoneMakeNamed / treats a renamed zone and its old name as equal"""
+    kyiv = date_time.zone_named("Europe/Kyiv")
+    kiev = date_time.zone_named("Europe/Kiev")
+    assert kyiv == kiev
+    assert kiev == kyiv
+    assert hash(kyiv) == hash(kiev)
+    assert kyiv != date_time.zone_named("Europe/London")
+
+
+def test_a_renamed_zone_keeps_its_name_through_a_zoned_string():
+    """Not an Effect title: ``[Asia/Kolkata]`` reads back as ``Asia/Kolkata``, and the zone
+    still equals ``Asia/Calcutta``, the id ICU resolves it to."""
+    parsed = date_time.make_zoned_from_string("2024-07-01T00:00:00Z[Asia/Kolkata]")
+    assert parsed is not None
+    assert date_time.format_iso_zoned(parsed) == "2024-07-01T05:30:00.000+05:30[Asia/Kolkata]"
+    assert parsed.tzinfo == date_time.zone_named("Asia/Calcutta")
 
 
 def test_make_zoned_from_string_canonicalizes_the_zone_name():

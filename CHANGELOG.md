@@ -253,6 +253,14 @@
   `OrderedDict`, `Counter` or `MappingProxyType` printed as a plain list or dict; such
   annotations are now omitted. `tests/properties/test_code_value_literals.py` checks that
   whatever is printed evaluates back to the value.
+- `date_time.zone_named` keeps the id it is given, a renamed zone's new or old name included
+  (`Europe/Kyiv`, `Asia/Kolkata`, `Etc/UTC`), as Effect 4.1.4 does (#10439); the casing still
+  comes from ICU when the two differ only in case (`europe/london` is `Europe/London`). It
+  named the zone with the id ICU resolves it to (`Europe/Kiev`, `Asia/Calcutta`, `UTC`), so
+  `zone_to_string`, `format_iso_zoned` and the zone schemas wrote another name than the one
+  given. Zones ICU resolves to the same id are equal and hash alike (`Europe/Kyiv` equals
+  `Europe/Kiev`), and the local zone is still named by ICU's id, as in Effect.
+  `tests/oracle/test_icu_zones.py` checks every id ICU knows.
 
 ### Performance
 
