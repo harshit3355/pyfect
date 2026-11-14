@@ -16,62 +16,12 @@ from pyfect._fiber import Fiber
 from pyfect.exit import Failure, Success
 from pyfect.partitioned_semaphore import PartitionedSemaphore
 from pyfect.queue import Queue
-from pyfect.scheduler import (
-    CurrentScheduler,
-    EffectScheduler,
-    ExecutionMode,
-    MixedScheduler,
-    SchedulerDispatcher,
-)
+from pyfect.scheduler import MixedScheduler
 
-
-class _Held:
-    """Holds every task in ``tasks``, for the test to run."""
-
-    def __init__(self, tasks: list[Callable[[], None]]) -> None:
-        self._tasks = tasks
-
-    def schedule_task(self, task: Callable[[], None], priority: int) -> None:
-        self._tasks.append(task)
-
-    def flush(self) -> None:
-        pass
-
-
-class _Custom(EffectScheduler):
-    """``{ executionMode, makeDispatcher, shouldYield }``."""
-
-    execution_mode: ExecutionMode = "async"
-
-    def __init__(
-        self,
-        should_yield: Callable[[Fiber[Any, Any]], bool],
-        tasks: list[Callable[[], None]] | None = None,
-    ) -> None:
-        self._should_yield = should_yield
-        self._tasks = tasks
-        self._mixed = MixedScheduler()
-
-    def should_yield(self, fiber: Fiber[Any, Any]) -> bool:
-        return self._should_yield(fiber)
-
-    def make_dispatcher(self) -> SchedulerDispatcher:
-        return self._mixed.make_dispatcher() if self._tasks is None else _Held(self._tasks)
-
-
-def _on(
-    scheduler: EffectScheduler,
-) -> Callable[[fx.Effect[Any, Any, Any]], fx.Effect[Any, Any, Any]]:
-    return fx.provide_service(CurrentScheduler, scheduler)
-
-
-def _drain(tasks: list[Callable[[], None]]) -> None:
-    while tasks:
-        tasks.pop(0)()
-
-
-def _never_yields(_: Fiber[Any, Any]) -> bool:
-    return False
+from ._custom_scheduler import Custom as _Custom
+from ._custom_scheduler import drain as _drain
+from ._custom_scheduler import never_yields as _never_yields
+from ._custom_scheduler import on as _on
 
 
 @testing.effect

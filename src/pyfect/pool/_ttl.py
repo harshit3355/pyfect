@@ -88,16 +88,19 @@ class _CreationExpiry:
 
 
 def usage_ttl(ttl: Duration) -> Effect[Strategy[Any, Any]]:
-    """Every ``ttl``, while the pool is above its target size, invalidate
-    the items idle for at least ``ttl``, longest idle first."""
+    """While the pool is above its target size, invalidate an unreserved
+    item ``ttl`` after its last release, longest idle first. An item that
+    becomes excess or unreserved only after that is retired within ``ttl``
+    (Effect 4.1.4's loop: sleep until the earliest deadline)."""
     ttl_nanos = nanos_or_infinite(ttl)
 
     def make(fiber: Fiber[Any, Any]) -> Effect[Strategy[Any, Any]]:
         clock = _clock(fiber)
 
         def run(pool: _Pool) -> Effect[None]:
-            retire = _Suspend(_UsageExpiry(pool, clock, ttl_nanos).retire)
-            return retire.delay(ttl).forever(disable_yield=True)
+            return _Suspend(_UsageExpiry(pool, clock, ttl_nanos).retire_or_sleep).forever(
+                disable_yield=True
+            )
 
         def on_acquire(_: _Item) -> Effect[None]:
             return _VOID
@@ -120,21 +123,29 @@ class _UsageExpiry:
         self.clock = clock
         self.ttl_nanos = ttl_nanos
 
-    def retire(self) -> Effect[None]:
+    def retire_or_sleep(self) -> Effect[None]:
+        """Invalidate the longest idle expired item while the pool is above
+        its target, else sleep until the earliest idle deadline (or ``ttl``)."""
         pool = self.pool
         state = pool.state
+        ttl_nanos = self.ttl_nanos
+        now = self.clock.now_nanos_unsafe()
+        wake_at = now + ttl_nanos
         oldest: _Item | None = None
         with state.lock:
-            if pool._active_size() <= pool._target_size():
-                return _VOID
-            expired = self.clock.now_nanos_unsafe() - self.ttl_nanos
+            excess = pool._active_size() > pool._target_size()
             for item in state.items:
-                if item.ref_count > 0 or item.idle_since > expired:
+                if item.ref_count > 0 or item in state.invalidated:
                     continue
-                if item in state.invalidated or item.reservations:
-                    continue
-                if oldest is None or item.idle_since < oldest.idle_since:
+                due = item.idle_since + ttl_nanos
+                if due > now:
+                    wake_at = min(wake_at, due)
+                elif (
+                    excess
+                    and not item.reservations
+                    and (oldest is None or item.idle_since < oldest.idle_since)
+                ):
                     oldest = item
         if oldest is None:
-            return _VOID
-        return pool._invalidate_item(oldest).and_then(_Suspend(self.retire))
+            return self.clock.sleep(from_nanos_or_infinite(wake_at - now))
+        return pool._invalidate_item(oldest)

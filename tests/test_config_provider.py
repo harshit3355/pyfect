@@ -22,14 +22,15 @@ def _load(
     return fx.run_blocking(provider.load(path).result())
 
 
-def test_from_env_copies_os_environ_when_made(monkeypatch: pytest.MonkeyPatch):
+def test_from_env_copies_os_environ_at_the_first_lookup(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("PYFECT_TEST_EARLY", "set before")
     provider = cp.from_env()
-    monkeypatch.setenv("PYFECT_TEST_LATE", "set later")
+    monkeypatch.setenv("PYFECT_TEST_LATE", "set before the first lookup")
 
-    assert _load(provider, ["PYFECT_TEST_EARLY"]) == fx.Ok(Value("set before"))
+    assert _load(provider, ["PYFECT_TEST_LATE"]) == fx.Ok(Value("set before the first lookup"))
+    monkeypatch.setenv("PYFECT_TEST_LATER", "set after it")
     assert _load(provider, ["PYFECT", "TEST", "EARLY"]) == fx.Ok(Value("set before"))
-    assert _load(provider, ["PYFECT_TEST_LATE"]) == fx.Ok(None)
+    assert _load(provider, ["PYFECT_TEST_LATER"]) == fx.Ok(None)
 
 
 def test_the_current_provider_defaults_to_the_environment():

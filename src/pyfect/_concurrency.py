@@ -129,6 +129,7 @@ def _race(effects: list[Effect[Any, Any, Any]], *, first_exit_wins: bool) -> Eff
                 if isinstance(ex, Success) or first_exit_wins:
                     decided = True
                     resume(_FromExit(ex))
+                    _interrupt_losers(fibers, parent)
                     return
                 causes.append(ex.cause)
                 if remaining == 0:
@@ -159,6 +160,16 @@ def _race(effects: list[Effect[Any, Any, Any]], *, first_exit_wins: bool) -> Eff
         return _Callback(register)
 
     return _WithFiber(body)
+
+
+def _interrupt_losers(fibers: list[Fiber[Any, Any]], parent: Fiber[Any, Any]) -> None:
+    """As Effect's ``interruptRaceLosers``: interrupt the losers once the race
+    is won, not when the parent resumes, where a pause would let a loser
+    finish and its result (a taken item) be dropped. After ``resume``, so a
+    loser's interrupt cannot decide the race; the parent still awaits them."""
+    annotations = parent._interruptor_annotations()
+    for fiber in fibers:
+        fiber.interrupt_as_unsafe(parent.id, annotations)
 
 
 # The public types for these two live on ``Effect.race`` / ``Effect.race_first``.

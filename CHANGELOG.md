@@ -159,11 +159,48 @@
   deadlocked. Each sync run now has a scheduler of its own and no lock, and `run_fork` and
   `run_callback` called outside any run start on the background scheduler instead of waiting
   for a sync run to drive the runtime's. Found by dogfooding (pyfect-39).
+- `race`, `race_first`, `race_all`, `race_all_first` and the timeouts interrupt the losers as
+  soon as the winner settles the race, not when the racing fiber next runs, as in Effect 4.1.4
+  (#10367). A loser that finished in that gap had its result dropped: `queue.take()` racing
+  another effect could take an item and lose it.
+- `Queue.sliding(0)` hands an offered item to a waiting taker, and drops it when no taker is
+  waiting, as in Effect 4.1.4 (#10312, #10354); it kept the newest item in a slot and never
+  woke the taker. A zero-capacity `bounded` or `dropping` queue no longer accepts an `offer` or
+  `offer_all` with no new taker after an `offer_all` was handed to the only one (Effect's
+  `free` is takers minus items buffered for them), which `Stream.buffer(capacity=0)` relied on.
+- `ScopedCache.get` and `get_option` waiting on a lookup are interrupted when the cache's
+  scope closes before the lookup finishes, and the late entry's scope is closed, as in Effect
+  4.1.4 (#10451). They succeeded with a value whose resources were already released.
+- `ScopedCache` lookups (from `get` and `refresh`) no longer inherit the requester's span: an
+  entry's finalizers kept that span, and the response it ended with, alive until the entry
+  left the cache, as in Effect 4.1.4 (#10317). Spans made inside a lookup are children of the
+  span active when the cache was made.
+- `RcMap` measures idle time, `touch` included, on the clock of the context the map was made
+  in, and runs its idle timers in that context, as in Effect 4.1.4 (#10324). It used the
+  clock and context of the last borrower to release the entry.
+- `Pool.make_with_ttl` with the `"usage"` strategy retires an idle excess item one
+  `time_to_live` after its last release (or within `time_to_live` of it becoming excess or
+  unreserved), as on Effect main (#10543). It checked once per `time_to_live`, so retirement
+  took up to twice as long.
+- `config_provider.from_env()` copies `os.environ` when its first lookup runs, not when the
+  provider is made, and providers derived from it share that copy, as on Effect main (#10567).
+  `from_env(env)` with a mapping is unchanged.
+- A fiber on a custom `EffectScheduler` whose `should_yield` says yes after one or two steps
+  makes progress: a run resumed after an automatic yield takes the step it saved before asking
+  again, as in Effect 4.1.4 (#10463). It yielded again before every step and never finished.
+  The same applies to `MaxOpsBeforeYield` of 1 or 2 when `run_fork` is given a scheduler.
+- A dispatcher whose `schedule_task` raises during an automatic yield makes the fiber die with
+  that defect, as in Effect 4.1.4 (#10463). The exception escaped to whoever was running the
+  fiber, killing the forking parent instead and leaving the child stuck.
 
 ### Performance
 
 - `Queue.take`, `peek`, `await_done` and `take_between` re-enter through methods rather than a
   fresh closure per call.
+- A `Semaphore` queue no longer costs time quadratic in its length: queueing a request,
+  releasing and leaving stop scanning once no queued request can fit in the free permits, as
+  on Effect main (#10595). Queueing 2,000 requests that cannot fit visited 4,000,000 waiters;
+  it now visits 2,001.
 
 ## 0.6.4 (2026-11-14)
 

@@ -36,6 +36,7 @@ from pyfect.cache._expiry import (
     overflow,
     time_to_live_of,
 )
+from pyfect.cause import interrupt as interrupt_cause
 from pyfect.context import Context
 from pyfect.deferred import Deferred
 from pyfect.duration import Duration
@@ -44,9 +45,14 @@ from pyfect.exit import Exit, Failure, Success, as_void_all
 from pyfect.logger._log import log_unhandled
 from pyfect.option import Option, Some
 from pyfect.scope import CloseableScope, Scope
+from pyfect.tracer._refs import ParentSpan
 
 _VOID: Final[Effect[None]] = _Succeed(None)
 _DONE: Final[Exit[None, Never]] = Success(None)
+# A lookup's entry is shared by later requests, and its finalizers keep its
+# context: dropping the requester's span stops them keeping that span (and its
+# exit) alive, as Effect's ``omitParentSpan``.
+_omit_parent_span: Final = Context.omit(ParentSpan)
 
 
 class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R = Never]:
@@ -364,7 +370,7 @@ class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R =
         """Run the lookup up to its first wait (Effect's immediate fork) on
         a root fiber, in the entry's scope, with this cache's services
         overridden by the caller's; then wait for it."""
-        context = self._context.merge(fiber._context).add(Scope, entry.scope)
+        context = self._context.merge(_omit_parent_span(fiber._context)).add(Scope, entry.scope)
         lookup_fiber: Fiber[A, E] = new_root(fiber._run_scheduler, context)
         entry.fiber = lookup_fiber
         clock = clock_of(fiber)
@@ -375,6 +381,12 @@ class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R =
                     self._remove(key, entry)
                 entry.complete(ex)
                 return entry.scope.close(ex)
+            if self._entries is None:
+                # The cache closed during the lookup: its waiters are
+                # interrupted, and the entry, which the close may not have
+                # reached once detached, is closed here.
+                entry.complete(Failure(interrupt_cause()))
+                return entry.scope.close(_DONE)
             try:
                 entry.expires_at = deadline(clock, self._time_to_live(ex, key))
             finally:
@@ -424,7 +436,8 @@ class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R =
         scope = CloseableScope()
         lookup = _Suspend(lambda: self._lookup(key))
         provided: Effect[A, E] = _Locally(
-            lookup, lambda current: self._context.merge(current).add(Scope, scope)
+            lookup,
+            lambda current: self._context.merge(_omit_parent_span(current)).add(Scope, scope),
         )
         clock = clock_of(fiber)
 

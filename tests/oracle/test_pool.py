@@ -256,6 +256,20 @@ class _Numbers:
 
 
 @testing.effect
+def test_usage_ttl_retires_an_idle_item_one_ttl_after_its_last_release():
+    """usage TTL idle timeout: retires an idle item one TTL after its last release"""
+    pool = yield from fx.Pool.make_with_ttl(
+        fx.succeed("resource"), min=0, max=1, time_to_live="1 second", time_to_live_strategy="usage"
+    )
+    yield from testing.adjust("50 millis")
+    yield from pool.use(fx.succeed)
+    yield from testing.adjust("999 millis")
+    assert len(pool.state.items) == 1
+    yield from testing.adjust("1 millis")
+    assert len(pool.state.items) == 0
+
+
+@testing.effect
 def test_usage_ttl_shrinks_to_min_in_idle_order_rather_than_acquisition_order():
     """usage TTL idle timeout: shrinks to min in idle order rather than acquisition order"""
     numbers = _Numbers()
@@ -517,6 +531,20 @@ def test_usage_ttl_preserves_reservations_and_waits_for_capacity():
     assert result == 1
     assert numbers.acquired == 3
     assert pool.state.usage == 0
+
+    lease = yield from scope.fork()
+    held = yield from scope.fork()
+    item = yield from _in(lease, pool.get())
+    yield from _in(held, pool.reserve(item))
+    yield from testing.adjust("50 millis")
+    yield from lease.close(_DONE)
+    yield from testing.adjust("970 millis")
+    assert len(pool.state.items) == 1
+    yield from held.close(_DONE)
+    yield from testing.adjust("29 millis")
+    assert len(pool.state.items) == 1
+    yield from testing.adjust("1 millis")
+    assert len(pool.state.items) == 0
 
 
 @testing.effect

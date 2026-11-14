@@ -114,9 +114,8 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         room for a new one, so ``offer`` always returns ``True`` and the
         newest item is never the one dropped. Nothing reports the drops.
 
-        As in Effect, ``sliding(0)`` keeps only the newest offered item and
-        wakes no parked taker: a taker waiting on it gets that item only when
-        the queue ends. Use a capacity of at least 1."""
+        As in Effect, ``sliding(0)`` hands the newest items to the takers
+        waiting and drops an item offered while none is waiting."""
         return _made(lambda: cls(capacity, "sliding"))
 
     @property
@@ -177,12 +176,14 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
             case st.Open(takers=takers):
                 if self._strategy == "sliding" and self._is_full():
                     # As Effect's ``offerUnsafe``: a full sliding queue swaps
-                    # its oldest item for this one, even at capacity 0, and
-                    # releases no taker.
-                    if self._items:
+                    # its oldest item for this one. At capacity 0 it hands the
+                    # item to a waiting taker, below, or drops it.
+                    if self._capacity is not None and self._capacity > 0:
                         self._items.popleft()
-                    self._items.append(item)
-                    return True
+                        self._items.append(item)
+                        return True
+                    if not takers:
+                        return True
                 if self._free(takers) > 0:
                     # A rendezvous queue hands the item to its waiting takers
                     # at once.
@@ -471,12 +472,16 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
 
     def _free(self, takers: WaitList) -> int:
         """How many items can be added now. A rendezvous queue admits one per
-        parked taker."""
+        parked taker not already given one."""
         if self._capacity is None:
             return 2**62
-        if self._capacity <= 0:
+        if self._capacity > 0:
+            return max(0, self._capacity - len(self._items))
+        if self._strategy == "sliding":
+            # The push trims the buffer back to one item per taker.
             return len(takers)
-        return max(0, self._capacity - len(self._items))
+        # As Effect's ``free``: items already handed over wait for their takers.
+        return max(0, len(takers) - len(self._items))
 
     def _push(self, batch: list[A], takers: WaitList, *, now: bool = False) -> None:
         """Add ``batch``; a sliding queue then drops its oldest items down to
@@ -486,7 +491,8 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         them at once (Effect's rendezvous offer)."""
         self._items.extend(batch)
         if self._strategy == "sliding" and self._capacity is not None:
-            for _ in range(len(self._items) - max(self._capacity, 0)):
+            keep = self._capacity if self._capacity > 0 else len(takers)
+            for _ in range(len(self._items) - keep):
                 self._items.popleft()
         if now:
             takers.notify_ready()

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 import threading
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Never
@@ -115,8 +116,7 @@ class _Take(Effect[Any, Any, Any]):
                 semaphore._taken += n
                 waiter = None
             else:
-                waiter = _Waiter(n)
-                semaphore._waiters[waiter] = None
+                waiter = semaphore._queue(n)
         if waiter is None:
             return run_known(self.then())
         fiber._push(_Turn(semaphore, waiter, self.restore, self.then))
@@ -139,7 +139,7 @@ class Semaphore:
     resumes, in one scheduled task, the queued requests its free permits
     cover; each then checks again."""
 
-    __slots__ = ("_lock", "_permits", "_taken", "_waiters")
+    __slots__ = ("_lock", "_permits", "_smallest_request", "_taken", "_waiters")
 
     def __init__(self, permits: int) -> None:
         self._permits = permits
@@ -149,6 +149,10 @@ class Semaphore:
         self._lock = threading.Lock()
         # A dict as an insertion-ordered set: a request leaves from anywhere.
         self._waiters: dict[_Waiter, None] = {}
+        # A lower bound on the permits of queued requests, so a scan stops
+        # once no request can fit (Effect's ``waiterPermitsLowerBound``).
+        # Leaving keeps it until the queue empties: only a longer scan.
+        self._smallest_request: float = math.inf
 
     @classmethod
     def make(cls, permits: int) -> Effect[Semaphore]:
@@ -272,9 +276,19 @@ class Semaphore:
 
         return _Take(self, n, restore, then)
 
+    def _queue(self, n: int) -> _Waiter:
+        """A request for ``n`` permits, at the end of the queue. Call holding
+        the lock."""
+        waiter = _Waiter(n)
+        self._waiters[waiter] = None
+        self._smallest_request = min(self._smallest_request, n)
+        return waiter
+
     def _first_available(self) -> _Waiter | None:
         """The first queued request that fits in the free permits."""
         free = self._free
+        if free < self._smallest_request:
+            return None
         return next((w for w in self._waiters if w.n <= free), None)
 
     def _park(self, waiter: _Waiter) -> Callable[[Callable[[Effect[None]], None]], None]:
@@ -294,9 +308,11 @@ class Semaphore:
         """Take ``waiter`` out of the queue; the requests behind it may fit
         now. Call holding the lock; resume what it returns after."""
         waiter.resume = None
-        if self._waiters.pop(waiter, _ABSENT) is not _ABSENT:
-            return self._wake_soon()
-        return []
+        if self._waiters.pop(waiter, _ABSENT) is _ABSENT:
+            return []
+        if not self._waiters:
+            self._smallest_request = math.inf
+        return self._wake_soon()
 
     def _covered(self, pick: Callable[[_Waiter], bool]) -> list[_Resume]:
         """Take the resumes of the queued requests the free permits cover that
@@ -305,6 +321,8 @@ class Semaphore:
         remaining = self._free
         found: list[_Resume] = []
         for waiter in self._waiters:
+            if remaining < self._smallest_request:
+                break
             if waiter.n > remaining:
                 continue
             remaining -= waiter.n

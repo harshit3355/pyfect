@@ -11,15 +11,21 @@ Omitted:
 from collections.abc import Callable
 from typing import Any, Never
 
+import pytest
+
 import pyfect as fx
 from pyfect import testing
 from pyfect.errors import AsyncFiberError
 from pyfect.exit import Success
 from pyfect.scheduler import (
+    Cancel,
     EffectScheduler,
     MixedScheduler,
     SchedulerDispatcher,
+    Task,
 )
+
+from ._custom_scheduler import Custom, Held
 
 
 class _Hooked(EffectScheduler):
@@ -229,3 +235,93 @@ def test_inlined_map_steps_count_against_max_ops_before_yield():
         fx.provide_service(fx.MaxOpsBeforeYield, 16)
     )
     assert "".join(order) != "a" * 100 + "b" * 100
+
+
+class _DispatchFailed(Exception):
+    pass
+
+
+def test_automatic_dispatch_failures_terminate_the_fiber_with_a_defect():
+    """automatic dispatch failures terminate the fiber with a defect"""
+    defect = _DispatchFailed("dispatch failed")
+    tasks: list[Callable[[], None]] = []
+    attempts = [0]
+
+    class Failing(Held):
+        def schedule_task(self, task: Callable[[], None], priority: int) -> None:
+            # Bound failures so a runtime that retries dispatch cannot spin forever.
+            attempts[0] += 1
+            if attempts[0] <= 5:
+                raise defect
+            super().schedule_task(task, priority)
+
+    class Scheduler(Custom):
+        def make_dispatcher(self) -> SchedulerDispatcher:
+            return Failing(tasks)
+
+    scheduler = Scheduler(lambda fiber: fiber.current_op_count >= 2, tasks)
+    # Started from a fiber, so it starts at once, as Effect's ``runFork``
+    # does; outside a run ``run_fork`` would dispatch the start itself.
+    fiber = fx.run_blocking(
+        fx.sync(
+            lambda: fx.run_fork(
+                fx.for_each([1, 2, 3], fx.succeed, concurrency="unbounded"), scheduler=scheduler
+            )
+        )
+    )
+
+    ex = fiber.poll_unsafe()
+    assert isinstance(ex, fx.Failure)
+    assert ex.cause.squash() is defect
+
+
+def _drive(tasks: list[Callable[[], None]]) -> None:
+    # Bound dispatches so a yielding livelock fails instead of hanging the test.
+    for _ in range(1000):
+        if not tasks:
+            return
+        tasks.pop(0)()
+
+
+@pytest.mark.parametrize("budget", [1, 2, 3])
+def test_concurrent_for_each_completes_with_max_ops_before_yield(budget: int):
+    """concurrent forEach completes with MaxOpsBeforeYield ${budget}"""
+    tasks: list[Callable[[], None]] = []
+
+    def hold(task: Task) -> Cancel:
+        cancelled = [False]
+
+        def run() -> None:
+            if not cancelled[0]:
+                task()
+
+        def cancel() -> None:
+            cancelled[0] = True
+
+        tasks.append(run)
+        return cancel
+
+    fiber = fx.run_fork(
+        fx.for_each([1, 2, 3], fx.succeed, concurrency="unbounded").pipe(
+            fx.provide_service(fx.MaxOpsBeforeYield, budget)
+        ),
+        scheduler=MixedScheduler("async", hold),
+    )
+
+    _drive(tasks)
+    assert fiber.poll_unsafe() == fx.Success([1, 2, 3])
+
+
+@pytest.mark.parametrize("threshold", [1, 2, 3])
+def test_concurrent_for_each_completes_when_a_custom_should_yield_says_yes_early(threshold: int):
+    """Effect 4.1.4's fix for tiny budgets (#10463) also covers a custom
+    ``shouldYield``: a slice resumed after an automatic yield runs its saved
+    step before asking again, so ``current_op_count >= 1`` makes progress."""
+    tasks: list[Callable[[], None]] = []
+    scheduler = Custom(lambda fiber: fiber.current_op_count >= threshold, tasks)
+    fiber = fx.run_fork(
+        fx.for_each([1, 2, 3], fx.succeed, concurrency="unbounded"), scheduler=scheduler
+    )
+
+    _drive(tasks)
+    assert fiber.poll_unsafe() == fx.Success([1, 2, 3])

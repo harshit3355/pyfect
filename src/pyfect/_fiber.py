@@ -319,6 +319,7 @@ class Fiber(Generic[A_co, E_co]):
         "_ops_on_resume",
         "_parent",
         "_phase",
+        "_resumed_op",
         "_run_scheduler",
         "_runtime_metrics",
         "_scheduler",
@@ -359,6 +360,7 @@ class Fiber(Generic[A_co, E_co]):
         self._waiting: _Wait | None = None
         self._yielded: _Yielded | None = None
         self._ops_on_resume = 0
+        self._resumed_op = 0  # pragma: no mutate, set at every run's start
         self._decided_on_resume = False  # pragma: no mutate, taken at every run's start
         # An interrupt delivered to the running fiber that its loop has not met
         # yet (Effect's ``_deferredInterrupt``): it replaces whatever comes
@@ -721,6 +723,9 @@ class Fiber(Generic[A_co, E_co]):
         # pauses once the budget is spent (Effect's ``shouldYield``); an
         # exit handed straight to the next frame is no op, as in Effect.
         ops, self._ops_on_resume = self._ops_on_resume, 0
+        # An ``EffectScheduler`` is asked before every op, except the first
+        # op of a run resumed after a pause (Effect 4.1.4, #10463).
+        self._resumed_op = ops + 1 if ops else 0
         # A claimed result the fiber paused before reaches its continuations
         # before an interrupt that landed in the pause: in Effect they all
         # run within the claiming op, so the interrupt waits for the next op.
@@ -815,6 +820,8 @@ class Fiber(Generic[A_co, E_co]):
         the pause."""
         check = self._should_yield
         if check is not None:
+            if ops == self._resumed_op:
+                return False
             self.current_op_count = ops
             try:
                 if not check.should_yield(self):
@@ -836,7 +843,16 @@ class Fiber(Generic[A_co, E_co]):
             decided = type(cur) is Decided
             cur = Success(cur.value)
             resumed += 1
-        self._queue_yielded(_Yielded(cur, ops=resumed, decided=decided), 0)
+        yielded = _Yielded(cur, ops=resumed, decided=decided)
+        try:
+            self._queue_yielded(yielded, 0)
+        except BaseException as exc:
+            # A dispatcher that raises is a defect the fiber goes on with,
+            # right after this run (as in Effect).
+            self._yielded = None
+            if self._batch_first is yielded:
+                self._batch_first = None
+            self._drive(self._raised(exc))
         return True
 
     def _queue_yielded(self, yielded: _Yielded, priority: int) -> None:

@@ -32,8 +32,11 @@ import pytest
 
 import pyfect as fx
 from pyfect import clock, exit, testing
+from pyfect._fiber import Fiber
 from pyfect.cause import Die
 from pyfect.duration import Duration, infinity, millis, seconds, to_millis, zero
+
+from ._custom_scheduler import Custom, drain, on
 
 _HOUR = millis(3_600_000)
 _MINUTE = millis(60_000)
@@ -226,6 +229,50 @@ def test_cache_resources_are_released_and_future_gets_interrupt_when_scope_close
     assert cache.is_closed
     ex = yield from cache.get("test").exit()
     assert isinstance(ex, fx.Failure) and ex.cause.has_interrupts
+
+
+@testing.effect
+def test_pending_gets_interrupt_when_scope_closes_during_lookup():
+    """pending gets interrupt when scope closes during lookup"""
+    owner = yield from fx.scope.make()
+    started = fx.Deferred[None]()
+    proceed = fx.Deferred[None]()
+
+    def lookup(_key: str) -> fx.Effect[int]:
+        return started.succeed(None).and_then(proceed.wait()).as_(1)
+
+    cache = yield from fx.scope.provide(owner)(fx.ScopedCache.make(lookup, capacity=10))
+
+    get = yield from cache.get("key").fork(start_immediately=True)
+    get_option = yield from cache.get_option("key").fork(start_immediately=True)
+    yield from started.wait()
+    yield from owner.close(_DONE)
+    yield from proceed.succeed(None)
+
+    fibers: list[fx.Fiber[Any, Any]] = [get, get_option]
+    for fiber in fibers:
+        ex = yield from fiber.await_exit()
+        assert isinstance(ex, fx.Failure) and ex.cause.has_interrupts
+
+
+@testing.effect
+def test_does_not_retain_request_responses_through_lookup_finalizers():
+    """does not retain request responses through lookup finalizers"""
+
+    class _Body:
+        pass
+
+    def lookup(key: str) -> fx.Effect[str, Never, fx.Scope]:
+        return fx.acquire_release(fx.succeed(key), lambda _key, _ex: fx.void)
+
+    def body(_: str) -> _Body:
+        return _Body()
+
+    cache = yield from fx.ScopedCache.make(lookup, capacity=16)
+    response = yield from cache.get("key").map(body).with_span("request").map(weakref.ref)
+    gc.collect()
+    assert (yield from cache.has("key"))
+    assert response() is None
 
 
 # --- makeWith -------------------------------------------------------------------
@@ -1868,6 +1915,61 @@ def test_complex_object_keys_work_correctly():
 
 
 # --- concurrency ----------------------------------------------------------------
+
+
+@testing.effect
+def test_releases_an_abandoned_lookup_that_completes_after_owner_closure():
+    """releases an abandoned lookup that completes after owner closure"""
+    owner = yield from fx.scope.make()
+    started = fx.Deferred[Fiber[Any, Any]]()
+    proceed = fx.Deferred[None]()
+    scheduler = yield from fx.CurrentScheduler()
+    tasks: list[Callable[[], None]] = []
+    stepping = [False]
+    released = [0]
+    getter: list[Fiber[Any, Any]] = []
+
+    def release(_a: None, _ex: fx.Exit[Any, Any]) -> fx.Effect[None]:
+        return fx.sync(lambda: released.__setitem__(0, released[0] + 1))
+
+    @fx.gen
+    def lookup_body():
+        yield from fx.acquire_release(fx.void, release)
+        me = fx.Fiber.get_current()
+        assert me is not None
+        yield from started.succeed(me)
+        yield from proceed.wait()
+
+    def lookup(_key: str) -> fx.Effect[None, Never, fx.Scope]:
+        return lookup_body.pipe(fx.provide_service(fx.CurrentScheduler, scheduler))
+
+    cache = yield from fx.scope.provide(owner)(fx.ScopedCache.make(lookup, capacity=1))
+
+    def should_yield(fiber: Fiber[Any, Any]) -> bool:
+        return stepping[0] and fiber in getter and fiber.current_op_count > 3
+
+    get = (
+        yield from cache.get("key")
+        .pipe(on(Custom(should_yield, tasks)))
+        .fork(start_immediately=True)
+    )
+    getter.append(get)
+    lookup_fiber = yield from started.wait()
+    stepping[0] = True
+    get.interrupt_as_unsafe(None)
+    # Stop cancellation after the entry is detached, before it interrupts the lookup.
+    while (yield from cache.size()) != 0:
+        assert tasks
+        tasks.pop(0)()
+        yield from fx.yield_now()  # a task's run waits for this fiber's to end
+    yield from owner.close(_DONE)
+    yield from proceed.succeed(None)
+    assert isinstance((yield from lookup_fiber.await_exit()), fx.Success)
+    stepping[0] = False
+    while get.poll_unsafe() is None:
+        drain(tasks)
+        yield from fx.yield_now()
+    assert released == [1]
 
 
 @testing.effect

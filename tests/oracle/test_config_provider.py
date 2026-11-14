@@ -7,6 +7,8 @@ they subclass ``NoopFileSystem``.
 
 from collections.abc import Callable
 
+import pytest
+
 import pyfect as fx
 from pyfect import config_provider as cp
 from pyfect import file_system, layer, testing
@@ -258,6 +260,46 @@ def test_from_env_record_preserves_empty_strings_when_requested():
 
 
 # --- from_env ----------------------------------------------------------------------
+
+
+def test_snapshots_implicit_env_when_the_first_lookup_runs(monkeypatch: pytest.MonkeyPatch):
+    """snapshots implicit env when the first lookup runs and shares it with derived providers"""
+    prefix = "EFFECTCONFIGPROVIDERSNAPSHOT"
+    key = f"{prefix}_VALUE"
+    path = (prefix, "VALUE")
+    derived_path = (prefix.lower(), "value")
+    monkeypatch.delenv(key, raising=False)
+    provider = cp.from_env(preserve_empty_strings=True)
+    derived = provider.constant_case()
+    lookup = derived.load(derived_path)
+    independent = cp.from_env()
+
+    monkeypatch.setenv(key, "first")
+    assert fx.run_blocking(lookup.result()) == fx.Ok(Value("first"))
+
+    monkeypatch.setenv(key, "second")
+    assert fx.run_blocking(lookup.result()) == fx.Ok(Value("first"))
+    assert_success(provider, path, Value("first"))
+    assert_success(provider, (prefix,), Record(keys("VALUE")))
+    assert_success(independent, path, Value("second"))
+
+    monkeypatch.setenv(key, "third")
+    assert_success(independent.constant_case(), derived_path, Value("second"))
+
+
+def test_captures_explicit_env_names_at_construction_but_reads_values_live():
+    """captures explicit env names at construction but reads values live"""
+    env = {"A": "initial"}
+    provider = cp.from_env(env=env)
+    env["A"] = "before lookup"
+    env["B"] = "added"
+
+    assert_success(provider, [], Record(keys("A")))
+    assert_success(provider, ["A"], Value("before lookup"))
+
+    env["A"] = "after lookup"
+    assert_success(provider, ["A"], Value("after lookup"))
+    assert_success(provider, [], Record(keys("A")))
 
 
 def test_env_without_an_underscore():

@@ -135,7 +135,8 @@ def test_a_queue_at_or_below_zero_capacity(capacity: int) -> None:
             (yield from q.size()),
         )
 
-    assert _run(sliding) == (True, True, 1, [], 0)
+    # Effect 4.1.4 (#10312, #10354): with no taker waiting, each offer is dropped.
+    assert _run(sliding) == (True, True, 0, [], 0)
 
 
 def test_a_queue_below_zero_capacity_is_a_rendezvous() -> None:
