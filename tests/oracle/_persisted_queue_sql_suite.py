@@ -177,6 +177,52 @@ class PersistedQueueSqlSuite:
 
         self.run(body)
 
+    # --- PersistedQueue SQL offers ------------------------------------------------------
+
+    def test_until_executed_offers_of_the_same_new_id_from_concurrent_transactions_succeed(
+        self,
+    ) -> None:
+        """PersistedQueue SQL offers / untilExecuted offers of the same new id from concurrent
+        transactions succeed"""
+
+        def body():
+            sql = yield from SqlClient()
+            queue = yield from make_queue("effect_queue_until_executed_transactions")
+
+            # each round's id is new, so both transactions find no row for it
+            for round_ in range(10):
+                yield from fx.for_each(
+                    [1, 2],
+                    lambda n, round_=round_: sql.with_transaction(
+                        queue.offer(f"offer-{n}", id=f"job-{round_}", deduplicate="untilExecuted")
+                    ),
+                    concurrency="unbounded",
+                    discard=True,
+                )
+
+        self.run(body)
+
+    def test_an_until_executed_re_offer_is_atomic_with_concurrent_default_offers(self) -> None:
+        """PersistedQueue SQL offers / an untilExecuted re-offer is atomic with concurrent
+        default offers"""
+
+        def body():
+            queue = yield from make_queue("effect_queue_until_executed_mixed")
+            id = "mixed-id"
+            yield from queue.offer("first", id=id)
+            yield from queue.take(_succeed)
+
+            # default offers either see the completed element or the re-offer,
+            # so none of them is stored
+            reoffer = yield from queue.offer("reoffer", id=id, deduplicate="untilExecuted").fork()
+            while reoffer.poll_unsafe() is None:
+                yield from queue.offer("retry", id=id)
+            yield from reoffer.join()
+
+            assert (yield from queue.take(_succeed)) == "reoffer"
+
+        self.run(body)
+
     # --- PersistedQueue SQL claims ------------------------------------------------------
 
     @pytest.mark.parametrize(

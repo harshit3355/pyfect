@@ -17,6 +17,7 @@ from pyfect.layer import Layer
 from pyfect.layer import effect as layer_effect
 from pyfect.persistence.persisted_queue._error import PersistedQueueError, dead_letter_from_cause
 from pyfect.persistence.persisted_queue._store import (
+    Deduplicate,
     PersistedQueueStore,
     PersistedQueueStoreService,
     TakenElement,
@@ -69,12 +70,17 @@ class _MemoryStore:
         element: object,
         is_custom_id: bool,
         delay: Duration | None = None,
+        deduplicate: Deduplicate = "untilRemoved",
     ) -> Effect[None, PersistedQueueError]:
         def run() -> None:
             now = now_millis(self._clock)
             queue = self._queue(name)
-            if id in queue.entries:
-                return
+            existing = queue.entries.get(id)
+            if existing is not None:
+                if deduplicate != "untilExecuted" or existing.state not in {"completed", "failed"}:
+                    return
+                # delete first so the new entry is ordered after existing ones
+                del queue.entries[id]
             visible_at = now if delay is None else now + to_millis(delay)
             entry = _Entry(id, element, 0, "pending", visible_at, now)
             queue.entries[id] = entry

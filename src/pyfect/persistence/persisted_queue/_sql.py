@@ -29,13 +29,16 @@ from pyfect.persistence.persisted_queue._sql_statements import (
     Dialect,
     Element,
     OfferStatement,
+    ReplaceExecuted,
     Settlements,
     cleanup_statement,
     offer_statement,
     poll_statement,
+    replace_executed_statement,
     store_text,
 )
 from pyfect.persistence.persisted_queue._store import (
+    Deduplicate,
     PersistedQueueStore,
     PersistedQueueStoreService,
     QueueStates,
@@ -154,12 +157,21 @@ def _lookup(  # noqa: PLR0917
 
 
 class _SqlStore:
-    __slots__ = ("_cleanup_batch", "_dialect", "_mailboxes", "_offer", "_settlements", "_states")
+    __slots__ = (
+        "_cleanup_batch",
+        "_dialect",
+        "_mailboxes",
+        "_offer",
+        "_replace_executed",
+        "_settlements",
+        "_states",
+    )
 
     def __init__(  # noqa: PLR0917
         self,
         dialect: Dialect,
         offer: OfferStatement,
+        replace_executed: ReplaceExecuted,
         cleanup_batch: CleanupBatch,
         settlements: Settlements,
         states: QueueStates,
@@ -167,6 +179,7 @@ class _SqlStore:
     ) -> None:
         self._dialect = dialect
         self._offer = offer
+        self._replace_executed = replace_executed
         self._cleanup_batch = cleanup_batch
         self._settlements = settlements
         self._states = states
@@ -180,12 +193,18 @@ class _SqlStore:
         element: object,
         is_custom_id: bool,
         delay: Duration | None = None,
+        deduplicate: Deduplicate = "untilRemoved",
     ) -> Effect[None, PersistedQueueError]:
         dialect = self._dialect
 
         def send() -> Effect[object, SqlError]:
             visible_at = dialect.now if delay is None else dialect.visible_after(delay)
-            return self._offer(store_text(id), name, stringify(element), visible_at)
+            stored_id = store_text(id)
+            insert = self._offer(stored_id, name, stringify(element), visible_at)
+            # generated ids are never offered twice
+            if deduplicate == "untilExecuted" and is_custom_id:
+                return self._replace_executed(stored_id, name, insert)
+            return insert
 
         def nudge() -> None:
             state = self._states.peek(name)
@@ -317,6 +336,7 @@ def make_store_sql(
         store = _SqlStore(
             dialect,
             offer_statement(dialect, table_name),
+            replace_executed_statement(dialect, table_name),
             cleanup_statement(dialect, table_name),
             settlements,
             states,

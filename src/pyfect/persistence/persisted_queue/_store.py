@@ -3,9 +3,10 @@ and what every store shares."""
 
 from __future__ import annotations
 
+import inspect
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Final, Protocol, Self
+from typing import Any, Final, Literal, Protocol, Self, cast
 
 from pyfect._core import Effect
 from pyfect._service_copy import replaced
@@ -39,6 +40,12 @@ class TakeOptions:
     retry_delay: Callable[[int], Effect[Duration]]
 
 
+type Deduplicate = Literal["untilRemoved", "untilExecuted"]
+"""How long an offered custom id stays reserved: ``"untilRemoved"`` until
+cleanup removes its completed or failed element (an idempotency key);
+``"untilExecuted"`` until its element completes or fails its final attempt."""
+
+
 class Offer(Protocol):
     """Store ``element`` under ``id`` unless the queue has that id. A
     ``delay`` is finite and positive: the element is not taken before it
@@ -55,6 +62,35 @@ class Offer(Protocol):
     ) -> Effect[None, PersistedQueueError]: ...
 
 
+class DeduplicatingOffer(Protocol):
+    """An ``Offer`` that also takes ``deduplicate``: an offer whose id is
+    stored is ignored, unless ``deduplicate`` is ``"untilExecuted"`` and that
+    element has completed or failed its final attempt. The offer is then
+    stored as a new element after earlier offers, atomically with respect to
+    concurrent offers of the id."""
+
+    def __call__(
+        self,
+        *,
+        name: str,
+        id: str,
+        element: object,
+        is_custom_id: bool,
+        delay: Duration | None = None,
+        deduplicate: Deduplicate = "untilRemoved",
+    ) -> Effect[None, PersistedQueueError]: ...
+
+
+def _takes_deduplicate(offer: Callable[..., object]) -> bool:
+    try:
+        parameters = inspect.signature(offer).parameters.values()
+    except (TypeError, ValueError):
+        return False
+    return any(
+        p.name == "deduplicate" or p.kind is inspect.Parameter.VAR_KEYWORD for p in parameters
+    )
+
+
 class Cleanup(Protocol):
     """Remove completed elements older than ``time_to_live`` with their
     de-duplication records; failed ones only with ``failed_time_to_live``."""
@@ -68,9 +104,10 @@ class PersistedQueueStoreService:
     """The elements of every queue: ``make_store_memory``,
     ``make_store_sql`` and ``make_store_redis`` build one, and
     ``PersistedQueueStoreService(offer=..., take=..., cleanup=...)`` makes
-    one of three functions (a test double, say)."""
+    one of three functions (a test double, say). An ``offer`` that takes no
+    ``deduplicate`` treats every offer as ``"untilRemoved"``."""
 
-    __slots__ = ("_cleanup", "_offer", "_take")
+    __slots__ = ("_cleanup", "_offer", "_offer_deduplicates", "_take")
 
     def __replace__(self, **changes: Any) -> Self:
         """A copy with ``changes`` to the constructor's arguments (``copy.replace``)."""
@@ -79,11 +116,14 @@ class PersistedQueueStoreService:
     def __init__(
         self,
         *,
-        offer: Offer,
+        offer: Offer | DeduplicatingOffer,
         take: Callable[[TakeOptions], Effect[TakenElement, PersistedQueueError, Scope]],
         cleanup: Cleanup,
     ) -> None:
         self._offer = offer
+        # Effect's stores ignore an option they don't know; an ``offer``
+        # written before ``deduplicate`` existed is called without it.
+        self._offer_deduplicates = _takes_deduplicate(offer)
         self._take = take
         self._cleanup = cleanup
 
@@ -95,12 +135,25 @@ class PersistedQueueStoreService:
         element: object,
         is_custom_id: bool,
         delay: Duration | None = None,
+        deduplicate: Deduplicate = "untilRemoved",
     ) -> Effect[None, PersistedQueueError]:
         """Stores ``element`` (a JSON value) under ``id`` in queue ``name``,
         unless the queue already has that id (``is_custom_id`` says the
-        caller chose it, so a store must check). A ``delay`` is finite and
-        positive: the element is not taken before it elapses. Fails with
+        caller chose it, so a store must check) and, with ``deduplicate``
+        ``"untilExecuted"``, that id's element has not yet completed or
+        failed its final attempt. A ``delay`` is finite and positive: the
+        element is not taken before it elapses. Fails with
         ``PersistedQueueError`` when the backend does."""
+        if self._offer_deduplicates and deduplicate != "untilRemoved":
+            offer = cast("DeduplicatingOffer", self._offer)
+            return offer(
+                name=name,
+                id=id,
+                element=element,
+                is_custom_id=is_custom_id,
+                delay=delay,
+                deduplicate=deduplicate,
+            )
         return self._offer(
             name=name, id=id, element=element, is_custom_id=is_custom_id, delay=delay
         )

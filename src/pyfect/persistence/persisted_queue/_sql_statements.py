@@ -116,6 +116,41 @@ class Dialect:
 type OfferStatement = Callable[[str, str, str, Fragment], Effect[object, SqlError]]
 type PollStatement = Callable[[str, int, int, Fragment], Effect[Sequence[Row], SqlError]]
 type CleanupBatch = Callable[[str, Duration], Effect[int, SqlError]]
+type ReplaceExecuted = Callable[[str, str, Effect[object, SqlError]], Effect[object, SqlError]]
+
+
+def replace_executed_statement(dialect: Dialect, table_name: str) -> ReplaceExecuted:
+    """Run ``insert`` for an ``"untilExecuted"`` offer of id ``id`` in queue
+    ``name``, first deleting that id's completed or failed row so the
+    re-offer is stored as a new row with a fresh sequence. The plain read
+    keeps new ids lock-free, since under MySQL's repeatable read deleting an
+    absent key takes gap locks that deadlock concurrent inserts. The delete
+    re-checks the state and shares a transaction with the insert, so
+    concurrent offers of the id wait on the deleted row and then see the
+    re-offer."""
+    sql = dialect.sql
+    table = sql.identifier(table_name)
+
+    def replace(id: str, name: str, insert: Effect[object, SqlError]) -> Effect[object, SqlError]:
+        def then(rows: Sequence[Row]) -> Effect[object, SqlError]:
+            if not rows:
+                return insert
+            return sql.with_transaction(
+                sql(
+                    "DELETE FROM {} WHERE sequence = {} AND state IN ('completed', 'failed')",
+                    table,
+                    rows[0]["sequence"],
+                ).and_then(insert)
+            )
+
+        return sql(
+            "SELECT sequence FROM {} WHERE {} AND {} AND state IN ('completed', 'failed')",
+            table,
+            key_equals(sql, "id", id),
+            key_equals(sql, "queue_name", name),
+        ).flat_map(then)
+
+    return replace
 
 
 def offer_statement(dialect: Dialect, table_name: str) -> OfferStatement:

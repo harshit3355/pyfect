@@ -21,6 +21,15 @@
 - `pyfect.testing.test_clock_with(f)`, Effect's `TestClock.testClockWith`.
 - `for_each(..., discard=True)`, Effect's `forEach` `discard` option: runs every item and
   keeps no results.
+- `PersistedQueue.offer(..., deduplicate="untilExecuted")`: a custom id stays reserved only
+  until its element completes or fails its final attempt; a later offer enqueues it again,
+  behind queued work and with its own delay. The default `"untilRemoved"` keeps the id until
+  cleanup, as before. On the memory, SQL (every dialect) and Redis stores, as in Effect 4.1.4
+  (#10316). A custom store's `offer` gets the option when it takes a `deduplicate` keyword
+  (`DeduplicatingOffer`); one written before ignores it, so its offers stay `"untilRemoved"`.
+  Redis now parks in-flight and failed ids under finite scores, so cleanup of an old failure
+  can't release a newer element of the same id; `+inf` entries left by earlier versions still
+  read as in flight.
 
 ### Fixed
 

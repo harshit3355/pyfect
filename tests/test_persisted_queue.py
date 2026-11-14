@@ -14,7 +14,7 @@ from oracle import _persisted_queue_suite as suite
 from oracle import _redis
 
 import pyfect as fx
-from pyfect import schedule
+from pyfect import schedule, testing
 from pyfect import schema as S
 from pyfect.duration import millis
 from pyfect.latch import Latch
@@ -225,3 +225,40 @@ def test_an_element_that_fails_to_decode_is_failed_at_once(
 
 def _succeed[A](value: A, _meta: pq.Metadata) -> fx.Effect[A]:
     return fx.succeed(value)
+
+
+def test_a_store_without_deduplicate_treats_until_executed_as_until_removed() -> None:
+    """A custom store's ``offer`` written before ``deduplicate`` existed is
+    called without it, as Effect's stores ignore an option they don't know."""
+    calls: list[str] = []
+
+    def body():
+        memory = yield from pq.PersistedQueueStore()
+
+        def offer(
+            *, name: str, id: str, element: object, is_custom_id: bool, delay: Any = None
+        ) -> fx.Effect[None, pq.PersistedQueueError]:
+            calls.append(id)
+            return memory.offer(name=name, id=id, element=element, is_custom_id=is_custom_id)
+
+        store = pq.PersistedQueueStoreService(offer=offer, take=memory.take, cleanup=memory.cleanup)
+
+        def run():
+            queue = yield from pq.make(name="old-store", schema=S.Int)
+            yield from queue.offer(1, id="job", deduplicate="untilExecuted")
+            assert (yield from queue.take(lambda value, _: fx.succeed(value))) == 1
+            # the id stays reserved, as with "untilRemoved"
+            yield from queue.offer(2, id="job", deduplicate="untilExecuted")
+            waiting = yield from queue.take(lambda value, _: fx.succeed(value)).fork()
+            yield from testing.adjust("1 second")
+            assert waiting.poll_unsafe() is None
+            yield from waiting.interrupt()
+
+        yield from fx.gen(run).pipe(
+            fx.provide(
+                pq.layer.pipe(fx.layer.provide(fx.layer.succeed(pq.PersistedQueueStore, store)))
+            )
+        )
+        assert calls == ["job", "job"]
+
+    testing.run_test(fx.scoped(fx.gen(body)).pipe(fx.provide(pq.layer_store_memory)).or_die())
