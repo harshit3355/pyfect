@@ -2,6 +2,16 @@
 
 ## 0.6.4 (unreleased)
 
+### Added
+
+- `Stream.split_lines_within(max_length)`, as `channel.split_lines_within`: a line longer
+  than `max_length` characters fails the stream with `LineTooLongError` as soon as that much
+  of it has arrived. `split_lines` holds a line until its break arrives, so a peer that never
+  sends one grows memory without bound (32 MiB without a newline peaked at 64 MiB).
+- `max_line_length` on `ndjson.decode_string`, `duplex_string`, `decode_schema_string` and
+  `duplex_schema_string`, failing with `"LineTooLarge"`, as `max_line_bytes` does for the byte
+  decoders. Both stay unbounded by default, as in Effect.
+
 ### Fixed
 
 - A `timeout` (or any interrupt) of a fiber waiting for something a run on another thread
@@ -35,6 +45,73 @@
   `invalidate` or idle expiry (`RcRef`: 20 times in 25 s on 3.14t in the gap probe). In Effect
   a release that does not suspend ends before any other fiber runs; such a get now waits for
   it, while a get from the releasing run still acquires afresh, as in Effect.
+- ClickHouse map settings (`additional_table_filters` and the other `Map(String, String)`
+  settings given to `with_clickhouse_settings` or `insert_query`) escape quotes and
+  backslashes in their keys and values. They were written as `{'k':'v'}` as they were, as
+  `@clickhouse/client` writes them, so a filter holding a string literal was refused by the
+  server, and a key or value with a quote ended its literal early, letting the rest be read as
+  more of the map. Every ClickHouse literal the driver writes now goes through one quoting
+  function, and `tests/test_clickhouse_quoting.py` keeps hand-written quoting out of the
+  driver; the round trip runs on a real server.
+- A MySQL connection that failed part way through reading a result is closed, so the pool
+  replaces it. A failure other than the server's own error (a lost connection, a value that
+  could not be read) left the rest of the result unread on a connection the pool kept, so the
+  next statement on it failed with "Packet sequence number wrong", or read the old result.
+  `tests/oracle/test_mysql_failed_reads.py` fails every packet of a result in turn, on the
+  prepared, text and stream paths, and runs the next statement on the pool after each.
+- MySQL text that is not valid UTF-8 reads as U+FFFD for each bad sequence, as mysql2 reads
+  it. Bytes bound on the prepared path and selected back (`SELECT ? AS b`) come back as text
+  in the connection's character set, and asyncmy's strict decoding failed the statement (and,
+  before the fix above, broke the connection).
+- The DevTools client sends a batch holding a value with no JSON form of its own. A span
+  attribute that was an exception without `to_json` (or any other such object) stopped the
+  whole batch from being sent; each attribute value is now written as Effect's
+  `JSON.stringify` writes it, an object as its instance fields (`{}` for a plain exception),
+  and a value it would throw for (one that holds itself) as its `str`. An OTLP list attribute
+  that holds itself is written as its text, where it overflowed the stack and lost its batch.
+  `tests/test_exporter_hostile_values.py` runs every exporter over such values.
+- An `HttpApiGroup` subclass without an identifier (`class Sub(Admin)`) serves the endpoints
+  declared in its body, behind the middleware its group declares, as pyright types them; they
+  were left out, so the client methods pyright gave them had no route. A group without an
+  identifier that derives from two groups (`class Mixed(Public, Admin)`, which pyright
+  refuses) is a `TypeError` where it served only the first group's endpoints. The declared
+  middleware is read along the class's MRO instead of an inherited `__orig_bases__`.
+  `tests/test_http_api_group_middleware.py` checks that every group class serves each endpoint
+  attribute it has.
+- The MCP stdio server stops at a line past 16 MiB, as Effect's NDJSON-RPC framing does; it
+  held a line without a break however long it grew.
+- The docstrings of `socket.ws.web_socket_constructor`, `layer_web_socket_constructor` and
+  `socket.server` give the default message size limit, 100 MiB; they said 16 MiB.
+- A MySQL connection is checked at connect for the two asyncmy internals the driver uses
+  (`_encoding` and `_next_seq_id`), and an asyncmy without them fails there with
+  `UnsupportedAsyncmyError` naming its version, where it would have failed later or read
+  results wrongly; `tests/test_mysql_asyncmy_internals.py` pins both against the installed
+  asyncmy. A statement failing after a multiple of 256 packets of its result counted as never
+  sent (asyncmy's sequence id wraps to 0, the value the driver marked unsent), so its
+  connection went back to the pool out of step; the driver marks an unsent command with -1.
+
+### Performance
+
+- The RPC NDJSON parser, the ClickHouse row splitter, the CSV parser, the `schema_binary`
+  frame parser and the multipart header parser take time linear in their input however a
+  peer chunks it. Each searched its whole buffered line again, or copied it, for every chunk,
+  so one long line sent a few bytes at a time cost quadratic CPU (a 1 MiB RPC line in 16-byte
+  frames took 1.5 s, a 16 MiB one minutes), as Effect's RPC parser still does. `split_lines`
+  and `split_lines_within` search a chunk of many lines once, where they searched it again
+  for each line (4 Mi line breaks in one chunk took 12 s). `tests/test_splitter_linear_time.py`
+  feeds every line and frame splitter a long line in small chunks and many lines in one
+  chunk, and fails one whose time grows faster than its input.
+
+### Docs
+
+- The streams guide lists every framing decoder's limit and default under "Input from a
+  peer", and says that input from a peer you do not control needs one. The HTTP server's
+  security defaults name the 16 KiB request head limit, the chunk and trailer limits, the
+  100 MiB WebSocket message limit and the multipart `MaxFieldSize`, `MaxFileSize` and
+  `MaxParts`.
+- The HttpApi guide gives `StreamNdjson`'s 1 MiB `max_element_bytes` line limit and its unset
+  `max_bytes`, and the RPC guide the 16 MiB `max_buffer_size` of NDJSON framing and how to
+  change it.
 
 ## 0.6.3 (2026-11-13)
 

@@ -5,6 +5,7 @@ non-empty arrays) and passes upstream's failure and end through."""
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Never
 
 from pyfect._core import Effect, _FailCause, _Succeed, _Suspend, _Sync
@@ -91,25 +92,33 @@ class _LineSplitter:
                 if text.startswith("\n"):
                     start = 1
                 self.mid_crlf = False
-            while True:
-                cr = text.find("\r", start)
-                lf = text.find("\n", start)
-                if cr == -1 and lf == -1:
-                    break
-                if cr == -1 or (lf != -1 and lf < cr):
-                    lines.append(self._line(text[start:lf]))
-                    start = lf + 1
-                else:
-                    lines.append(self._line(text[start:cr]))
-                    if cr + 1 == len(text):
-                        self.mid_crlf = True
-                        start = len(text)
-                    else:
-                        start = cr + (2 if lf == cr + 1 else 1)
+            start = self._split_chunk(text, start, lines)
             if start < len(text):
                 self._pending.append(text[start:])
                 self.pending_length += len(text) - start
         return tuple(lines)
+
+    def _split_chunk(self, text: str, start: int, lines: list[str]) -> int:
+        """Appends the lines of ``text`` from ``start``; returns where the unfinished rest
+        starts. The next CR and LF are each searched for again only once passed, so a chunk
+        of many lines is searched once, not once per line for the break it lacks."""
+        cr = text.find("\r", start)
+        lf = text.find("\n", start)
+        while cr != -1 or lf != -1:
+            if cr == -1 or (lf != -1 and lf < cr):
+                lines.append(self._line(text[start:lf]))
+                start = lf + 1
+            else:
+                lines.append(self._line(text[start:cr]))
+                if cr + 1 == len(text):
+                    self.mid_crlf = True
+                    return len(text)
+                start = cr + (2 if lf == cr + 1 else 1)
+            if 0 <= cr < start:
+                cr = text.find("\r", start)
+            if 0 <= lf < start:
+                lf = text.find("\n", start)
+        return start
 
     def flush(self) -> str:
         last = self._line("")
@@ -125,7 +134,11 @@ class LineTooLongError(Exception):
         self.max_length = max_length
 
 
-def _splitter(max_length: int | None) -> Channel[Any, Any, Any, Any, Any, Any, Any]:
+def splitter(
+    max_length: int | None, too_long: Callable[[int], object] = LineTooLongError
+) -> Channel[Any, Any, Any, Any, Any, Any, Any]:
+    """The line splitter, failing with ``too_long(max_length)`` past ``max_length``."""
+
     def transform(upstream: AnyPull, _scope: CloseableScope) -> Effect[AnyPull]:
         def build() -> AnyPull:
             lines = _LineSplitter()
@@ -137,7 +150,7 @@ def _splitter(max_length: int | None) -> Channel[Any, Any, Any, Any, Any, Any, A
                     lines.pending_length > max_length
                     or any(len(line) > max_length for line in split)
                 ):
-                    return _FailCause(fail_cause(LineTooLongError(max_length)))
+                    return _FailCause(fail_cause(too_long(max_length)))
                 return _Succeed(split) if split else pull_or_flush
 
             def done(leftover: Any) -> AnyPull:
@@ -164,7 +177,7 @@ def _splitter(max_length: int | None) -> Channel[Any, Any, Any, Any, Any, Any, A
 def split_lines[E = Never, D = None]() -> Channel[tuple[str, ...], E, D, tuple[str, ...], E, D]:
     """Split chunks of text into lines, without their line breaks; the
     text after the last break is the last line."""
-    return _splitter(None)
+    return splitter(None)
 
 
 def split_lines_within[E = Never, D = None](
@@ -173,4 +186,4 @@ def split_lines_within[E = Never, D = None](
     """``split_lines`` for text from a peer you do not control: a line
     longer than ``max_length`` characters fails with ``LineTooLongError``
     as soon as that much of it has arrived, so memory stays bounded."""
-    return _splitter(max_length)
+    return splitter(max_length)
