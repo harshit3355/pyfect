@@ -272,3 +272,36 @@ def test_transient_statuses_are_effects_list_not_every_5xx() -> None:
     request = req.get("http://test/")
     transient = {s for s in range(100, 600) if c.is_transient_response(res.make(request, status=s))}
     assert transient == {408, 429, 500, 502, 503, 504}
+
+
+def test_every_error_reason_keeps_the_redaction_of_the_fiber_that_made_it() -> None:
+    """Effect #10006: a reason rendered later (by a logger or span exporter on another fiber)
+    still hides what the names active at its creation hid. Read from the reason union, so a
+    new reason kind is covered without editing this test."""
+    from typing import get_args
+
+    from pyfect.http import error as e
+    from pyfect.http import url_params as up
+
+    request = req.get("http://test/path?token=token-secret")
+    response = res.make(request, "body")
+    request_kinds = get_args(e.RequestError.__value__)
+    response_kinds = get_args(e.ResponseError.__value__)
+    assert get_args(e.HttpClientErrorReason.__value__) == (e.RequestError, e.ResponseError)
+    kinds = (*request_kinds, *response_kinds)
+    assert len(kinds) == 6
+
+    def make(kind: type[Any]) -> Any:
+        return kind(request, response) if kind in response_kinds else kind(request)
+
+    reasons = [
+        fx.run_blocking(
+            fx.sync(lambda kind=kind: make(kind)).pipe(
+                fx.provide_service(up.CurrentRedactedNames, ("token",))
+            )
+        )
+        for kind in kinds
+    ]
+    for reason in reasons:
+        rendered = f"{reason.message} {reason.to_json()} {e.HttpClientError(reason).to_json()}"
+        assert "token-secret" not in rendered, type(reason).__name__

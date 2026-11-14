@@ -234,6 +234,12 @@
   get their own owners, a request interrupted before its response is aborted, and one sent
   after the scope closed is aborted before the transport starts it. Requests another client
   sends while this one executes now belong to the scope too.
+- `HttpClientError` reasons redact their URL with the `url_params.CurrentRedactedNames` active
+  when they are made, and the client adds the executing fiber's names to errors a transport
+  fails with from another thread and to errors read from its responses, as in Effect 4.1.4
+  (#10006). A logger or exporter rendering the error later, on another fiber, showed the
+  secret query values. Rendering still adds the rendering fiber's names; equality ignores
+  them.
 
 ### Performance
 

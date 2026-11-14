@@ -15,14 +15,17 @@ Messages name the method and the URL with its secrets redacted
 of an error without a description adds its cause:
 ``Transport error (POST http://.../jobs): ConnectError: ...``.
 """
+# pyright: reportPrivateUsage=false
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 from pyfect import schema as S
 from pyfect.errors import TaggedError, with_cause
+from pyfect.http.headers import Pattern
 from pyfect.http.url_params import redact_url
 
 if TYPE_CHECKING:
@@ -39,36 +42,55 @@ def _with_cause(message: str, description: str | None, cause: object) -> str:
     return message if description else with_cause(message, cause)
 
 
-def _method_and_url(request: HttpClientRequest) -> str:
-    return f"{request.method} {redact_url(request.url)}"
+@dataclass(eq=False)
+class _RedactedUrl(TaggedError):
+    """The request's URL as a reason renders it: redacted with the ``CurrentRedactedNames``
+    active when the reason was made, then with those the client adds (the executing fiber's,
+    when a transport callback outside it made the reason), then with the rendering fiber's.
+    It only ever gets more redacted. Kept outside the dataclass fields, so equality and hashing
+    do not see it (Effect #10006)."""
+
+    request: HttpClientRequest
+    _redacted_url: str = field(default="", init=False, repr=False, compare=False)
+
+    def _redact_url_at_creation(self) -> None:
+        self._redacted_url = redact_url(self.request.url)
+
+    def _add_redacted_names(self, names: Sequence[Pattern]) -> None:
+        self._redacted_url = redact_url(self._redacted_url, names)
+
+    @property
+    def _url(self) -> str:
+        return redact_url(self._redacted_url)
+
+    @property
+    def _method_and_url(self) -> str:
+        return f"{self.request.method} {self._url}"
+
+    def _request_json(self) -> dict[str, object]:
+        return {"_id": "HttpClientRequest", "method": self.request.method, "url": self._url}
 
 
 @dataclass(eq=False)
-class _RequestReason(TaggedError):
+class _RequestReason(_RedactedUrl):
     request: HttpClientRequest
     cause: object = None
     description: str | None = None
 
+    def __post_init__(self) -> None:
+        self._redact_url_at_creation()
+
     @property
     def message(self) -> str:
         return _message(
-            type(self).__name__.removesuffix("Error"),
-            self.description,
-            _method_and_url(self.request),
+            type(self).__name__.removesuffix("Error"), self.description, self._method_and_url
         )
 
     def __str__(self) -> str:
         return _with_cause(self.message, self.description, self.cause)
 
     def to_json(self) -> dict[str, object]:
-        return {
-            "_tag": type(self).__name__,
-            "request": {
-                "_id": "HttpClientRequest",
-                "method": self.request.method,
-                "url": redact_url(self.request.url),
-            },
-        }
+        return {"_tag": type(self).__name__, "request": self._request_json()}
 
 
 @dataclass(eq=False)
@@ -93,15 +115,21 @@ class InvalidUrlError(_RequestReason):
 
 
 @dataclass(eq=False)
-class _ResponseReason(TaggedError):
+class _ResponseReason(_RedactedUrl):
     request: HttpClientRequest
     response: HttpClientResponse
     cause: object = None
     description: str | None = None
 
+    def __post_init__(self) -> None:
+        self._redact_url_at_creation()
+        # Body readers make reasons on whichever fiber reads, so the response carries the
+        # names of every execution that returned it.
+        self._add_redacted_names(self.response._redacted_names)
+
     @property
     def message(self) -> str:
-        info = f"{self.response.status} {_method_and_url(self.request)}"
+        info = f"{self.response.status} {self._method_and_url}"
         return _message(type(self).__name__.removesuffix("Error"), self.description, info)
 
     def __str__(self) -> str:
@@ -110,11 +138,7 @@ class _ResponseReason(TaggedError):
     def to_json(self) -> dict[str, object]:
         return {
             "_tag": type(self).__name__,
-            "request": {
-                "_id": "HttpClientRequest",
-                "method": self.request.method,
-                "url": redact_url(self.request.url),
-            },
+            "request": self._request_json(),
             "response": {"_id": "HttpClientResponse", "status": self.response.status},
         }
 

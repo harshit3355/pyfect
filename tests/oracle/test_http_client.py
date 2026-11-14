@@ -29,6 +29,8 @@ The ``withRateLimiter`` and ``withCircuitBreaker`` blocks are in
 ``test_http_client_resilience.py``.
 """
 
+import json
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, TypedDict
@@ -52,7 +54,13 @@ from pyfect.http import response as res
 from pyfect.http import url as u
 from pyfect.http import url_params as up
 from pyfect.http.abort import AbortSignal
-from pyfect.http.error import EncodeError, HttpClientError, StatusCodeError, TransportError
+from pyfect.http.error import (
+    DecodeError,
+    EncodeError,
+    HttpClientError,
+    StatusCodeError,
+    TransportError,
+)
 from pyfect.redacted import Redacted
 from pyfect.schedule import spaced
 from pyfect.tracer import NativeSpan, SpanRequest, Tracer
@@ -397,6 +405,125 @@ def test_error_current_redacted_names():
 
     text = yield from fx.sync(message).pipe(fx.provide_service(up.CurrentRedactedNames, ("token",)))
     assert text == "Transport error (GET http://test/path?token=REDACTED&sig=sig-visible)"
+
+
+def _failing_off_fiber() -> c.HttpClientService[HttpClientError]:
+    """A client whose transport fails from another thread, outside the request fiber, as
+    native transports do (Effect's ``setTimeout`` callback)."""
+
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, _signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        def register(
+            resume: Callable[[fx.Effect[res.HttpClientResponse, HttpClientError]], None],
+        ) -> None:
+            def fail_later() -> None:
+                resume(fx.fail(HttpClientError(TransportError(request))))
+
+            threading.Thread(target=fail_later).start()
+
+        return fx.callback(register)
+
+    return c.make(send)
+
+
+def _failing_on_fiber() -> c.HttpClientService[HttpClientError]:
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, _signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        return fx.fail(HttpClientError(TransportError(request)))
+
+    return c.make(send)
+
+
+def _with_names[A, E](eff: fx.Effect[A, E, Any], *names: str) -> fx.Effect[A, E, Any]:
+    return eff.pipe(fx.provide_service(up.CurrentRedactedNames, names))
+
+
+def _untraced[A, E](eff: fx.Effect[A, E, Any]) -> A:
+    return fx.run_blocking(eff.pipe(fx.provide_service(c.TracerPropagationEnabled, False)).or_die())
+
+
+@testing.effect
+def test_redacts_query_params_using_the_names_active_when_the_error_is_created():
+    """redacts query params using the redacted names active when the error is created"""
+    request = req.get("http://test/path?token=token-secret")
+    error = yield from _with_names(
+        fx.sync(lambda: HttpClientError(TransportError(request))), "token"
+    )
+    assert error.message == "Transport error (GET http://test/path?token=REDACTED)"
+    assert "token-secret" not in json.dumps(error.to_json())
+
+
+def test_keeps_the_redaction_of_an_earlier_execution_when_the_request_is_reused():
+    """keeps the redaction of an earlier execution when the request is reused"""
+    client = _failing_off_fiber()
+    request = req.get("http://test/path?token=token-secret")
+    message = "Transport error (GET http://test/path?token=REDACTED)"
+    error = _untraced(_with_names(client.execute(request).flip(), "token"))
+    assert error.message == message
+    _untraced(client.execute(request).flip())
+    assert error.message == message
+    assert "token-secret" not in json.dumps(error.to_json())
+
+
+def test_adds_the_redacted_names_of_the_fiber_that_renders_the_error():
+    """adds the redacted names of the fiber that renders the error"""
+    client = _failing_off_fiber()
+    url = "http://test/path?token=token-secret&key=key-secret"
+    error = fx.run_blocking(_with_names(client.get(url).flip(), "token").or_die())
+    message, rendered = fx.run_blocking(
+        _with_names(fx.sync(lambda: (error.message, json.dumps(error.to_json()))), "key")
+    )
+    assert message == "Transport error (GET http://test/path?token=REDACTED&key=REDACTED)"
+    assert "token-secret" not in rendered
+    assert "key-secret" not in rendered
+
+
+def test_compares_errors_equal_when_only_the_redacted_names_of_their_executions_differ():
+    """compares errors equal when only the redacted names of their executions differ"""
+    client = _failing_on_fiber()
+    request = req.get("http://test/path")
+    a = _untraced(_with_names(client.execute(request).flip(), "foo"))
+    b = _untraced(_with_names(client.execute(request).flip(), "bar"))
+    assert a.message == b.message
+    assert a == b
+    assert hash(a) == hash(b)
+
+
+def test_compares_errors_equal_when_the_rendering_fiber_redacts_them_the_same():
+    """compares errors equal when the names of the fiber that renders them redact them the same"""
+    client = _failing_on_fiber()
+    request = req.get("http://test/path?token=token-secret")
+    a = _untraced(_with_names(client.execute(request).flip(), "token"))
+    b = _untraced(_with_names(client.execute(request).flip()))
+
+    def check() -> None:
+        assert a.message == b.message
+        assert a == b
+        assert hash(a) == hash(b)
+
+    fx.run_blocking(_with_names(fx.sync(check), "token"))
+
+
+@testing.effect
+def test_keeps_the_redaction_of_an_earlier_execution_when_the_runner_returns_the_same_response():
+    """keeps the redaction of an earlier execution when the runner returns the same response"""
+    request = req.get("http://test/path?token=token-secret&key=key-secret")
+    response = res.make(request, "not-json")
+
+    def send(
+        _request: req.HttpClientRequest, _url: fx.Url, _signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        return fx.succeed(response)
+
+    client = c.make(send)
+    first = yield from _with_names(client.execute(request), "token")
+    yield from _with_names(client.execute(request), "key")
+    error = yield from first.json.flip()
+    assert isinstance(error.reason, DecodeError)
+    assert "token-secret" not in error.message
+    assert "token-secret" not in json.dumps(error.to_json())
 
 
 # followRedirects

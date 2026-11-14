@@ -13,7 +13,7 @@ from pyfect._effect_resources import _call_user
 from pyfect._fiber import Fiber
 from pyfect._js import to_well_formed
 from pyfect._primitives import uninterruptible_mask
-from pyfect.cause import Cause
+from pyfect.cause import Cause, Fail
 from pyfect.cause import fail as fail_cause
 from pyfect.clock import Clock
 from pyfect.context import Reference
@@ -131,9 +131,17 @@ def _add_header_attributes(
 
 
 def _track(
-    response: HttpClientResponse, controller: AbortController, scoped: bool
+    response: HttpClientResponse,
+    controller: AbortController,
+    scoped: bool,
+    redacted_names: Sequence[_headers.Pattern],
 ) -> HttpClientResponse:
+    # Body readers make errors with the runner's response while callers hold the wrapper, so
+    # both carry the executing fiber's names.
+    response._add_redacted_names(redacted_names)
     tracked = response if scoped else _interruptible(response, controller)
+    if tracked is not response:
+        tracked._add_redacted_names(redacted_names)
     # On the response, not in a table keyed by it: the controller reaches the response
     # again (through the request's span), which would keep such an entry forever.
     tracked._abort_with(controller.abort)
@@ -162,6 +170,7 @@ def _exchange(
     before its response, and owned by the enclosing ``with_scope``'s scope if any."""
     scope = fiber.get_ref(RequestScope)
     controller = AbortController()
+    redacted_names = fiber.get_ref(_url_params.CurrentRedactedNames)
     sending = _call_user(send, request, url, controller.signal, fiber)
     if scope is not None:
         # Registered before dispatch, so a scope already closed aborts the signal before the
@@ -171,10 +180,14 @@ def _exchange(
     def on_failure(cause: Cause[HttpClientError]) -> Effect[HttpClientResponse, HttpClientError]:
         if cause.has_interrupts:
             controller.abort()
+        # A transport callback outside this fiber may have made the error without its names.
+        for reason in cause.reasons:
+            if isinstance(reason, Fail):
+                reason.error.reason._add_redacted_names(redacted_names)
         return fail_with_cause(cause)
 
     def on_success(response: HttpClientResponse) -> Effect[HttpClientResponse, HttpClientError]:
-        tracked = _track(response, controller, scope is not None)
+        tracked = _track(response, controller, scope is not None, redacted_names)
         on_response(tracked)
         return succeed(tracked)
 
