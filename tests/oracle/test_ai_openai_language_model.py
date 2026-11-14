@@ -906,6 +906,85 @@ def test_stored_history_references():
 
 
 @testing.effect
+def test_stored_provider_item_referenced_once():
+    """generateText / message preparation / assistant messages / references a stored provider-executed item once when replaying response parts"""  # noqa: E501
+    options: dict[str, Any] = {
+        "toolkit": K.make(OT.WebSearch()),
+        "disable_tool_call_resolution": True,
+    }
+    first = yield from _provided(
+        lm.generate_text("Search", **options),
+        _mock(output=[web_search_call(), text_output("Answer")]),
+        "gpt-4o-mini",
+        {"store": True},
+    )
+    # A second mock: pyfect's id ledger rejects a response repeating the prompt's call id.
+    mock = _mock()
+    prompt = Pr.from_response_parts(first.content).concat(Pr.make("Continue"))
+    yield from _provided(lm.generate_text(prompt, **options), mock, "gpt-4o-mini", {"store": True})
+    assert mock.bodies[0]["input"] == [
+        {"type": "item_reference", "id": "ws_123"},
+        {"type": "item_reference", "id": "msg_123"},
+        _user("Continue"),
+    ]
+
+
+_MCP_CALL = _part(
+    "tool-call",
+    id="mcp_tool_call_1",
+    name="OpenAiMcp",
+    params={"packageName": "effect"},
+    providerExecuted=True,
+)
+_MCP_RESULT = _part(
+    "tool-result",
+    id="mcp_tool_call_1",
+    name="OpenAiMcp",
+    isFailure=False,
+    result={"type": "mcp_call", "name": "CheckPackage", "output": "ok"},
+    providerExecuted=True,
+    options={"openai": {"itemId": "mcp_call_123"}},
+)
+
+
+@pytest.mark.parametrize(
+    ("toolkit", "content", "expected"),
+    [
+        pytest.param(
+            "mcp", [_MCP_CALL, _MCP_RESULT], ["mcp_call_123"], id="mcp call without item id"
+        ),
+        pytest.param(
+            "web_search", [_PROVIDER_CALL, _PROVIDER_RESULT], ["ws_1"], id="paired web search"
+        ),
+        pytest.param(
+            "web_search",
+            [
+                _PROVIDER_CALL,
+                {**_PROVIDER_RESULT, "id": "ws_2", "options": {"openai": {"itemId": "ws_2"}}},
+            ],
+            ["ws_1", "ws_2"],
+            id="unpaired web search",
+        ),
+    ],
+)
+@testing.effect
+def test_stored_provider_items_by_item_id(toolkit: str, content: list[Any], expected: list[str]):
+    """generateText / message preparation / assistant messages / references stored provider-executed items by their stored item ID"""  # noqa: E501
+    mock = _mock()
+    yield from _provided(
+        lm.generate_text(
+            [{"role": "assistant", "content": content}],
+            toolkit=McpToolkit if toolkit == "mcp" else K.make(OT.WebSearch()),
+            disable_tool_call_resolution=True,
+        ),
+        mock,
+        "gpt-4o-mini",
+        {"store": True},
+    )
+    assert mock.bodies[0]["input"] == [{"type": "item_reference", "id": id} for id in expected]
+
+
+@testing.effect
 def test_provider_history_inline():
     """generateText / message preparation / assistant messages / replays matched provider-executed history inline"""  # noqa: E501
     mock = _mock()
@@ -2393,3 +2472,41 @@ def test_client_executed_call_ids_match_between_generate_and_stream(
         **options,
     )
     assert _call_ids(generated) == _call_ids(streamed) == ("call_1", "item_1")
+
+
+# Guard: one reference per stored provider item -----------------------------------------
+# A stored provider-executed call and its result are one OpenAI item; with item references the
+# pair is sent as a single ``item_reference`` (Effect #10429). Every provider-executed tool is
+# replayed here as a paired call and result, each carrying the item id.
+
+_STORED_TOOLS: list[tuple[str, Any]] = [
+    ("OpenAiWebSearch", OT.WebSearch()),
+    ("OpenAiWebSearchPreview", OT.WebSearchPreview()),
+    ("OpenAiCodeInterpreter", OT.CodeInterpreter(container={"type": "auto"})),
+    ("OpenAiFileSearch", OT.FileSearch(vector_store_ids=["vs_1"])),
+    ("OpenAiImageGeneration", OT.ImageGeneration()),
+    ("OpenAiMcp", McpToolkit.tools["OpenAiMcp"]),
+]
+
+
+@pytest.mark.parametrize(("name", "tool"), _STORED_TOOLS, ids=[t[0] for t in _STORED_TOOLS])
+@testing.effect
+def test_stored_provider_pair_sends_one_reference(name: str, tool: Any):
+    options = {"openai": {"itemId": "item_1"}}
+    common = {"id": "call_1", "name": name, "providerExecuted": True, "options": options}
+    content = [
+        _part("tool-call", params={}, **common),
+        _part("tool-result", isFailure=False, result={"status": "completed"}, **common),
+    ]
+    mock = _mock()
+    yield from _provided(
+        lm.generate_text(
+            [{"role": "assistant", "content": content}],
+            toolkit=K.make(tool),
+            disable_tool_call_resolution=True,
+        ),
+        mock,
+        "gpt-4o-mini",
+        {"store": True},
+    )
+    assert mock.bodies[0]["input"] == [{"type": "item_reference", "id": "item_1"}]
