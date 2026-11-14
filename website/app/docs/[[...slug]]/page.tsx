@@ -47,6 +47,8 @@ export default async function Page(props: PageProps<'/docs/[[...slug]]'>) {
   );
 }
 
+const FRAME_PARSED = 'docs-frame-parsed';
+
 function DocsPage({
   page,
   toc,
@@ -64,9 +66,13 @@ function DocsPage({
   const neighbours = findNeighbour(source.getPageTree(), page.url);
 
   return (
-    // At xl a grid, not flex: the rail's column exists before the rail is parsed. These pages
-    // are large, the browser paints them while parsing, and a flex column first filled the
-    // rail's place too, so the article jumped sideways when the rail arrived.
+    // These pages are large and the browser paints them while it is still parsing them.
+    // - The header's and the title row's buttons are right-aligned, so each is placed by the
+    //   ones after it: a paint between two of them showed them moving when the rest arrived.
+    //   So nothing renders until the title row is parsed (the `expect` link below).
+    // - At xl a grid, not flex: the rail's column exists before the rail is parsed. A flex
+    //   column first filled the rail's place too, so the article jumped sideways when the
+    //   rail arrived.
     <div
       data-slot="docs"
       className="flex scroll-mt-24 items-stretch pb-8 text-[1.05rem] sm:text-[15px] xl:grid xl:w-full xl:grid-cols-[minmax(0,1fr)_var(--sidebar-width)]"
@@ -107,6 +113,9 @@ function DocsPage({
                 {summary}
               </p>
             ) : null}
+            {/* React hoists the link into <head>: rendering waits until this span is parsed. */}
+            <link rel="expect" href={`#${FRAME_PARSED}`} blocking="render" />
+            <span id={FRAME_PARSED} hidden />
           </div>
           {toc.length > 0 ? (
             <div data-docs-toc-box="" className="xl:hidden">

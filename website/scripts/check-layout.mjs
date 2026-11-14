@@ -20,13 +20,19 @@ const WIDTHS = [1512, 1280, 1024, 390];
 /** How late the fonts arrive in the late-font pass, in ms: well after the first paint. */
 const FONT_DELAY = 1000;
 /**
- * The streamed pass sends each page's HTML in chunks this size with a pause between them, so
- * the browser paints it part-parsed, as it does on a slow connection. These pages are large
- * (up to a few MB), and something laid out by an element that comes later in the document
- * moves when that element arrives; without the pauses that happened only on some runs.
+ * The streamed pass sends each page's HTML in chunks with a pause between them, so the browser
+ * paints it part-parsed, as it does on a slow connection. These pages are large (up to a few
+ * MB), and something laid out by an element that comes later in the document moves when that
+ * element arrives; without the pauses that happened only on some runs. The network can split
+ * the HTML anywhere, so the start of the page (header, title row and first screen, all in
+ * the first STREAM_FINE_UNTIL bytes) comes in small chunks, so this pass paints inside the
+ * header and inside the title row (with 32 KiB chunks it never did). The rest comes in
+ * large ones.
  */
+const STREAM_FINE_CHUNK = 2 * 1024;
+const STREAM_FINE_UNTIL = 256 * 1024;
 const STREAM_CHUNK = 32 * 1024;
-const STREAM_PAUSE = 40;
+const STREAM_PAUSE = 25;
 
 /** Positions that must match across page types. */
 function measure() {
@@ -94,8 +100,10 @@ async function startStreamingProxy() {
       res.end(body);
       return;
     }
-    for (let at = 0; at < body.length; at += STREAM_CHUNK) {
-      res.write(body.subarray(at, at + STREAM_CHUNK));
+    for (let at = 0; at < body.length; ) {
+      const size = at < STREAM_FINE_UNTIL ? STREAM_FINE_CHUNK : STREAM_CHUNK;
+      res.write(body.subarray(at, at + size));
+      at += size;
       await new Promise((r) => setTimeout(r, STREAM_PAUSE));
     }
     res.end();

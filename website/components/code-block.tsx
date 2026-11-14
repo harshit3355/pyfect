@@ -22,8 +22,9 @@ export function CodeBlock({
           className="flex items-center gap-2 text-code-foreground [&_svg]:size-4 [&_svg]:text-code-foreground [&_svg]:opacity-70"
         >
           {icon ? (
-            // rehype-code's language icon: a static SVG string it generated
-            <span aria-hidden className="flex" dangerouslySetInnerHTML={{ __html: icon }} />
+            // rehype-code's language icon: a static SVG string it generated. One line high, so
+            // the bar has its height before the title after it is parsed.
+            <span aria-hidden className="flex h-lh items-center" dangerouslySetInnerHTML={{ __html: icon }} />
           ) : null}
           {title}
         </figcaption>
