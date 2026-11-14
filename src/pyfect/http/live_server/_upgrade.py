@@ -47,6 +47,10 @@ def _upgrade_error(
     return HttpServerError(InternalError(request, description, cause))
 
 
+def _goes_away(exchange: Exchange, go_away: Effect[None]) -> None:
+    exchange.go_away = go_away
+
+
 def upgrade(
     exchange: Exchange, request: ServerRequest, headers: Headers, websocket: WebSocketConfig
 ) -> Effect[SocketService, HttpServerError]:
@@ -76,7 +80,7 @@ def upgrade(
         exchange.headers_sent = True
         exchange.upgraded = _SWITCHED
         exchange.close_after = True
-        return conn.write((head,))
+        return conn.write((head,)).map(lambda _: _goes_away(exchange, sync(conn.end_writing)))
 
     def drained(ok: bool) -> Effect[None, SocketError]:
         if not ok:

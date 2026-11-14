@@ -114,6 +114,7 @@ class Exchange:
         "close_after",
         "conn",
         "finished",
+        "go_away",
         "head",
         "headers_sent",
         "keep_alive_seconds",
@@ -139,6 +140,9 @@ class Exchange:
         self.close_after = not head.keep_alive or head.upgrade is not None
         self.keep_alive_seconds = keep_alive_seconds
         self.upgraded: HttpServerResponse | None = None
+        self.go_away: Effect[None] | None = None
+        """Once the switch is sent, how shutdown asks the upgraded connection to end: a
+        WebSocket close with 1001 (Going Away), or the end of the server's side."""
         self.aborted = False
         """The client went first (Node's server then writes nothing more)."""
 

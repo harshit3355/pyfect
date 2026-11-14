@@ -666,3 +666,46 @@ def test_compresses_messages_from_the_threshold() -> None:
     assert small == (0x81, b"hi")
     assert big[0] == 0xC2  # FIN, RSV1, binary
     assert zlib.decompressobj(-15).decompress(big[1] + b"\x00\x00\xff\xff") == b"a" * 2000
+
+
+# --- shutdown -----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("unresponsive", [False, True])
+def test_shuts_down_websockets(unresponsive: bool) -> None:
+    """shuts down WebSockets (unresponsive: %s)
+
+    Shutdown sends 1001 at once. A client that answers the close ends the handler's pull, so
+    the handler finishes uninterrupted; one that never reads is destroyed after the
+    graceful shutdown timeout."""
+    drained: list[fx.Exit[None, SocketError]] = []
+
+    @fx.fn
+    def handler():
+        request = yield from HttpServerRequest()
+        sock = yield from request.upgrade
+        drained.append((yield from to_stream(sock).run_drain().exit()))
+        return server_response.empty()
+
+    clients: list[ClientConnection | socket.socket] = []
+
+    @fx.fn
+    def program():
+        at = yield from port
+        client = yield from effect.blocking(
+            lambda: _handshake(at)[0] if unresponsive else _client(at)
+        )
+        clients.append(client)
+
+    timeout = "250 millis" if unresponsive else "10 seconds"
+    _routed(handler(), program(), graceful_shutdown_timeout=timeout)
+    [client] = clients
+    if isinstance(client, socket.socket):
+        with client:
+            assert _frames(client)[0] == (8, struct.pack("!H", 1001))
+        return
+    with client:
+        assert client.close_code == 1001
+    [exit] = drained
+    assert isinstance(exit, Failure)
+    assert not exit.cause.has_interrupts

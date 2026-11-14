@@ -13,6 +13,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any, Never
 
+from pyfect._concurrency import for_each
 from pyfect._core import Effect
 from pyfect.duration import Duration, millis
 from pyfect.effect import gen, suspend, sync
@@ -165,17 +166,44 @@ class Listener:
         """Stop serving new requests: close the idle connections and wait
         up to ``timeout`` for the busy ones."""
 
-        def start() -> None:
+        def start() -> list[Effect[None]]:
             with self.lock:
                 self.shutting_down = True
                 self._closed = True
                 pending, self._pending = self._pending, []
                 idle = [state.conn for state in self._serving if state.idle]
+                go_away = [
+                    state.exchange.go_away
+                    for state in self._serving
+                    if state.exchange is not None and state.exchange.go_away is not None
+                ]
             for conn in pending + idle:
                 conn.close(graceful=True)
+            return go_away
+
+        def destroy_upgraded() -> None:
+            # As Node's server: an upgraded connection still open after the wait is destroyed.
+            with self.lock:
+                upgraded = [
+                    state.conn
+                    for state in self._serving
+                    if state.exchange is not None and state.exchange.upgraded is not None
+                ]
+            for conn in upgraded:
+                conn.close(graceful=False)
+
+        def asked(go_away: list[Effect[None]]) -> Effect[None]:
+            # Each on its own fiber: a client that stops reading cannot hold up the others.
+            return for_each(go_away, lambda ask: ask.fork_daemon(start_immediately=True)).as_void()
 
         drained = timeout_option(self.signal.wait(lambda: not self._serving), timeout)
-        return sync(start).flat_map(lambda _: drained).as_void()
+        return (
+            sync(start)
+            .flat_map(asked)
+            .flat_map(lambda _: drained)
+            .ensuring(sync(destroy_upgraded))
+            .as_void()
+        )
 
 
 def _address(server: asyncio.Server) -> SocketAddress:

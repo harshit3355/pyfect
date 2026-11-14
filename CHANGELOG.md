@@ -216,6 +216,11 @@
   Effect 4.1.4 (#10475); it ended with a plain interruption, which `default_teardown` reports
   as 130. A failed write still exits non-zero, and an output already interrupted no longer
   interrupts the server again.
+- The live server's shutdown no longer waits out `graceful_shutdown_timeout` while WebSocket
+  clients are connected, as in Effect 4.1.4 (#10405): WebSockets get a close with 1001 (Going
+  Away) as soon as shutdown starts, other upgraded connections are ended, and any still open
+  after the wait are destroyed. A connected, responsive client held a 5-second shutdown for
+  the whole 5 seconds and got 1001 only when its handler was interrupted.
 
 ### Performance
 
