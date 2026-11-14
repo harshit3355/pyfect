@@ -199,6 +199,10 @@
   the live server received.
 - `prompt.integer` and `prompt.number` keep a typed minus sign when a zero follows it, as in
   Effect (#10558): typing `-0.05` submitted `0.05` and `-07` submitted `7`.
+- The static server matches `If-None-Match` entity tags that contain commas, as Effect 4.1.4
+  does (#10066): the header was split on every comma, so `"v1,part"` never matched (200
+  instead of 304) and `"v1", "part"` could. Both `If-Match` and `If-None-Match` now read the
+  list whole, and a malformed list matches nothing.
 
 ### Performance
 
