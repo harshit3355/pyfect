@@ -24,8 +24,8 @@ from typing import Any, NotRequired, TypedDict, cast
 import pytest
 
 import pyfect as fx
+from pyfect import layer, testing
 from pyfect import schema as S
-from pyfect import testing
 from pyfect.ai import mcp_protocol as P
 from pyfect.ai import mcp_schema as MS
 from pyfect.ai import mcp_server as M
@@ -777,6 +777,93 @@ def test_should_treat_an_unmatched_base64_wrapper_as_a_literal_when_routing_a_re
         session, _header_call("wrapper", {"region": value}), headers={"Mcp-Param-region": value}
     )
     assert response.status == 200
+
+
+@testing.effect
+def test_should_check_tool_visibility_before_mirrored_headers_and_preserve_middleware_errors():
+    """v2026_07_28.test.ts / should check tool visibility before mirrored headers and preserve middleware errors"""  # noqa: E501
+    state = {"visible": False, "invocations": 0}
+
+    def log_code(
+        effect: fx.Effect[Any, MS.McpError, Any], _: M.MiddlewareOptions
+    ) -> fx.Effect[Any, MS.McpError, Any]:
+        # Reads each error's code, as Effect's does: a middleware sees MCP errors only.
+        return effect.tap_error(lambda error: fx.sync(lambda: f"{error.code:.0f}"))
+
+    def invoke(_: object) -> fx.Effect[MS.CallToolResult]:
+        def run() -> MS.CallToolResult:
+            state["invocations"] += 1
+            return {"content": [{"type": "text", "text": "allowed"}]}
+
+        return fx.sync(run)
+
+    visible = M.visibility(lambda _: fx.sync(lambda: bool(state["visible"])))
+
+    @fx.gen
+    def register():
+        server = yield from M.McpServer()
+        yield from server.add_tool(
+            ToolEntry(
+                {
+                    "name": "SecretTool",
+                    "inputSchema": {
+                        "type": "object",
+                        "properties": {"region": {"type": "string", "x-mcp-header": "Region"}},
+                        "required": ["region"],
+                    },
+                },
+                Context.empty(),
+                invoke,
+                (yield from fx.context()),
+            )
+        )
+
+    registrations = layer.effect_discard(register).pipe(
+        layer.provide(visible.combine(M.middleware(log_code)).layer)
+    )
+    harness = yield from http_harness(
+        M.layer_http(
+            name="HeaderVisibility",
+            version="1.0.0",
+            path="/mcp",
+            protocols=(P.v2026_07_28,),
+            registrations=registrations,
+        )
+    )
+    test = Conformance(P.v2026_07_28, harness)
+    session = yield from test.initialize()
+    call: Json = {
+        "jsonrpc": "2.0",
+        "id": "visibility",
+        "method": "tools/call",
+        "params": {"name": "SecretTool", "arguments": {"region": "eu"}},
+    }
+
+    def send(header: str | None) -> fx.Effect[Any]:
+        headers = {} if header is None else {"Mcp-Param-Region": header}
+        return test.send(session, call, headers=headers)
+
+    for header in (None, "us"):
+        response = yield from send(header)
+        assert response.status == 200
+        error = yield from test.decode_error(response)
+        assert error["id"] == "visibility"
+        assert error["error"]["code"] == MS.INVALID_PARAMS_ERROR_CODE
+        assert error["error"]["message"] == "Tool 'SecretTool' not found"
+        assert state["invocations"] == 0
+
+    state["visible"] = True
+    mismatched = yield from send("us")
+    assert mismatched.status == 400
+    error = yield from test.decode_error(mismatched)
+    assert error["error"]["code"] == MS.HEADER_MISMATCH_ERROR_CODE
+    assert state["invocations"] == 0
+
+    allowed = yield from send("eu")
+    assert allowed.status == 200
+    result = (yield from read_message(allowed))["result"]
+    assert result["content"] == [{"type": "text", "text": "allowed"}]
+    assert state["invocations"] == 1
 
 
 # --- Legacy notifications ---------------------------------------------------------------------

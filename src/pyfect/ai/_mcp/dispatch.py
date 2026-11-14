@@ -89,6 +89,7 @@ from pyfect.ai.mcp_schema import (
     ReverseOperation,
     ServerCapabilities,
     ServerClient,
+    Tool,
     parse_request_id,
 )
 from pyfect.cause import Cause, Fail
@@ -1060,12 +1061,41 @@ def _call_tool(
     revision reports them so (Effect's per-revision ``tools/call``), but a
     retry the tool refuses (a tampered state) stays a protocol error."""
     name = call["name"]
-    found = server.find_tool(name, context)
-    if found is None:
+    if server.find_tool(name, context) is None:
         return fail(InvalidParams(f"Tool '{name}' not found"))
-    outcome: Effect[CallToolResult | InputRequired, McpError | RequestRejected, RequestServices] = (
-        server.call_tool_for(call, context)
-    )
+
+    def mirrored(request: Option[ServerRequest]) -> Callable[[Tool], Effect[None, McpError]]:
+        """2026-07-28's check of the parameters an HTTP request mirrors in its
+        headers, once the tool is known to be visible to the request."""
+
+        def check(tool: Tool) -> Effect[None, McpError]:
+            if not protocol.is_stateless or request is None:
+                return _VOID
+            mismatch = param_headers.mismatch(
+                tool["inputSchema"], call.get("arguments"), request.value.headers
+            )
+            if mismatch is None:
+                return _VOID
+            return fail_with_http_status(
+                400, ProtocolError(mismatch, error_code=HEADER_MISMATCH_ERROR_CODE)
+            )
+
+        return check
+
+    def call_with(request: Option[ServerRequest]) -> Effect[Wire, McpError, RequestServices]:
+        outcome: Effect[
+            CallToolResult | InputRequired, McpError | RequestRejected, RequestServices
+        ] = server.call_tool_for(call, context, before_handle=mirrored(request))
+        return _tool_outcome(protocol, context, outcome)
+
+    return service_option(HttpServerRequest).flat_map(call_with)
+
+
+def _tool_outcome(
+    protocol: AnyProtocolAdapter,
+    context: RequestContext,
+    outcome: Effect[CallToolResult | InputRequired, McpError | RequestRejected, RequestServices],
+) -> Effect[Wire, McpError, RequestServices]:
     continued = context.input_responses is not None or context.request_state is not None
     if protocol.reports_tool_errors_as_results:
 
@@ -1094,18 +1124,7 @@ def _call_tool(
             return fail(InvalidParams(reason))
         return succeed(projection.call_tool_result(protocol, outcome))
 
-    def checked(request: Option[ServerRequest]) -> Effect[Wire, McpError, RequestServices]:
-        if protocol.is_stateless and request is not None:
-            mismatch = param_headers.mismatch(
-                found.tool["inputSchema"], call.get("arguments"), request.value.headers
-            )
-            if mismatch is not None:
-                return fail_with_http_status(
-                    400, ProtocolError(mismatch, error_code=HEADER_MISMATCH_ERROR_CODE)
-                )
-        return called.flat_map(on_wire)
-
-    return service_option(HttpServerRequest).flat_map(checked)
+    return called.flat_map(on_wire)
 
 
 def _input_required(

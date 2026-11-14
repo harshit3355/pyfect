@@ -410,20 +410,27 @@ class McpServerService:
         return entry if entry is not None and _visible(entry.annotations, context) else None
 
     def call_tool_for(
-        self, params: CallToolParams, context: RequestContext
+        self,
+        params: CallToolParams,
+        context: RequestContext,
+        *,
+        before_handle: Callable[[Tool], Effect[None, McpError]] = lambda _: _VOID,
     ) -> Effect[
         CallToolResult | InputRequired,
-        InvalidParams | InternalError | RequestRejected,
+        McpError | RequestRejected,
         RequestServices,
     ]:
         """The outcome of ``params`` 's call; an unknown tool is invalid
-        params, a hidden one rejected as unknown."""
+        params, a hidden one rejected as unknown. ``before_handle`` runs once
+        the request's visibility accepted the tool, before its handler."""
         name = params["name"]
         entry = self.find_tool(name, context)
         if entry is None:
             return fail(InvalidParams(f"Tool '{name}' not found"))
         return self._invokes["tool", name](
-            suspend(lambda: entry.handle(params.get("arguments"))),
+            suspend(lambda: before_handle(entry.tool)).and_then(
+                suspend(lambda: entry.handle(params.get("arguments")))
+            ),
             method="tools/call",
             target=name,
             payload=params,
