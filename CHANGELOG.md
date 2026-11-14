@@ -261,6 +261,10 @@
   given. Zones ICU resolves to the same id are equal and hash alike (`Europe/Kyiv` equals
   `Europe/Kiev`), and the local zone is still named by ICU's id, as in Effect.
   `tests/oracle/test_icu_zones.py` checks every id ICU knows.
+- `date_time.make` and the other parsers of a `DateTime.Input` string read a string ending in
+  `UT`, `UTC` or a US zone abbreviation (`EST`, `pdt`, any case) in that zone, as on Effect
+  main (#10562); they added a `Z` after it, so the string failed to parse. The trailing-zone
+  check is now built from the date parser's own zone words.
 
 ### Performance
 

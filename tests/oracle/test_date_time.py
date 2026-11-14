@@ -31,7 +31,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 import pyfect as fx
-from pyfect import date_time, testing
+from pyfect import _js_date, date_time, testing
 from pyfect import schema as S
 from pyfect.date_time import Disambiguation
 
@@ -885,11 +885,25 @@ def test_does_not_append_z_to_strings_containing_gmt():
     [
         ("2024-01-01T00:00:00z", "2024-01-01T00:00:00.000Z"),
         ("Tue, 27 Jan 2026 17:14:06 gmt", "2026-01-27T17:14:06.000Z"),
+        ("2024-06-01 10:00:00 UTC", "2024-06-01T10:00:00.000Z"),
+        ("Sat, 01 Jun 2024 10:00:00 UT", "2024-06-01T10:00:00.000Z"),
+        ("June 1, 2024 10:00 est", "2024-06-01T15:00:00.000Z"),
     ],
 )
-def test_accepts_lowercase_utc_designators(text: str, expected: str):
-    """accepts lowercase UTC designators: %s"""
+def test_accepts_trailing_zone_designators_in_any_case(text: str, expected: str):
+    """accepts trailing zone designators in any case: %s"""
     assert _make(text) == expected
+
+
+def test_every_zone_word_the_parser_reads_counts_as_a_zone():
+    """Not an Effect title: ``make`` adds no ``Z`` after any zone word ``Date.parse`` reads,
+    in any case, so the word's offset applies."""
+    for name, (kind, hours) in _js_date._KEYWORDS.items():  # pyright: ignore[reportPrivateUsage]
+        if kind != _js_date._ZONE:  # pyright: ignore[reportPrivateUsage]
+            continue
+        expected = f"2024-06-01T{10 - hours:02d}:00:00.000Z"
+        for word in (name, name.upper()):
+            assert _make(f"June 1, 2024 10:00 {word}") == expected, word
 
 
 # --- rounding across DST (Effect 4.1.2) ------------------------------------------------

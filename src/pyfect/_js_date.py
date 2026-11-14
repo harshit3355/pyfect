@@ -471,7 +471,13 @@ def parse(text: str) -> int | None:
 
 
 _HAS_ZONE = re.compile(r"Z|GMT|[+-][0-9]{2}$|[+-][0-9]{2}:?[0-9]{2}$|\]$")
-_ENDS_IN_ZONE = re.compile(r"(?:z|gmt)$", re.IGNORECASE)
+_ENDS_IN_ZONE = re.compile(
+    "(?:" + "|".join(name for name, (kind, _) in _KEYWORDS.items() if kind == _ZONE) + ")$",
+    re.IGNORECASE,
+)
+"""A trailing zone word ``parse`` reads, in any case (Effect's ``hasZone``: ``z``, ``gmt``,
+``ut``, ``utc`` and the US abbreviations), taken from the parser's own keywords so the two
+can't disagree."""
 
 
 def parse_input(text: str) -> int | None:
