@@ -19,6 +19,10 @@ import pytest
 from _subprocess import SUBPROCESS_TIMEOUT
 
 import pyfect as fx
+from pyfect.cause import interrupt as cause_interrupt
+from pyfect.context import Context
+from pyfect.exit import fail_cause
+from pyfect.run import InterruptExitCode
 
 READY = "ready"
 
@@ -213,6 +217,22 @@ def test_default_teardown_maps_exits_to_statuses():
     assert fx.default_teardown(fx.run_blocking_exit(fx.interrupt())) == 130
     assert fx.default_teardown(fx.run_blocking_exit(fx.die(ValueError()))) == 1
     assert fx.default_teardown(fx.run_blocking_exit(fx.fail(Gone()))) == 69
+
+
+def test_default_teardown_gives_the_largest_interrupt_exit_code_when_every_reason_has_one():
+    """Effect's ``Runtime.defaultTeardown`` example "Distinguishing completion from external
+    interruption"."""
+    completed = cause_interrupt(1).annotate(Context.make(InterruptExitCode, 0))
+    custom = cause_interrupt(2).annotate(Context.make(InterruptExitCode, 7))
+    external = cause_interrupt(3)
+    causes = [
+        completed,
+        completed + custom,
+        custom + completed,
+        completed + external,
+        external + completed,
+    ]
+    assert [fx.default_teardown(fail_cause(c)) for c in causes] == [0, 7, 7, 130, 130]
 
 
 def test_a_custom_teardown_sets_the_status(tmp_path: Path):

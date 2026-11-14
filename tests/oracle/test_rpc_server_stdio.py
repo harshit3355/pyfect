@@ -19,6 +19,7 @@ from pyfect.rpc import RpcGroup, make
 from pyfect.rpc import serialization as rs
 from pyfect.rpc import server as rpc_server
 from pyfect.rpc.message import Ack, ClientEnd, Eof, Interrupt, Request, ResponseExit
+from pyfect.run import default_teardown
 from pyfect.stdio import layer_test
 
 
@@ -84,10 +85,11 @@ def test_should_drain_the_response_when_stdin_ends_during_request_startup():
     server = yield from _server(Wait, handlers, stdio).launch().fork_scoped()
     yield from started.wait()
     yield from finish.succeed(None)
-    yield from server.await_exit()
+    exit = yield from server.await_exit()
     assert _messages(output) == [
         {"_tag": "Exit", "requestId": 1, "exit": {"_tag": "Success", "value": "done"}}
     ]
+    assert default_teardown(exit) == 0
 
 
 @testing.effect
@@ -109,7 +111,33 @@ def test_should_shut_down_when_stdin_ends_after_the_stdio_response_is_written():
         {"_tag": "Exit", "requestId": 1, "exit": {"_tag": "Success", "value": "world"}}
     ]
     yield from close_stdin.succeed(None)
-    yield from server.await_exit()
+    assert default_teardown((yield from server.await_exit())) == 0
+
+
+@testing.effect
+def test_should_exit_successfully_when_stdin_is_empty():
+    """RpcServer / should exit successfully when stdin is empty"""
+    stdio = layer_test(stdin=stream.empty)
+    server = yield from _server(Empty, None, stdio).launch().fork_scoped()
+    assert default_teardown((yield from server.await_exit())) == 0
+
+
+@testing.effect
+def test_should_shut_down_unsuccessfully_when_stdio_writing_defects():
+    """RpcServer / should shut down unsuccessfully when STDIO writing defects"""
+    write_started = Deferred[None]()
+
+    def stdout(*, end_on_done: bool = False) -> Any:
+        return sink.for_each(
+            lambda _: write_started.succeed(None).flat_map(lambda _: effect.die("stdout defect"))
+        )
+
+    stdio = layer_test(stdin=stream.make(b'{"_tag":"Ping"}\n'), stdout=stdout)
+    server = yield from _server(Empty, None, stdio).launch().fork_scoped()
+    yield from write_started.wait()
+    terminated = yield from server.await_exit().timeout("1 second").fork()
+    yield from testing.adjust("1 second")
+    assert default_teardown((yield from terminated.join())) != 0
 
 
 @testing.effect

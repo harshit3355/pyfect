@@ -22,6 +22,9 @@
 - `for_each(..., discard=True)`, Effect's `forEach` `discard` option: runs every item and
   keeps no results.
 - `FlagDescriptor.repeatable` in `cli.completions`, Effect's `repeatable` descriptor field.
+- `run.InterruptExitCode`, Effect's `Runtime.InterruptExitCode`: an interruption annotated with
+  it ends `run_main` with that code. `default_teardown` gives the largest one when every
+  interruption carries one, and 130 otherwise (#10475).
 
 ### Fixed
 
@@ -209,6 +212,10 @@
   above 1, `key_value_pair`) stay offered after first use in Bash, Zsh, Fish and PowerShell
   (#10428); subcommand names containing `:` complete in Bash and are escaped for Zsh's
   `_describe` (#10417).
+- The RPC stdio server exits 0 under `run_main` once stdin closes and its responses drain, as in
+  Effect 4.1.4 (#10475); it ended with a plain interruption, which `default_teardown` reports
+  as 130. A failed write still exits non-zero, and an output already interrupted no longer
+  interrupts the server again.
 
 ### Performance
 
