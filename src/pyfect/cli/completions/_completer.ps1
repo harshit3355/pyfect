@@ -42,7 +42,7 @@
   $addFlags = {
     param([string]$typed)
     foreach ($flag in $context.flags) {
-      if ($used.ContainsKey($flag.name)) { continue }
+      if (-not $flag.repeatable -and $used.ContainsKey($flag.name)) { continue }
       foreach ($form in $flag.forms) {
         & $add $form 'ParameterName' $flag.description $typed ''
       }

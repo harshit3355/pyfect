@@ -4,6 +4,7 @@ script runs on Bash 3.2 and works without the bash-completion package."""
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pyfect.cli.completions._descriptor import (
@@ -164,8 +165,9 @@ def _flag_group_declarations(flags: tuple[FlagDescriptor, ...], lines: list[str]
     lines.append("    esac")
     lines.append("  done")
     lines.append('  local _filtered_flags=""')
-    for index, forms in enumerate(groups):
-        lines.append(f'  [[ -n "$_used_{index}" ]] || _filtered_flags+=" {" ".join(forms)}"')
+    for index, (flag, forms) in enumerate(zip(flags, groups, strict=True)):
+        guard = "" if flag.repeatable else f'[[ -n "$_used_{index}" ]] || '
+        lines.append(f'  {guard}_filtered_flags+=" {" ".join(forms)}"')
     lines.append("")
 
 
@@ -175,10 +177,14 @@ class _Helpers:
     paths: str
 
 
+def _choices_completion(values: Sequence[str], helpers: _Helpers) -> str:
+    quoted = " ".join(f"'{_escape(value)}'" for value in values)
+    return f'{helpers.choices} "$cur" "$_comp_word" {quoted}'
+
+
 def _value_completion(kind: FlagType | ArgumentType, helpers: _Helpers) -> str | None:
     if isinstance(kind, Choice):
-        quoted = " ".join(f"'{_escape(value)}'" for value in kind.values)
-        return f'{helpers.choices} "$cur" "$_comp_word" {quoted}'
+        return _choices_completion(kind.values, helpers)
     if isinstance(kind, PathKind):
         option = "-d" if kind.path_type == "directory" else "-f"
         return f'{helpers.paths} {option} "$cur" "$_comp_word"'
@@ -251,8 +257,10 @@ def _positionals(descriptor: CommandDescriptor, helpers: _Helpers, lines: list[s
     ]
     if not completions:
         if descriptor.subcommands:
-            names = " ".join(sub.name for sub in descriptor.subcommands)
-            lines.append(f"  COMPREPLY=( $(compgen -W '{names}' -- \"$cur\") )")
+            # Unlike ``compgen -W``, the choice helper replaces only the text after a word
+            # break such as ``:``.
+            names = [sub.name for sub in descriptor.subcommands]
+            lines.append(f"  {_choices_completion(names, helpers)}")
         return
     lines.append("  # Positional argument completions")
     lines.append("  local _position=0 _skip_next=0 _end_of_options=0")

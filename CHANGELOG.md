@@ -21,6 +21,7 @@
 - `pyfect.testing.test_clock_with(f)`, Effect's `TestClock.testClockWith`.
 - `for_each(..., discard=True)`, Effect's `forEach` `discard` option: runs every item and
   keeps no results.
+- `FlagDescriptor.repeatable` in `cli.completions`, Effect's `repeatable` descriptor field.
 
 ### Fixed
 
@@ -203,6 +204,11 @@
   does (#10066): the header was split on every comma, so `"v1,part"` never matched (200
   instead of 304) and `"v1", "part"` could. Both `If-Match` and `If-None-Match` now read the
   list whole, and a malformed list matches nothing.
+- Shell completions, as in Effect 4.1.4: a variadic argument without a positive minimum is
+  no longer marked required (#10375); repeatable flags (`at_least`, `between`, `at_most`
+  above 1, `key_value_pair`) stay offered after first use in Bash, Zsh, Fish and PowerShell
+  (#10428); subcommand names containing `:` complete in Bash and are escaped for Zsh's
+  `_describe` (#10417).
 
 ### Performance
 

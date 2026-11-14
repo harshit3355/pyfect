@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from _subclasses import subclasses
+
 from pyfect import schema as S
 from pyfect.cli import Argument, Config, Flag, command
 from pyfect.cli.completions._descriptor import Choice, PathKind, from_command
+from pyfect.cli.param import Mapped, Optional, Param, Single, Transformed, Variadic
 
 
 def test_extracts_command_name_and_description():
@@ -144,12 +147,15 @@ def test_extracts_variadic_arguments():
 
     class Test(Config):
         files = Argument.string("files").variadic(min=1)
+        defaults = Argument.string("defaults").variadic()
+        zero = Argument.string("zero").variadic(min=0)
 
     desc = from_command(command.make("test", Test))
-    assert len(desc.arguments) == 1
-    assert desc.arguments[0].name == "files"
-    assert desc.arguments[0].variadic is True
-    assert desc.arguments[0].required is True
+    assert [(a.name, a.required, a.variadic) for a in desc.arguments] == [
+        ("files", True, True),
+        ("defaults", False, True),
+        ("zero", False, True),
+    ]
 
 
 def test_extracts_optional_arguments():
@@ -257,3 +263,9 @@ def test_prefers_short_descriptions_for_subcommand_listings():
     desc = from_command(command.make("root").with_subcommands(build, test))
     assert desc.subcommands[0].description == "Build artifacts"
     assert desc.subcommands[1].description == "Run the full test suite"
+
+
+def test_the_descriptor_reads_every_kind_of_param():
+    # ``_repeatable_singles`` walks the param tree by kind; a new kind needs a case there,
+    # or completion scripts would misreport whether its flags repeat.
+    assert subclasses(Param) == {Single, Mapped, Transformed, Optional, Variadic}
