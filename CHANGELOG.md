@@ -192,6 +192,13 @@
 - A dispatcher whose `schedule_task` raises during an automatic yield makes the fiber die with
   that defect, as in Effect 4.1.4 (#10463). The exception escaped to whoever was running the
   fiber, killing the forking parent instead and leaving the child stuck.
+- Cluster workflows: a transient `PersistenceError` while a workflow starts a child workflow,
+  or while it reads a `DurableDeferred` it awaits, is retried without bound (backing off to
+  once a minute) instead of failing the workflow with a defect, as in Effect 4.1.4 (#10311,
+  #10356). Deferred reads gave up after three tries. Reads of the interrupt signal made by
+  shutdown cleanup still give up after three, so shutdown is not held by an outage, and a
+  top-level `execute` still dies at once. `tests/test_cluster_engine_or_die_sites.py` pins
+  each place the engine turns a storage failure into a defect to the one Effect has.
 
 ### Performance
 

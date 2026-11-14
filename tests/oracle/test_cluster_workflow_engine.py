@@ -1648,6 +1648,141 @@ def test_runs_an_activity_once_after_a_transient_failure_saving_its_request(ack_
     )
 
 
+@pytest.mark.parametrize("ack_lost", [False, True])
+@pytest.mark.parametrize("discard", [False, True])
+@testing.effect
+def test_runs_a_child_workflow_once_after_a_transient_failure_saving_its_request(
+    discard: bool, ack_lost: bool
+):
+    """runs a child workflow once after a transient failure ${ackLost ? "acknowledging" : "saving"} its ${discard ? "discarded " : ""}request"""  # noqa: E501
+    child = workflow.make(
+        "ChildSaveRetry/Child", payload=W.EMPTY, success=S.Number, idempotency_key=lambda _: "one"
+    )
+    parent = workflow.make(
+        "ChildSaveRetry/Parent", payload=W.EMPTY, success=S.Number, idempotency_key=lambda _: "one"
+    )
+    storage = yield from W.make_shared_storage()
+    storage_layer, state = _transient_save(
+        storage,
+        lambda envelope: envelope.envelope.address.entity_type == f"Workflow/{child.tag}",
+        ack_lost,
+    )
+    runs = [0]
+
+    def run_child() -> int:
+        runs[0] += 1
+        return 42
+
+    def run_parent(_: Any, __: Any) -> fx.Effect[Any, Any, Any]:
+        if discard:
+            return child.execute({}, discard=True).as_(0)
+        return child.execute({})
+
+    @fx.gen
+    def body():
+        engine = yield from WorkflowEngine()
+        yield from engine.register(child, lambda _, __: fx.sync(run_child))
+        yield from engine.register(parent, run_parent)
+        execution_id = yield from parent.execute({}, discard=True)
+        result = yield from poll_until(parent, execution_id, Complete)
+        assert result == Complete(Exit.succeed(0 if discard else 42))
+        child_id = yield from child.execution_id({})
+        result = yield from poll_until(child, child_id, Complete)
+        assert result == Complete(Exit.succeed(42))
+        assert runs[0] == 1
+        assert state["failures"] == 1
+        assert state["inserts"] == 1
+
+    yield from body.pipe(fx.provide(W.make_test_workflow_engine(storage_layer=storage_layer)))
+
+
+@testing.effect
+def test_recovers_an_awaited_deferred_after_a_read_outage_exceeds_the_old_retry_budget():
+    """recovers an awaited deferred after a read outage exceeds the old retry budget"""
+    gate = durable_deferred.make("DeferredReadRetry/Gate", success=S.String)
+    wf = workflow.make(
+        "DeferredReadRetry", payload=W.EMPTY, success=S.String, idempotency_key=lambda _: "one"
+    )
+    storage = yield from W.make_shared_storage()
+    reading = yield from fx.Latch.make()
+    failures = [0]
+
+    def request_id_for_primary_key(*, address: Any, tag: str, id: str) -> fx.Effect[Any, Any]:
+        def go() -> fx.Effect[Any, Any]:
+            if tag == "deferred" and id == gate.name and failures[0] < 5:
+                failures[0] += 1
+                return reading.open().and_then(
+                    fx.fail(PersistenceError(cause=RuntimeError("Connection closed")))
+                )
+            return storage.request_id_for_primary_key(address=address, tag=tag, id=id)
+
+        return fx.suspend(go)
+
+    storage_layer = W.storage_layer_of(
+        W.override_storage(storage, request_id_for_primary_key=request_id_for_primary_key)
+    )
+
+    @fx.gen
+    def body():
+        engine = yield from WorkflowEngine()
+        yield from engine.register(wf, lambda _, __: gate.wait())
+        execution_id = yield from wf.execute({}, discard=True)
+        yield from reading.wait()
+        yield from testing.adjust("1 minute")
+        yield from poll_until(wf, execution_id, Suspended)
+        yield from gate.done(
+            token=gate.token_from_execution_id(workflow=wf, execution_id=execution_id),
+            exit=Exit.succeed("opened"),
+        )
+        result = yield from poll_until(wf, execution_id, Complete)
+        assert result == Complete(Exit.succeed("opened"))
+
+    yield from body.pipe(fx.provide(W.make_test_workflow_engine(storage_layer=storage_layer)))
+
+
+@testing.effect
+def test_shuts_down_during_a_deferred_read_outage():
+    """shuts down during a deferred read outage"""
+    gate = durable_deferred.make("DeferredReadShutdown/Gate")
+    wf = workflow.make("DeferredReadShutdown", payload=W.EMPTY, idempotency_key=lambda _: "one")
+    storage = yield from W.make_shared_storage()
+    reading = yield from fx.Latch.make()
+    state = {"awaiting_gate": False, "recovered": False}
+
+    # Once the gate is awaited, its reads and the interrupt signal reads made
+    # by shutdown cleanup fail until storage recovers.
+    def request_id_for_primary_key(*, address: Any, tag: str, id: str) -> fx.Effect[Any, Any]:
+        def go() -> fx.Effect[Any, Any]:
+            if tag == "deferred" and id == gate.name:
+                state["awaiting_gate"] = True
+            if tag == "deferred" and state["awaiting_gate"] and not state["recovered"]:
+                return reading.open().and_then(
+                    fx.fail(PersistenceError(cause=RuntimeError("Connection closed")))
+                )
+            return storage.request_id_for_primary_key(address=address, tag=tag, id=id)
+
+        return fx.suspend(go)
+
+    storage_layer = W.storage_layer_of(
+        W.override_storage(storage, request_id_for_primary_key=request_id_for_primary_key)
+    )
+    scope = CloseableScope()
+    context = yield from (
+        wf.to_layer(lambda _, __: gate.wait())
+        .pipe(fx.layer.provide_merge(W.make_test_workflow_engine(storage_layer=storage_layer)))
+        .build_with_scope(scope)
+    )
+    yield from wf.execute({}, discard=True).pipe(fx.provide(context))
+    yield from reading.wait()
+    shutdown = yield from scope.close(Exit.void).fork(start_immediately=True)
+    yield from testing.adjust("2 seconds")
+    closed_during_outage = shutdown.poll_unsafe() is not None
+    state["recovered"] = True
+    yield from testing.adjust("1 minute")
+    yield from shutdown.join()
+    assert closed_during_outage, "shutdown must finish while deferred reads still fail"
+
+
 _RetrySignal = durable_deferred.make("RetrySignal")
 
 
