@@ -27,6 +27,11 @@
 - `encoding.xml.decode` and `decode_string` take `positions=True`, which sets the one-based
   `line` and `column` of each start tag's `<` on its `StartElement`, counted as for
   `XmlError`, as in Effect 4.1.4 (#10406).
+- `representation.from_json_schema_document` and `from_json_schema_multi_document` take an
+  experimental `close_objects` option: objects with declared properties are closed when every
+  object schema they combine omits `additionalProperties` (after `allOf` is merged, so
+  inherited properties stay valid), and decoding strips other keys, or rejects them under
+  `on_excess_property="error"`, as in Effect 4.1.4 (#10521).
 
 ### Fixed
 
@@ -228,6 +233,19 @@
   members matches no string. `ast._template_literal.PART_KINDS` lists the part kinds, and
   `tests/test_template_literal_parts.py` runs one part of each kind through matching, the
   parser, the strategy, the JSON Schema pattern and representations.
+- `representation.from_json_schema_document` and `from_json_schema_multi_document` drop a
+  `contentSchema` annotation holding a `$ref` or `$dynamicRef`, which pointed at a definition
+  the annotation doesn't carry; reference-like data under `const`, `enum`, `examples` or
+  property names is kept, as in Effect 4.1.4 (#10426). One walk over a schema's subschema
+  positions (`json_schema._model.subschemas`), built from the keyword classification, serves
+  this check and the importer's pointer walk.
+- The JSON Schema importer intersects unions whose alternatives differ by a required literal
+  property (referenced objects included), accepts a typed `additionalProperties` that covers
+  the declared properties, keeps a union's `oneOf` mode when it resolves a reference inside
+  it, keeps examples on the whole intersection instead of each distributed branch, imports a
+  recursive definition intersected with itself, and rejects other recursive intersections
+  with an error instead of failing, as in Effect 4.1.4 (#10521). A recursive definition that
+  can't be resolved fails with "Cannot resolve recursive definition ... during normalization."
 
 ### Performance
 

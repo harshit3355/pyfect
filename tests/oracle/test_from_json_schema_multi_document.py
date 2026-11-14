@@ -268,10 +268,10 @@ def test_schema_representation_from_json_schema_multi_document_preserves_an_on_e
     )
 
 
-def test_schema_representation_from_json_schema_multi_document_preserves_content_schema_as_an_annotation_without_traversing_it() -> (
+def test_schema_representation_from_json_schema_multi_document_omits_content_schema_when_it_contains_a_reference() -> (
     None
 ):
-    "SchemaRepresentation.fromJsonSchemaMultiDocument / preserves contentSchema as an annotation without traversing it"
+    "SchemaRepresentation.fromJsonSchemaMultiDocument / omits contentSchema when it contains a reference"
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
@@ -299,7 +299,7 @@ def test_schema_representation_from_json_schema_multi_document_preserves_content
         {
             "codes": [
                 make_code(
-                    'Schema.String.annotate({ "contentMediaType": "application/json", "contentSchema": { "$ref": "#/$defs/Payload" } })',
+                    'Schema.String.annotate({ "contentMediaType": "application/json" })',
                     "string",
                 )
             ]

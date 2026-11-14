@@ -126,6 +126,9 @@ class ObjectProperty:
 class ObjectScope:
     properties: Mapping[str, ObjectProperty]
     has_properties: bool
+    implicit_additional_properties: bool
+    """The schema object omits ``additionalProperties``: ``close_objects`` may
+    close it."""
     patterns: tuple[ObjectPattern, ...]
     additional_properties: Node
 
@@ -197,3 +200,21 @@ def annotate(node: Node, source: ImportedAnnotations) -> Node:
         annotations=merge_annotations(node.annotations, source.annotations),
         custom_annotations=merge_annotations(node.custom_annotations, source.custom_annotations),
     )
+
+
+def examples_of(node: ImportedAnnotations) -> object | None:
+    return None if node.annotations is None else node.annotations.get("examples")
+
+
+def with_examples(node: Node, examples: object | None) -> Node:
+    """``node`` with ``examples`` over its own (unchanged for ``None``)."""
+    if examples is None:
+        return node
+    return annotate(node, ImportedAnnotations(annotations={"examples": examples}))
+
+
+def without_examples(node: Node) -> Node:
+    if node.annotations is None or "examples" not in node.annotations:
+        return node
+    rest = {key: value for key, value in node.annotations.items() if key != "examples"}
+    return replace(node, annotations=rest or None)

@@ -28,6 +28,10 @@ class Definitions(Protocol):
 
     def has_choices_in(self, reference: N.Reference) -> bool: ...
 
+    def is_translating(self, key: str) -> bool: ...
+
+    def intersect_same_reference(self, reference: N.Reference, path: Path) -> None: ...
+
 
 def _same_literal(left: object, right: object) -> bool:
     """JavaScript's ``===`` over JSON primitives: ``True`` is not ``1``."""
@@ -146,14 +150,41 @@ def _make_union(source: N.Union, types: tuple[N.Node, ...]) -> N.Node:
     return replace(source, types=types)
 
 
-def _is_type_partition(union: N.Union) -> bool:
-    mask = 0
-    for t in union.types:
-        member = root_mask(t)
-        if mask & member:
-            return False
-        mask |= member
-    return True
+def _is_covered_by(type: N.Node, covering: N.Node) -> bool:  # noqa: PLR0911
+    """Whether a catch-all ``covering`` accepts every value of ``type``
+    without narrowing it, so it may also validate a declared property."""
+    if isinstance(covering, N.Unknown) or isinstance(type, N.Never) or type is covering:
+        return True
+    if isinstance(type, N.Union):
+        return all(_is_covered_by(member, covering) for member in type.types)
+    if isinstance(covering, N.Reference):
+        return isinstance(type, N.Reference) and type.ref == covering.ref
+    if isinstance(covering, N.Union):
+        return (
+            covering.mode != "one_of"
+            and not covering.checks
+            and any(_is_covered_by(type, member) for member in covering.types)
+        )
+    if not isinstance(covering, (N.Null, N.String, N.Number, N.Boolean)):
+        return False
+    # Any check but ``isFinite`` narrows the catch-all, a FilterGroup included.
+    if any(
+        isinstance(check, N.FilterGroup) or _representation_id(check) != "effect/schema/isFinite"
+        for check in covering.checks
+    ):
+        return False
+    return type.__class__ is covering.__class__ or (
+        isinstance(type, N.Literal) and bool(root_mask(type) & root_mask(covering))
+    )
+
+
+type _OperandKey = str | int
+"""A reference's definition, or any other node's identity: annotating a
+reference copies it without changing what it stands for."""
+
+
+def _operand_key(node: N.Node) -> _OperandKey:
+    return node.ref if isinstance(node, N.Reference) else id(node)
 
 
 def _annotated(node: N.ImportedAnnotations) -> bool:
@@ -163,8 +194,24 @@ def _annotated(node: N.ImportedAnnotations) -> bool:
 class Intersector:
     def __init__(self, definitions: Definitions) -> None:
         self.definitions = definitions
+        self._active: dict[_OperandKey, set[_OperandKey]] = {}
+        """The operand pairs being intersected: meeting one again is a
+        recursive intersection that would never finish."""
 
-    def intersect(self, left: N.Node, right: N.Node, path: Path) -> N.Node:  # noqa: PLR0911
+    def intersect(self, left: N.Node, right: N.Node, path: Path) -> N.Node:
+        left_key, right_key = _operand_key(left), _operand_key(right)
+        active = self._active.setdefault(left_key, set())
+        if right_key in active:
+            raise error_with_path("Cannot normalize this recursive intersection.", path)
+        active.add(right_key)
+        try:
+            return self._intersect_nodes(left, right, path)
+        finally:
+            active.discard(right_key)
+            if not active:
+                del self._active[left_key]
+
+    def _intersect_nodes(self, left: N.Node, right: N.Node, path: Path) -> N.Node:  # noqa: PLR0911
         if isinstance(left, N.Never):
             return left
         if isinstance(right, N.Never):
@@ -172,6 +219,13 @@ class Intersector:
         if isinstance(left, N.Unknown):
             return self._both(right, left, right)
         if isinstance(right, N.Unknown):
+            return self._both(left, left, right)
+        if (
+            isinstance(left, N.Reference)
+            and isinstance(right, N.Reference)
+            and left.ref == right.ref
+        ):
+            self.definitions.intersect_same_reference(left, path)
             return self._both(left, left, right)
         if isinstance(left, N.Reference):
             # An unannotated reference resolves first: an annotated empty
@@ -185,6 +239,18 @@ class Intersector:
         if isinstance(right, N.Reference):
             resolved = self.definitions.resolve_reference(right, path)
             return N.annotate(self.intersect(left, resolved, path), right)
+        if isinstance(left, N.Union) or isinstance(right, N.Union):
+            return self._with_union(left, right, path)
+        return self._plain(left, right, path)
+
+    def _with_union(self, left: N.Node, right: N.Node, path: Path) -> N.Node:
+        # Examples describe the whole intersection, not each distributed branch.
+        examples = N.examples_of(right)
+        if examples is None:
+            examples = N.examples_of(left)
+        if examples is not None:
+            out = self._intersect_nodes(N.without_examples(left), N.without_examples(right), path)
+            return N.with_examples(out, examples)
         if isinstance(left, N.Union):
             if isinstance(right, N.Union):
                 return self._unions(left, right, path)
@@ -306,7 +372,13 @@ class Intersector:
             has_finite_key_domain |= isinstance(additional, N.Never) and not scope.patterns
             requires_finite_key_domain |= isinstance(additional, N.Never) or (
                 not isinstance(additional, N.Unknown)
-                and (scope.has_properties or bool(scope.patterns))
+                and (
+                    bool(scope.patterns)
+                    or any(
+                        p.type is not None and not _is_covered_by(p.type, additional)
+                        for p in scope.properties.values()
+                    )
+                )
             )
         closed_pattern = (
             scopes[0].patterns[0]
@@ -427,8 +499,7 @@ class Intersector:
     def _union_with_type(
         self, union: N.Union, type: N.Node, path: Path, *, union_on_left: bool
     ) -> N.Node:
-        mask = root_mask(type)
-        members = [(i, m) for i, m in enumerate(union.types) if root_mask(m) & mask]
+        members = [(i, m) for i, m in enumerate(union.types) if not self._are_disjoint(m, type)]
         if len(members) > 1 and self.has_choices(type):
             _unsupported(path)
 
@@ -441,6 +512,13 @@ class Intersector:
         if len(members) == 1 and not union.checks:
             index, member = members[0]
             return member_with(index, N.annotate(member, union))
+        if len(members) > 1 and isinstance(type, N.Reference):
+            # Resolving the reference here keeps the union's matching mode.
+            resolved = N.annotate(self.definitions.resolve_reference(type, path), type)
+            out = self._union_with_type(
+                union, N.without_examples(resolved), path, union_on_left=union_on_left
+            )
+            return N.with_examples(out, N.examples_of(resolved))
         out = (member_with(i, m) for i, m in members)
         return _make_union(union, tuple(t for t in out if not isinstance(t, N.Never)))
 
@@ -448,8 +526,7 @@ class Intersector:
         self, partition: N.Union, other: N.Union, path: Path, *, partition_on_left: bool
     ) -> N.Node:
         for type in other.types:
-            mask = root_mask(type)
-            overlapping = [m for m in partition.types if root_mask(m) & mask]
+            overlapping = [m for m in partition.types if not self._are_disjoint(m, type)]
             if len(overlapping) > 1 and self.has_choices(type):
                 _unsupported(path)
         types: list[N.Node] = []
@@ -465,8 +542,41 @@ class Intersector:
         literals = self._literal_unions(left, right, path)
         if literals is not None:
             return literals
-        if _is_type_partition(left):
+        if self._is_disjoint_union(left):
             return self._partition(left, right, path, partition_on_left=True)
-        if _is_type_partition(right):
+        if self._is_disjoint_union(right):
             return self._partition(right, left, path, partition_on_left=False)
         _unsupported(path)
+
+    def _are_disjoint(self, left: N.Node, right: N.Node) -> bool:
+        """Proves that no value matches both, without intersecting (and
+        possibly expanding) them: by root type, or by a required property
+        whose literals differ."""
+        if not root_mask(left) & root_mask(right):
+            return True
+        left, right = self._resolved(left), self._resolved(right)
+        if not root_mask(left) & root_mask(right):
+            return True
+        if not isinstance(left, N.Objects) or not isinstance(right, N.Objects):
+            return False
+        required = {p.name: p.type for p in right.property_signatures if not p.is_optional}
+        for property in left.property_signatures:
+            value = None if property.is_optional else _literal_key(property.type)
+            other = required.get(property.name)
+            other_value = None if value is None or other is None else _literal_key(other)
+            if other_value is not None and value != other_value:
+                return True
+        return False
+
+    def _resolved(self, node: N.Node) -> N.Node:
+        if isinstance(node, N.Reference) and not self.definitions.is_translating(node.ref):
+            return self.definitions.resolve_reference(node, node.path)
+        return node
+
+    def _is_disjoint_union(self, union: N.Union) -> bool:
+        types = union.types
+        return all(
+            self._are_disjoint(types[index], types[other])
+            for index in range(len(types))
+            for other in range(index)
+        )
