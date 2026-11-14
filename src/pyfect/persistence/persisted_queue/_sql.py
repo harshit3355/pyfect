@@ -184,7 +184,7 @@ class _SqlStore:
         dialect = self._dialect
 
         def send() -> Effect[object, SqlError]:
-            visible_at = dialect.now if delay is None else dialect.delayed_visible_at(delay)
+            visible_at = dialect.now if delay is None else dialect.visible_after(delay)
             return self._offer(store_text(id), name, stringify(element), visible_at)
 
         def nudge() -> None:

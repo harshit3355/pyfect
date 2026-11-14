@@ -12,7 +12,7 @@ titles keep the stores' lock refreshes on the TestClock (Effect's
 from __future__ import annotations
 
 from collections.abc import Generator
-from typing import Any, Literal
+from typing import Any, Literal, Never
 
 import pytest
 
@@ -38,11 +38,28 @@ def now_millis() -> Generator[Any, Any, int]:
 
 
 def make_queue(
-    table_name: str, poll_interval: DurationInput = "10 millis"
+    table_name: str,
+    poll_interval: DurationInput = "10 millis",
+    retry_schedule: schedule.Schedule[Any, Any, Any, Any] | None = None,
 ) -> Generator[Any, Any, pq.PersistedQueue[str]]:
     store = yield from pq.make_store_sql(table_name=table_name, poll_interval=poll_interval)
     factory = yield from pq.make_factory.pipe(fx.provide_service(pq.PersistedQueueStore, store))
-    return (yield from factory.make(name=table_name, schema=S.String))
+    if retry_schedule is None:
+        return (yield from factory.make(name=table_name, schema=S.String))
+    return (
+        yield from factory.make(name=table_name, schema=S.String, retry_schedule=retry_schedule)
+    )
+
+
+def await_mid_second() -> Generator[Any, Any]:
+    """Wait until mid-way through a wall-clock second, so a whole-second
+    database clock drops about half a second while a slow write still lands
+    in the same second."""
+    while True:
+        millis = (yield from now_millis()) % 1000
+        if 500 <= millis < 600:
+            return
+        yield from fx.sleep("10 millis")
 
 
 def make_ownership_queue(table_name: str) -> Generator[Any, Any, pq.PersistedQueue[str]]:
@@ -84,20 +101,34 @@ class PersistedQueueSqlSuite:
 
         def body():
             queue = yield from make_queue("effect_queue_delay_boundary")
-
-            # offer mid-way through a wall-clock second, so a whole-second
-            # database clock drops about half a second from the start of the
-            # delay while a slow insert still lands in the same second
-            while True:
-                millis = (yield from now_millis()) % 1000
-                if 500 <= millis < 600:
-                    break
-                yield from fx.sleep("10 millis")
+            yield from await_mid_second()
 
             offered_at = yield from now_millis()
             yield from queue.offer("delayed", delay="1 second")
             yield from queue.take(_succeed)
             assert (yield from now_millis()) - offered_at >= 1000 - CLOCK_TOLERANCE
+
+        self.run(body)
+
+    def test_never_retries_a_failed_job_early_at_a_second_boundary(self) -> None:
+        """PersistedQueue SQL delays / never retries a failed job early at a second boundary"""
+
+        def body():
+            queue = yield from make_queue(
+                "effect_queue_retry_boundary", "10 millis", schedule.spaced("1 second")
+            )
+            yield from queue.offer("job")
+
+            # time both handlers, leaving out the acknowledgement writes
+            def fail_mid_second(_: str, __: pq.Metadata) -> fx.Effect[Never, int]:
+                return fx.gen(await_mid_second).and_then(fx.gen(now_millis).flat_map(fx.fail))
+
+            failed_at = yield from queue.take(fail_mid_second).catch_if(
+                lambda e: isinstance(e, int), fx.succeed
+            )
+            assert isinstance(failed_at, int)
+            retried_at = yield from queue.take(lambda _, __: fx.gen(now_millis))
+            assert retried_at - failed_at >= 1000 - CLOCK_TOLERANCE
 
         self.run(body)
 

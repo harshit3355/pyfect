@@ -91,20 +91,25 @@ class Dialect:
     def seconds_ago(self, duration: Duration) -> Fragment:
         return self.seconds_offset(-max(math.ceil(duration.to_seconds()), 0))
 
-    def seconds_from_now(self, duration: Duration) -> Fragment:
-        return self.seconds_offset(max(math.ceil(duration.to_seconds()), 0))
-
-    def delayed_visible_at(self, delay: Duration) -> Fragment:
-        """When a delayed offer becomes visible, never before ``delay``
-        elapses: PostgreSQL reads ``clock_timestamp()`` (``NOW()`` is fixed
-        at the transaction's start); MySQL and SQLite clocks drop the
-        current second's fraction, so they get a whole second more."""
+    def sqlite_offset(self, seconds: int) -> Fragment:
+        """SQLite's now plus ``seconds``, keeping milliseconds:
+        ``CURRENT_TIMESTAMP`` drops the current second's fraction, so
+        ``visible_at`` deadlines and the readiness check share this clock."""
         sql = self.sql
-        seconds = math.ceil(delay.to_seconds())
+        return sql("strftime('%Y-%m-%d %H:%M:%f', 'now', '{} seconds')", sql.unsafe(str(seconds)))
+
+    def visible_after(self, delay: Duration) -> Fragment:
+        """When a delayed offer or a retry becomes visible, never before
+        ``delay`` elapses: PostgreSQL reads ``clock_timestamp()`` (``NOW()``
+        is fixed at the transaction's start); MySQL stores whole seconds and
+        its ``NOW()`` drops the current fraction, so it gets a second more."""
+        sql = self.sql
+        seconds = max(math.ceil(delay.to_seconds()), 0)
         return sql.on_dialect_or_else(
             pg=lambda: sql("clock_timestamp() + INTERVAL '{} seconds'", sql.unsafe(str(seconds))),
+            mysql=lambda: self.seconds_offset(seconds + 1),
             mssql=lambda: self.seconds_offset(seconds),
-            or_else=lambda: self.seconds_offset(seconds + 1),
+            or_else=lambda: self.sqlite_offset(seconds),
         )
 
 
@@ -284,11 +289,12 @@ def poll_statement(dialect: Dialect, table_name: str, expires_at: Fragment) -> P
             "UPDATE {table} SET acquired_at = {now}, acquired_by = {lock}, "
             "attempts = attempts + 1 WHERE sequence IN (SELECT sequence FROM {table} "
             "WHERE queue_name = {name} AND state = 'pending' AND attempts < {max_attempts} "
-            "AND visible_at <= {now} AND (acquired_at IS NULL OR acquired_at < {expires_at}) "
+            "AND visible_at <= {ready} AND (acquired_at IS NULL OR acquired_at < {expires_at}) "
             "ORDER BY visible_at ASC, sequence ASC LIMIT {size}) "
             "RETURNING sequence, id, element, attempts",
             table=table,
             now=now,
+            ready=dialect.sqlite_offset(0),
             lock=lock,
             name=name,
             max_attempts=max_attempts,
@@ -433,7 +439,7 @@ class Settlements:
             sql(
                 "updated_at = {}, visible_at = {}, last_failure = {}",
                 self._dialect.now,
-                self._dialect.seconds_from_now(delay),
+                self._dialect.visible_after(delay),
                 cause.pretty(),
             ),
         )

@@ -202,8 +202,6 @@ class PersistedQueueSuite:
             queue = yield from pq.make(
                 name="test-queue-retry-schedule",
                 schema=ITEM,
-                # MySQL and SQLite truncate retry timestamps to whole seconds:
-                # leave room for that before the real-time check below.
                 retry_schedule=schedule.spaced("2 seconds"),
             )
             yield from queue.offer({"n": 42})

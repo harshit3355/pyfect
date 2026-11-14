@@ -213,6 +213,10 @@
   than `limit` and `reset_after` read short. Fixed in the memory and Redis stores, as in
   Effect 4.1.4 (#10390). A test replays random call sequences on both stores and compares
   them, so the Lua script and the memory store can't drift apart again.
+- SQL `PersistedQueue`: a failed job is retried no earlier than its retry schedule's delay on
+  SQLite and MySQL (it could come up to a second early), and a delayed offer on SQLite no
+  longer waits a second more than its delay. SQLite keeps `visible_at` deadlines and the
+  readiness check on one millisecond clock, as in Effect 4.1.4 (#10318).
 
 ### Performance
 
