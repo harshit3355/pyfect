@@ -215,6 +215,33 @@ def test_text_only_user_messages():
     ]
 
 
+@pytest.mark.parametrize(
+    ("model", "role"),
+    [
+        ("o3", "developer"),
+        ("olmo-2", "system"),
+        ("openai/gpt-oss-120b", "system"),
+        ("openai/o3", "system"),
+    ],
+    ids=[
+        "sends the system prompt as a developer message for o3",
+        "sends the system prompt as a system message for olmo-2",
+        "sends the system prompt as a system message for openai/gpt-oss-120b",
+        "sends the system prompt as a system message for openai/o3",
+    ],
+)
+@testing.effect
+def test_system_prompt_role(model: str, role: str):
+    """generateText / sends the system prompt as a ${role} message for ${model}"""
+    mock = mock_json(completion())
+    prompt = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    yield from _provided(lm.generate_text(prompt), mock, model)
+    assert mock.bodies[0]["messages"][0] == {"role": role, "content": "Be brief."}
+
+
 @testing.effect
 def test_invalid_params_return_mode():
     """generateText / routes invalid tool call params through failureMode: return without failing the effect"""  # noqa: E501
