@@ -194,6 +194,9 @@
   fiber, killing the forking parent instead and leaving the child stuck.
 - `headers.from_input` joins repeated names in `(name, value)` pairs with `", "`, as Effect
   4.1.4 does (#10450); it kept only the last value.
+- A server request with no body streams as empty, as in Effect 4.1.4 (#10506). Its `stream`
+  failed with "can not create stream from empty body", which included every bodyless request
+  the live server received.
 
 ### Performance
 

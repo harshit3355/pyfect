@@ -17,7 +17,12 @@ from pyfect.http.incoming_message import MaxBodySize
 from pyfect.http.server_error import RequestParseError
 from pyfect.http.server_request import HttpServerRequest, ServerRequest, from_client_request
 from pyfect.http.web import WebRequest, WebResponse
-from pyfect.http.web_handler import WebHandler, from_web_handler, to_web_handler
+from pyfect.http.web_handler import (
+    WebHandler,
+    from_web_handler,
+    request_from_web,
+    to_web_handler,
+)
 
 PAYLOAD = "hello"
 
@@ -45,6 +50,12 @@ def _from_client() -> ServerRequest:
         .set_header("x-test", "headers-only")
         .body_stream(stream.succeed(PAYLOAD.encode()), content_type="text/plain")
     )
+
+
+def test_from_web_stream_is_empty_when_the_request_has_no_body() -> None:
+    """fromWeb stream is empty when the request has no body"""
+    web = WebRequest("http://localhost/upload", method="PUT", headers={"content-length": "0"})
+    assert fx.run_sync(request_from_web(web).stream.run_collect().or_die()) == []
 
 
 def test_from_client_request_fails_buffered_reads_over_max_body_size() -> None:
@@ -136,3 +147,19 @@ def test_returns_413_when_the_body_is_longer_than_its_content_length(
 ) -> None:
     """MaxBodySize via ${accessor} returns 413 when the body is longer than its content-length"""
     assert _post(_handler(accessor), _stalled(["12345"]), {"content-length": "4"}) == 413
+
+
+def _requests_with_body(body: bytes | None) -> list[ServerRequest]:
+    client = client_request.put("http://localhost/upload")
+    return [
+        request_from_web(WebRequest("http://localhost/upload", method="PUT", body=body)),
+        from_client_request(client if body is None else client.body_bytes(body)),
+    ]
+
+
+@pytest.mark.parametrize("body", [None, b"", PAYLOAD.encode()])
+def test_a_streamed_body_reads_as_the_whole_body(body: bytes | None) -> None:
+    for request in _requests_with_body(body):
+        chunks = fx.run_sync(request.stream.run_collect().or_die())
+        whole = fx.run_sync(request.bytes_.or_die())
+        assert b"".join(chunks) == whole == (body or b"")

@@ -347,9 +347,7 @@ class _SharedBody:
         if self._bytes is not None:
             return _stream_of(self._bytes)
         if self._open is None:
-            return fail_stream(
-                request_parse_error(request, "can not create stream from empty body")
-            )
+            return empty_stream
         opened = self._open
         return opened().map_error(lambda cause: request_parse_error(request, None, cause))
 
