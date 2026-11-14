@@ -246,7 +246,8 @@ def test_non_empty_string_plus_string():
     SchemaAsserts(S.TemplateLiteral(S.NonEmptyString, S.String)).decoding().succeed("a")
 
 
-def test_rejects_checks_on_literal_enum_template_literal_and_union_parts():
+# Named after the Effect 4.1.2 title; the docstring has the one Effect renamed it to.
+def test_rejects_checks_on_literal_template_literal_and_union_parts():
     """TemplateLiteral / rejects checks on Literal, Enum, TemplateLiteral, and Union parts"""
     check: S.Filter[object] = S.make_filter(lambda _: True)
     with pytest.raises(ValueError, match="Invalid TemplateLiteral part Literal"):

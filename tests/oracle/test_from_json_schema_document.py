@@ -2617,9 +2617,8 @@ def test_from_json_schema_document_all_of_intersects_type_partitions_with_hetero
         assert Exit.is_failure(decoding.run(input))
 
 
-def test_from_json_schema_document_all_of_rejects_union_intersections_without_a_proven_disjoint_partition() -> (
-    None
-):
+# Named after the Effect 4.1.2 title; the docstring has the one Effect renamed it to.
+def test_rejects_intersections_requiring_a_cartesian_product() -> None:
     "fromJsonSchemaDocument / allOf / rejects union intersections without a proven disjoint partition"
     throws(
         lambda: to_schema_from_json_schema_document(
