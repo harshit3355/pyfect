@@ -4,7 +4,7 @@ A handler's progress can be held up on its way to the client: queued behind a wr
 client that stopped reading, or sent by a fiber that outlives the request. Effect drops it
 once the request is over, and so does pyfect: a progress notification is a ``Progress``
 carrying its request's ``Liveness``; none is sent once its request is answered, and the
-stdio and RPC transports, which hold messages back for a slow client, ask ``dropped`` just
+stdio, RPC and HTTP transports, which hold messages back for a slow client, ask ``dropped`` just
 before writing one. Other notifications are always written.
 """
 
