@@ -10,6 +10,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
+import pytest
+
 import pyfect as fx
 from pyfect import reactivity, testing
 from pyfect._core import _Locally
@@ -39,6 +41,14 @@ def _reasons(cause: Cause[Any]) -> list[tuple[str, object]]:
     return out
 
 
+def _assert_ended(error: object) -> None:
+    assert isinstance(error, SqlError)
+    assert (type(error.reason).__name__, error.reason.message) == (
+        "UnknownError",
+        "SqlClient: the transaction has already ended",
+    )
+
+
 def _assert_typed_failure(ex: fx.Exit[Any, Any], error: object) -> None:
     assert isinstance(ex, fx.Failure)
     assert not ex.cause.has_dies, ex.cause.pretty()
@@ -59,6 +69,7 @@ def _make_harness(
     span_attributes: tuple[tuple[str, object], ...] = (),
     acquire: fx.Effect[None] | None = None,
     during_begin: fx.Effect[None] | None = None,
+    during_rollback_savepoint: fx.Effect[None] | None = None,
     begin: SqlError | None = None,
     commit: Callable[[], fx.Effect[None, SqlError]] | None = None,
     on_commit_failure: Callable[[], fx.Effect[None, SqlError]] | None = None,
@@ -111,7 +122,7 @@ def _make_harness(
             if rollback_savepoint is not None:
                 return fx.fail(rollback_savepoint)
             if id_ in savepoints:
-                return fx.void
+                return during_rollback_savepoint or fx.void
             return fx.fail(_sql_error(f"cannot rollback to savepoint {id_} - it does not exist"))
 
         return record(f"rollbackSavepoint({id_})").flat_map(after)
@@ -204,9 +215,12 @@ class _Client:
 def _make_client(
     *,
     acquire: fx.Effect[None, Any, fx.Scope] | None = None,
+    begin: Callable[[Connection, str | None], fx.Effect[None, SqlError]] | None = None,
+    borrow: bool = False,
     commit: fx.Effect[None, SqlError] | None = None,
     prepare_transaction_controls: bool = False,
     release: fx.Effect[None] | None = None,
+    release_savepoint: bool = False,
 ) -> fx.Effect[_Client]:
     calls: list[str] = []
 
@@ -223,11 +237,17 @@ def _make_client(
     def recorded_commit(_conn: Connection) -> fx.Effect[None, SqlError]:
         return record("COMMIT").and_then(commit or fx.void)
 
+    def borrower[A, E, R](f: Callable[[Connection], fx.Effect[A, E, R]]) -> fx.Effect[A, E, R]:
+        return record("borrow").and_then(f(cast("Connection", connection)))
+
     built = sql_client.make(
         driver="test",
         acquirer=acquirer,
         compiler=st.make_compiler_sqlite(),
         prepare_transaction_controls=prepare_transaction_controls,
+        begin=begin,
+        release_savepoint=(lambda name: f"RELEASE SAVEPOINT {name}") if release_savepoint else None,
+        borrower=borrower if borrow else None,
         commit="COMMIT" if commit is None else recorded_commit,
     )
 
@@ -278,6 +298,187 @@ def test_interrupts_a_queued_transaction_before_the_connection_is_released():
         "interruption must complete while the holder still owns the connection"
     )
     assert client.calls == ["BEGIN", "COMMIT", "release", "BEGIN", "reused", "COMMIT", "release"]
+
+
+@pytest.mark.parametrize("borrow", [False, True], ids=["borrow: false", "borrow: true"])
+@testing.effect
+def test_fails_statements_from_a_fiber_that_outlives_its_transaction(borrow: bool):
+    """fails statements from a fiber that outlives its transaction (borrow: %s)"""
+    client = yield from _make_client(borrow=borrow)
+    sql = client.sql
+    go = fx.Deferred[None]()
+    stale = yield from sql.with_transaction(
+        go.wait()
+        .and_then(
+            fx.all(
+                sql("SELECT 'stale'").flip(),
+                sql.with_transaction(sql("SELECT 'stale nested'")).flip(),
+            )
+        )
+        .fork_daemon()
+    )
+    yield from go.succeed(None)
+    statement, nested = yield from stale.join()
+    _assert_ended(statement)
+    _assert_ended(nested)
+
+    # Ending a savepoint ends it for its fibers while the outer transaction is open.
+    go_savepoint = fx.Deferred[None]()
+
+    def outer():
+        fiber = yield from sql.with_transaction(
+            go_savepoint.wait().and_then(sql("SELECT 'stale savepoint'").flip()).fork_daemon()
+        )
+        yield from go_savepoint.succeed(None)
+        return (yield from fiber.join())
+
+    _assert_ended((yield from sql.with_transaction(fx.gen(outer))))
+
+    assert client.calls == [
+        "BEGIN",
+        "COMMIT",
+        "release",
+        "BEGIN",
+        "SAVEPOINT effect_sql_1",
+        "COMMIT",
+        "release",
+    ]
+
+
+@testing.effect
+def test_active_transaction_connection_returns_the_connection_only_while_its_transaction_is_open():
+    """activeTransactionConnection returns the connection only while its transaction is open"""
+    client = yield from _make_client()
+    sql = client.sql
+
+    def body():
+        current = yield from fx.service_option(sql.transaction_service)
+        assert isinstance(current, fx.Some)
+        level = current.value
+        assert (yield from sql_client.active_transaction_connection(level)) is level.connection
+        return level
+
+    level = yield from sql.with_transaction(fx.gen(body))
+    _assert_ended((yield from sql_client.active_transaction_connection(level).flip()))
+
+
+@testing.effect
+def test_fails_statements_from_a_fiber_that_runs_while_its_transaction_commits():
+    """fails statements from a fiber that runs while its transaction commits"""
+    go = fx.Deferred[None]()
+    stale: list[fx.Fiber[SqlError, Any]] = []
+    client = yield from _make_client(
+        commit=fx.suspend(lambda: go.succeed(None).and_then(stale[0].await_exit())).as_void()
+    )
+    sql = client.sql
+
+    def body():
+        stale.append((yield from go.wait().and_then(sql("SELECT 'stale'").flip()).fork_daemon()))
+
+    yield from sql.with_transaction(fx.gen(body))
+    _assert_ended((yield from stale[0].join()))
+    assert client.calls == ["BEGIN", "COMMIT", "release"]
+
+
+@pytest.mark.parametrize("fails", [False, True], ids=["fails: false", "fails: true"])
+@testing.effect
+def test_leaves_the_connection_alone_for_savepoints_that_outlive_their_outer_transaction(
+    fails: bool,
+):
+    """leaves the connection alone for savepoints that outlive their outer transaction (fails: %s)"""  # noqa: E501
+    client = yield from _make_client(release_savepoint=True)
+    sql = client.sql
+    boom = _sql_error("boom")
+    holding = fx.Deferred[None]()
+    go = fx.Deferred[None]()
+
+    def outer():
+        holder = yield from sql.with_transaction(
+            holding.succeed(None).and_then(go.wait()).and_then(fx.fail(boom) if fails else fx.void)
+        ).fork_daemon()
+        yield from holding.wait()
+        waiter = yield from sql.with_transaction(sql("SELECT 'waiter'")).fork_daemon(
+            start_immediately=True
+        )
+        return holder, waiter
+
+    holder, waiter = yield from sql.with_transaction(fx.gen(outer))
+    yield from go.succeed(None)
+    error = yield from holder.join().flip()
+    if fails:
+        assert error is boom
+    else:
+        _assert_ended(error)
+    _assert_ended((yield from waiter.join().flip()))
+    assert client.calls == ["BEGIN", "SAVEPOINT effect_sql_1", "COMMIT", "release"]
+
+
+@testing.effect
+def test_starts_top_level_transactions_with_the_drivers_begin_given_the_begin_transaction_statement():  # noqa: E501
+    """starts top-level transactions with the driver's begin, given the BeginTransaction statement"""  # noqa: E501
+
+    def begin(conn: Connection, statement: str | None) -> fx.Effect[None, SqlError]:
+        name = "undefined" if statement is None else statement
+        return conn.execute_unprepared(f"begin({name})", (), None).as_void()
+
+    client = yield from _make_client(begin=begin)
+    sql = client.sql
+
+    yield from sql.with_transaction(sql.with_transaction(fx.void)).pipe(
+        fx.provide_service(sql_client.BeginTransaction, "SET TRANSACTION READ ONLY")
+    )
+    yield from sql.with_transaction(fx.void)
+
+    assert client.calls == [
+        "begin(SET TRANSACTION READ ONLY)",
+        "SAVEPOINT effect_sql_1",
+        "COMMIT",
+        "release",
+        "begin(undefined)",
+        "COMMIT",
+        "release",
+    ]
+
+
+@testing.effect
+def test_interrupts_a_nested_transaction_waiting_for_the_savepoint():
+    """interrupts a nested transaction waiting for the savepoint, and rolls back the one holding it"""  # noqa: E501
+    entered = fx.Deferred[None]()
+    interrupted = fx.Deferred[None]()
+    client = yield from _make_client()
+    sql = client.sql
+    out: list[bool] = []
+
+    def body():
+        holder = yield from sql.with_transaction(entered.succeed(None).and_then(fx.never)).fork()
+        yield from entered.wait()
+
+        queued = yield from sql.with_transaction(client.record("queued body")).fork(
+            start_immediately=True
+        )
+        interrupting = yield from queued.interrupt().and_then(interrupted.succeed(None)).fork()
+        yield from fx.yield_now()
+        out.append((yield from interrupted.is_done()))
+
+        # Interrupt the holder before asserting, so the regression fails rather than hanging.
+        yield from holder.interrupt()
+        yield from interrupting.join()
+        assert out[0], "interruption must complete while the savepoint is still held"
+
+        # Neither interrupted transaction may keep the savepoint permit.
+        yield from sql.with_transaction(client.record("reused"))
+
+    yield from sql.with_transaction(fx.gen(body))
+
+    assert client.calls == [
+        "BEGIN",
+        "SAVEPOINT effect_sql_1",
+        "ROLLBACK TO SAVEPOINT effect_sql_1",
+        "SAVEPOINT effect_sql_1",
+        "reused",
+        "COMMIT",
+        "release",
+    ]
 
 
 @testing.effect
@@ -418,6 +619,36 @@ def test_releases_savepoints_after_nested_transactions_succeed_or_roll_back():
         "savepoint(1)",
         "rollbackSavepoint(1)",
         "releaseSavepoint(1)",
+        "commit",
+        "closeConnection",
+    ]
+
+
+@testing.effect
+def test_skips_savepoint_release_when_its_ancestor_ends_during_rollback():
+    """skips savepoint release when its ancestor ends during rollback, preserving the body failure"""  # noqa: E501
+    rolling_back = fx.Deferred[None]()
+    finish_rollback = fx.Deferred[None]()
+    harness = _make_harness(
+        release_savepoint=True,
+        during_rollback_savepoint=rolling_back.succeed(None).and_then(finish_rollback.wait()),
+    )
+
+    def outer():
+        child = yield from harness.with_transaction(fx.fail("boom")).fork_daemon(
+            start_immediately=True
+        )
+        yield from rolling_back.wait()
+        return child
+
+    nested = yield from harness.with_transaction(fx.gen(outer))
+    yield from finish_rollback.succeed(None)
+    _assert_typed_failure((yield from nested.await_exit()), "boom")
+    assert harness.calls == [
+        "acquireConnection",
+        "begin",
+        "savepoint(1)",
+        "rollbackSavepoint(1)",
         "commit",
         "closeConnection",
     ]

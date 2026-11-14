@@ -2,6 +2,13 @@
 
 ## 0.6.5 (unreleased)
 
+### Added
+
+- `sql.client.make(begin=...)` starts outermost transactions for databases that need more than
+  one statement, and `sql.client.active_transaction_connection(level)` gives a transaction
+  level's connection or fails once it has ended, for drivers that read their transaction
+  service directly, as in Effect 4.1.4 (#10267, #10434).
+
 ### Fixed
 
 - `NaN`, `inf` and `-inf` are written `null`, as `JSON.stringify` writes them, wherever
@@ -16,6 +23,36 @@
   are unchanged, as in Effect. `tests/test_js_formatting_guard.py` now also catches
   `json` imported through `__import__` / `importlib` and other JSON libraries (`orjson`,
   `ujson`, `simplejson`, `rapidjson`, `msgspec.json`).
+- SQL: statements, `reserve` and nested transactions from a fiber that outlives the transaction
+  it was forked in fail with an `SqlError` ("the transaction has already ended") instead of
+  running on the released connection, which may already be in another transaction; ending a
+  savepoint ends it for its fibers too. A savepoint whose parent ended leaves the connection
+  alone, as in Effect 4.1.4 (#10433, #10434). This covers SQL Server's `call` and
+  `without_transforms()` and libSQL's `reserve`, which inside a transaction now gives its
+  connection (on a local database it waited for the transaction's own permit forever).
+- SQL: a nested `with_transaction` waiting for the savepoint can be interrupted; the savepoint
+  and its cleanup still can't, as in Effect 4.1.4 (#10435).
+- SQL: a savepoint is not released when an ancestor transaction ended while it rolled back,
+  as in Effect 4.1.4 (#10508).
+- SQL: `without_transforms()` also drops a client's `transform_query_names` when it has no
+  result transform, and `CurrentTransformer` gets the client that built the statement, as in
+  Effect 4.1.4 (#10454).
+- MySQL: a `BeginTransaction` starting with `SET TRANSACTION` (an isolation level) runs just
+  before `BEGIN`; it replaced `BEGIN`, so no transaction was started, as in Effect 4.1.4
+  (#10267).
+- SQL Server: `insert(...).returning(...)` and `update_values(...).returning(...)` bind the
+  returning clause's parameters after the row values, as in Effect 4.1.4 (#10452).
+  `tests/test_sql_placeholder_binding.py` checks every helper on every dialect.
+- SQL Server: `sql.model` repository `update` returns the row (`OUTPUT INSERTED.*` before
+  the `where`); it wrote a trailing `returning *`, which SQL Server refuses, as on Effect main
+  (#10563).
+- PostgreSQL: the server ending the session inside a nested transaction keeps the typed
+  `SqlError` instead of becoming a defect: rollbacks on a dead session are skipped, as in
+  Effect 4.1.4 (#10291).
+- PostgreSQL: the client's span name and `db.namespace`, `server.address` and `server.port`
+  follow the connection `url` (and its query parameters); the namespace defaults to the user.
+  A URL-only config reported `postgres`, `localhost` and 5432, as in Effect 4.1.4 (#10500).
+  An invalid config now fails `pg.make` at once, not at the first statement.
 
 ## 0.6.4 (2026-11-14)
 

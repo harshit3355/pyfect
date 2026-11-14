@@ -372,6 +372,66 @@ def test_keeps_a_plain_write_out_of_another_fibers_rolled_back_transaction(tmp_p
 
 
 @testing.effect
+def test_keeps_a_fiber_that_outlives_its_transaction_out_of_another_transaction(tmp_path: Path):
+    """keeps a fiber that outlives its transaction out of another transaction"""
+    sql = yield from make_client(tmp_path)
+    yield from sql("CREATE TABLE t (who TEXT)")
+    go = fx.Deferred[None]()
+    done = fx.Deferred[None]()
+    idle = fx.Deferred[None]()
+
+    stale = yield from sql.with_transaction(
+        fx.all(
+            go.wait()
+            .and_then(sql("INSERT INTO t VALUES ('stale fiber')").flip())
+            .ensuring(done.succeed(None)),
+            # On an idle connection, a stale SAVEPOINT would start a transaction and block
+            # the next BEGIN.
+            idle.wait().and_then(sql.with_transaction(fx.void).flip()),
+        ).fork()
+    )
+
+    def other_body():
+        yield from sql("INSERT INTO t VALUES ('other transaction')")
+        yield from go.succeed(None)
+        yield from done.wait()
+        return (yield from fx.fail("rollback"))
+
+    other = yield from sql.with_transaction(fx.gen(other_body)).exit().fork()
+
+    yield from other.join()
+    yield from idle.succeed(None)
+    errors = yield from stale.join()
+    for error in errors:
+        assert isinstance(error, SqlError)
+        assert (type(error.reason).__name__, error.reason.message, error.is_retryable) == (
+            "UnknownError",
+            "SqlClient: the transaction has already ended",
+            False,
+        )
+    assert (yield from sql("SELECT who FROM t")) == []
+    # The connection is still usable for new transactions.
+    yield from sql.with_transaction(sql("INSERT INTO t VALUES ('after')"))
+    assert (yield from sql("SELECT who FROM t")) == [{"who": "after"}]
+
+
+@testing.effect
+def test_should_disable_query_only_transforms():
+    """should disable query-only transforms"""
+
+    def transform_query_names(name: str) -> str:
+        return "first_name" if name == "firstName" else name
+
+    sql = yield from make_memory_client(transform_query_names=transform_query_names)
+    without_transforms = sql.without_transforms()
+    yield from sql('CREATE TABLE test (first_name TEXT, "firstName" TEXT)')
+    yield from sql("INSERT INTO test (first_name, \"firstName\") VALUES ('John', 'Jane')")
+
+    select = without_transforms("SELECT {} FROM test", without_transforms.identifier("firstName"))
+    assert (yield from select) == [{"firstName": "Jane"}]
+
+
+@testing.effect
 def test_uses_a_5_second_busy_timeout(tmp_path: Path):
     """uses a 5 second busy timeout"""
     sql = yield from make_client(tmp_path)

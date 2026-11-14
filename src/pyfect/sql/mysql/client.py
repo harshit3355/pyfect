@@ -10,6 +10,7 @@ themselves, a transaction or a stream keeps one until it ends::
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable, Mapping
 from typing import Any, Never, Unpack
 
@@ -44,6 +45,18 @@ from pyfect.sql.statement import make_compiler as make_statement_compiler
 
 _escape = default_escape("`")
 _CONNECT_TIMEOUT = "5 seconds"
+
+_SET_TRANSACTION = re.compile(r"\s*SET\s+TRANSACTION\b", re.IGNORECASE)
+
+
+def _begin(conn: Connection, statement: str | None) -> Effect[None, SqlError]:
+    # SET TRANSACTION without SESSION or GLOBAL applies to the next
+    # transaction, so it must directly precede its BEGIN.
+    begin = conn.execute_unprepared("BEGIN", (), None).as_void()
+    if statement is None:
+        return begin
+    run = conn.execute_unprepared(statement, (), None).as_void()
+    return run.and_then(begin) if _SET_TRANSACTION.match(statement) else run
 
 
 class MysqlClientService(SqlClientService):
@@ -146,7 +159,12 @@ def _span_attributes(config: MysqlClientConfig) -> list[tuple[str, object]]:
 
 
 def make(config: MysqlClientConfig) -> Effect[MysqlClientService, SqlError, Scope | Reactivity]:
-    """A client on a pool of connections; it closes with the scope."""
+    """A client on a pool of connections; it closes with the scope.
+
+    A ``BeginTransaction`` starting with ``SET TRANSACTION``, such as
+    ``SET TRANSACTION ISOLATION LEVEL READ COMMITTED``, runs just before
+    ``BEGIN``, since ``START TRANSACTION`` can't set an isolation level. Any
+    other statement replaces ``BEGIN``."""
     prepare = not config.disable_prepared_statements
     idle = (
         DEFAULT_IDLE_TIMEOUT
@@ -190,6 +208,7 @@ def make(config: MysqlClientConfig) -> Effect[MysqlClientService, SqlError, Scop
             acquirer=acquirer,
             borrower=borrow,
             transaction_acquirer=acquirer,
+            begin=_begin,
             release_savepoint=lambda name: f"RELEASE SAVEPOINT {name}",
             compiler=make_compiler(config.transform_query_names),
             span_attributes=_span_attributes(config),

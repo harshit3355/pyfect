@@ -115,11 +115,11 @@ def _on_insert(
 ) -> Compiled:
     output = ""
     binds: list[object] = []
+    for row in values:
+        binds.extend(row)
     if returning is not None:
         output = " OUTPUT INSERTED.*" if returning[0] == "*" else f" OUTPUT {returning[0]}"
         binds.extend(returning[1])
-    for row in values:
-        binds.extend(row)
     return (f"({','.join(columns)}){output} VALUES {placeholders}", tuple(binds))
 
 
@@ -132,11 +132,11 @@ def _on_record_update(
 ) -> Compiled:
     output = ""
     binds: list[object] = []
+    for row in values:
+        binds.extend(row)
     if returning is not None:
         output = "OUTPUT INSERTED.* " if returning[0] == "*" else f"OUTPUT {returning[0]} "
         binds.extend(returning[1])
-    for row in values:
-        binds.extend(row)
     return (f"{output}FROM (values {placeholders}) AS {alias}{columns}", tuple(binds))
 
 

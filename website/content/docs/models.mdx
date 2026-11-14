@@ -68,8 +68,8 @@ called with an id outside `update`, naming the keys `update` has.
 </CodeOutput>
 
 As in Effect, `update` appends `returning *` itself rather than through the statement
-compiler, so on SQL Server and ClickHouse it fails with a syntax error: use `update_void`,
-then `find_by_id` if you need the row.
+compiler (on SQL Server it writes `OUTPUT INSERTED.*` before the `where`), so on ClickHouse it
+fails with a syntax error: use `update_void`, then `find_by_id` if you need the row.
 
 `sql_model.make_resolvers(...)` gives the same operations as
 [batching resolvers](/docs/sql#a-resolver-that-batches-lookups): `insert`, `insert_void`,

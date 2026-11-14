@@ -16,16 +16,20 @@ is ported as the ``(pyfect)`` "param types".
 import threading
 import time
 from collections.abc import Callable, Generator
-from typing import Any
+from typing import Any, TypedDict
 
 import pytest
 
 pytest.importorskip("pytds")
 
 import pyfect as fx
+from pyfect import schema as S
 from pyfect import testing
 from pyfect.reactivity import layer as reactivity_layer
+from pyfect.schema import model as Model
 from pyfect.sql import SqlClient, mssql
+from pyfect.sql import client as sql_client
+from pyfect.sql import model as sql_model
 from pyfect.sql import statement as st
 from pyfect.sql.error import SqlError
 from pyfect.sql.mssql import TYPES, Parameter, ParameterOptions, procedure
@@ -156,6 +160,90 @@ def test_update_single_helper_returning():
     ).compile()
     assert query == "UPDATE people SET [name] = @1 OUTPUT INSERTED.*"
     assert params == ("Tim",)
+
+
+def test_insert_and_update_values_helpers_bind_returning_parameters_after_row_values():
+    """insert and updateValues helpers bind returning parameters after row values"""
+    returning = sql("INSERTED.id, {} AS source", "audit")
+    assert sql(
+        "INSERT INTO {} {}",
+        sql.identifier("people"),
+        sql.insert({"name": "Ada", "age": 36}).returning(returning),
+    ).compile() == (
+        "INSERT INTO [people] ([name],[age]) OUTPUT INSERTED.id, @3 AS source VALUES (@1,@2)",
+        ("Ada", 36, "audit"),
+    )
+    assert sql(
+        "UPDATE people SET name = data.name {}",
+        sql.update_values([{"name": "Ada"}, {"name": "Mira"}], "data").returning(returning),
+    ).compile() == (
+        "UPDATE people SET name = data.name OUTPUT INSERTED.id, @3 AS source "
+        "FROM (values (@1),(@2)) AS [data]([name])",
+        ("Ada", "Mira", "audit"),
+    )
+
+
+class _UserInsert(TypedDict):
+    name: str
+
+
+class _UserUpdate(TypedDict):
+    id: int
+    name: str
+
+
+class _User(Model.Class[_UserInsert, _UserUpdate]):
+    id: int = Model.field(Model.field_except(["insert"])(S.Int))
+    name: str
+
+
+class _QueryConnection:
+    """A connection recording each statement and answering one row."""
+
+    def __init__(self, queries: list[str]) -> None:
+        self.queries = queries
+
+    def _run(self, sql: str) -> fx.Effect[list[Any]]:
+        return fx.sync(lambda: self.queries.append(sql)).as_([{"id": 1, "name": "Grace"}])
+
+    def execute(self, sql: str, params: Any, transform_rows: Any, /) -> fx.Effect[Any, SqlError]:
+        return self._run(sql)
+
+    def execute_raw(self, sql: str, params: Any, /) -> fx.Effect[Any, SqlError]:
+        return self._run(sql)
+
+    def execute_values(self, sql: str, params: Any, /) -> fx.Effect[Any, SqlError]:
+        return self._run(sql)
+
+    def execute_values_unprepared(self, sql: str, params: Any, /) -> fx.Effect[Any, SqlError]:
+        return self._run(sql)
+
+    def execute_unprepared(
+        self, sql: str, params: Any, transform_rows: Any, /
+    ) -> fx.Effect[Any, SqlError]:
+        return self._run(sql)
+
+    def execute_stream(self, sql: str, params: Any, transform_rows: Any, /) -> fx.Stream[Any, Any]:
+        return fx.stream.from_effect(self._run(sql)).flat_map(fx.stream.from_iterable)
+
+
+@testing.effect
+def test_repository_update_places_output_before_where():
+    """repository update places OUTPUT before WHERE"""
+    queries: list[str] = []
+    connection: Any = _QueryConnection(queries)
+
+    def body():
+        client = yield from sql_client.make(
+            driver="test", acquirer=fx.succeed(connection), compiler=mssql.make_compiler()
+        )
+        repo = yield from sql_model.make_repository(
+            _User, table_name="users", id_column="id", span_prefix="Users"
+        ).pipe(fx.provide_service(SqlClient, client))
+        yield from repo.update(_User.update.make({"id": 1, "name": "Grace"}))
+
+    yield from fx.gen(body).pipe(fx.provide(reactivity_layer))
+    assert queries == ["update [users] set [name] = @1 OUTPUT INSERTED.* where [id] = @2"]
 
 
 _RETURNING = pytest.mark.parametrize(
@@ -306,6 +394,38 @@ def test_reuses_the_transaction_connection_with_a_single_connection_pool(
                 assert result == procedure.Result(procedure.Outputs({"answer": 42}), [])
 
         yield from _bounded(client.with_transaction(fx.gen(inside)))
+
+    yield from _mocked(body)
+
+
+@testing.live
+def test_fails_stored_procedures_and_untransformed_statements_from_a_fiber_that_outlives_its_transaction(  # noqa: E501
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """fails stored procedures and untransformed statements from a fiber that outlives its transaction"""  # noqa: E501
+    fake = _mssql_fake.install(monkeypatch)
+
+    def body():
+        client = yield from _bounded(mssql.make(_single_connection()))
+        go = fx.Deferred[None]()
+        stale = yield from _bounded(
+            client.with_transaction(
+                go.wait()
+                .and_then(
+                    fx.all(
+                        client.call(_get_answer.compile()).flip(),
+                        client.without_transforms()("SELECT 'stale'").flip(),
+                    )
+                )
+                .fork_daemon()
+            )
+        )
+        yield from go.succeed(None)
+        for error in (yield from _bounded(stale.join())):
+            assert isinstance(error, SqlError)
+            assert error.reason.message == "SqlClient: the transaction has already ended"
+        queries = [query for connection in fake.connections for query in connection.queries]
+        assert not any("get_answer" in query or query == "SELECT 'stale'" for query in queries)
 
     yield from _mocked(body)
 

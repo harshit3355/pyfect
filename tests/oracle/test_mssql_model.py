@@ -2,9 +2,9 @@
 skipped without Docker). The titles are ``(pyfect)``: Effect's model tests
 run on MySQL only. Effect 4.1.2's ``SqlModel`` builds the insert with
 ``sql.insert(request).returning("*")``, which its mssql compiler writes as
-``OUTPUT INSERTED.*`` (checked against SQL Server: the row comes back); its
-update appends a literal ``returning *``, which SQL Server refuses, in
-Effect too (dogfood ledger #1 and #5)."""
+``OUTPUT INSERTED.*`` (checked against SQL Server: the row comes back), and
+its update ``sql.update(request).returning("*")`` before the ``where``, as on
+Effect main (#10563)."""
 
 from collections.abc import Callable, Generator
 from typing import Any, TypedDict
@@ -20,7 +20,6 @@ from pyfect.schema import model as Model
 from pyfect.sql import SqlClient, mssql
 from pyfect.sql import model as sql_model
 from pyfect.sql import resolver as R
-from pyfect.sql.error import SqlSyntaxError
 
 from ._mssql import MssqlServer
 
@@ -101,18 +100,20 @@ def test_resolver_insert_returns_the_rows_on_sql_server(mssql_server: MssqlServe
 
 
 @testing.live
-def test_repository_update_fails_on_sql_server_as_in_effect(mssql_server: MssqlServer):
-    """(pyfect) repository update fails on SQL Server, as in Effect; update_void works"""
+def test_repository_update_returns_the_row_on_sql_server(mssql_server: MssqlServer):
+    """(pyfect) repository update returns the row on SQL Server; update_void works"""
 
     @fx.fn
     def body():
         accounts = yield from _accounts("model_update")
         row = yield from accounts.insert(Account.insert.make({"code": "cash", "name": "Cash"}))
         renamed = Account.update.make({"id": row.id, "code": "cash", "name": "Petty cash"})
-        failed = yield from accounts.update(renamed).flip()
-        yield from accounts.update_void(renamed)
-        return failed, (yield from accounts.find_by_id(row.id))
+        updated = yield from accounts.update(renamed)
+        yield from accounts.update_void(
+            Account.update.make({"id": row.id, "code": "cash", "name": "Till"})
+        )
+        return updated, (yield from accounts.find_by_id(row.id))
 
-    failed, found = yield from _on_server(mssql_server, "model_update", body)
-    assert isinstance(failed.reason, SqlSyntaxError)
-    assert found.name == "Petty cash"
+    updated, found = yield from _on_server(mssql_server, "model_update", body)
+    assert updated == Account(id=1, code="cash", name="Petty cash")
+    assert found.name == "Till"

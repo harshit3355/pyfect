@@ -87,7 +87,7 @@
       "insert into [accounts] ([code],[name]) VALUES (@1,@2),(@3,@4)"
     ],
     "plain.update": [
-      "update [accounts] set [code] = @1, [name] = @2 where [id] = @3 returning *"
+      "update [accounts] set [code] = @1, [name] = @2 OUTPUT INSERTED.* where [id] = @3"
     ],
     "plain.updateVoid": [
       "update [accounts] set [code] = @1, [name] = @2 where [id] = @3"
@@ -117,7 +117,7 @@
       "insert into [softs] ([code]) VALUES (@1),(@2)"
     ],
     "soft.update": [
-      "update [softs] set [code] = @1, [deleted_at] = @2 where ([id] = @3 AND [deleted_at] is null) returning *"
+      "update [softs] set [code] = @1, [deleted_at] = @2 OUTPUT INSERTED.* where ([id] = @3 AND [deleted_at] is null)"
     ],
     "soft.updateVoid": [
       "update [softs] set [code] = @1, [deleted_at] = @2 where ([id] = @3 AND [deleted_at] is null)"

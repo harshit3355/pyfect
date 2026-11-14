@@ -15,8 +15,9 @@ column to ``CURRENT_TIMESTAMP`` and the reads skip rows where it is set.
 ``make_resolvers`` gives the same operations as batched resolvers.
 
 ``insert`` returns the row through the compiler's ``returning`` (``RETURNING
-*``, ``OUTPUT INSERTED.*`` on SQL Server); ``update`` appends ``returning *``,
-as Effect does, so on SQL Server and ClickHouse only ``update_void`` works.
+*``, ``OUTPUT INSERTED.*`` on SQL Server), and so does ``update`` on SQL
+Server; elsewhere ``update`` appends ``returning *``, as Effect does, so on
+ClickHouse only ``update_void`` works.
 On MySQL both run the statement followed by a ``SELECT`` of the row.
 """
 
@@ -209,11 +210,17 @@ def _repository[A, In, Up](
 
     def update_returning(row: Mapping[str, object]) -> Effect[Any, SqlError]:
         # Effect writes ``returning *`` itself here, not through the compiler,
-        # so an update with its row fails on SQL Server and ClickHouse there too.
+        # so an update with its row fails on ClickHouse there too.
+        def mssql() -> Effect[Any, SqlError]:
+            where = t.live(sql("{} = {}", t.id, row[t.id_column]))
+            returning = sql.update(row, [t.id_column]).returning("*")
+            return sql("update {} set {} where {}", t.name, returning, where)
+
         return sql.on_dialect_or_else(
             mysql=lambda: _then_select(
                 t, update_statement(row), sql("{} = {}", t.id, row[t.id_column])
             ),
+            mssql=mssql,
             or_else=lambda: sql("{} returning *", update_statement(row)),
         )
 

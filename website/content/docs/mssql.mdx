@@ -29,8 +29,7 @@ type of your choice. A few things work differently than on PostgreSQL:
 
 - `returning(...)` on the `insert` and `update` helpers becomes an `OUTPUT INSERTED.*`
   clause, so a statement that changes rows gives them back. A [model](/docs/models)
-  repository's `insert` uses it; its `update` appends `returning *` itself, as Effect's does,
-  which SQL Server refuses, so use `update_void` and `find_by_id` there.
+  repository's `insert` and `update` use it.
 - A failure's `reason` comes from SQL Server's error number: `UniqueViolation` (with the
   constraint or index name as `constraint`), `DeadlockError`, `LockTimeoutError`,
   `AuthenticationError`, ... A login that fails when the layer is built (a wrong password)
