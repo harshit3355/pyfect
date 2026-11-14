@@ -132,15 +132,18 @@ class _DecodePull:
 
 
 def _make_parser(
-    max_token_size: float | None, max_depth: float | None, is_bytes: bool
+    max_token_size: float | None, max_depth: float | None, is_bytes: bool, positions: bool
 ) -> Callable[[], Parser]:
     token = _check_limit("maxTokenSize", max_token_size, _DEFAULT_MAX_TOKEN_SIZE)
     depth = _check_limit("maxDepth", max_depth, _DEFAULT_MAX_DEPTH)
-    return lambda: Parser(token, depth, is_bytes)
+    return lambda: Parser(token, depth, is_bytes, positions)
 
 
 def decode_string[IE = Never, D = None](
-    *, max_token_size: float | None = None, max_depth: float | None = None
+    *,
+    max_token_size: float | None = None,
+    max_depth: float | None = None,
+    positions: bool = False,
 ) -> Channel[tuple[Event, ...], XmlError | IE, D, tuple[str, ...], IE, D]:
     """A channel decoding XML text chunks into events.
 
@@ -155,22 +158,30 @@ def decode_string[IE = Never, D = None](
     ``math.inf`` disables either, and a limit that is not positive raises
     ``ValueError``.
 
+    ``positions=True`` adds the ``line`` and ``column`` of each start tag's ``<`` to
+    its ``StartElement``, counted as for ``XmlError``; otherwise they are ``None``.
+
     A DOCTYPE is reported, its internal subset skipped and never applied. An
     entity other than the five predefined ones fails with ``"Unsupported"`` when
     the document has a DOCTYPE and ``"Syntax"`` otherwise."""
-    parser = _make_parser(max_token_size, max_depth, False)
+    parser = _make_parser(max_token_size, max_depth, False, positions)
     return _make_channel(lambda: TextInput(parser()))
 
 
 def decode[IE = Never, D = None](
-    *, max_token_size: float | None = None, max_depth: float | None = None
+    *,
+    max_token_size: float | None = None,
+    max_depth: float | None = None,
+    positions: bool = False,
 ) -> Channel[tuple[Event, ...], XmlError | IE, D, tuple[bytes, ...], IE, D]:
     """``decode_string`` for UTF-8 bytes. Multi-byte characters can be split
     between chunks. Invalid or truncated UTF-8 fails with ``"Syntax"``; a UTF-16
     byte order mark, or a declaration naming an encoding other than UTF-8 or
     US-ASCII, with ``"Unsupported"`` (decode such bytes yourself and use
-    ``decode_string``)."""
-    parser = _make_parser(max_token_size, max_depth, True)
+    ``decode_string``). A declaration the bytes contradict fails with ``"Syntax"``
+    instead: UTF-16, UTF-32, UCS-2 and UCS-4, and US-ASCII or ISO-8859-1 after a
+    UTF-8 byte order mark."""
+    parser = _make_parser(max_token_size, max_depth, True, positions)
     return _make_channel(lambda: Utf8Input(parser()))
 
 

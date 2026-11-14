@@ -51,14 +51,23 @@ class Doctype:
     system_id: str | None = None
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, repr=False)
 class StartElement:
     """A start tag, with its attributes in document order. ``name`` is the
     qualified name as written. ``<br/>`` is a ``StartElement`` then an
-    ``EndElement``."""
+    ``EndElement``.
+
+    With ``positions=True``, ``line`` and ``column`` locate the tag's ``<`` as an
+    ``XmlError`` would. Otherwise they are ``None``. The encoders ignore them."""
 
     name: str
     attributes: Mapping[str, str] = field(default_factory=dict[str, str], hash=False)
+    line: int | None = None
+    column: int | None = None
+
+    def __repr__(self) -> str:
+        position = "" if self.line is None else f", line={self.line}, column={self.column}"
+        return f"StartElement(name={self.name!r}, attributes={self.attributes!r}{position})"
 
 
 @dataclass(frozen=True, slots=True)

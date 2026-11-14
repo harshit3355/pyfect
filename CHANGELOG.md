@@ -24,6 +24,9 @@
 - `encoding.base64.encode_unpadded`, standard Base64 without the `=` padding, and
   `encoding.base64.decode_lenient`, which reads either Base64 alphabet, padded or not (CR and
   LF ignored, other whitespace rejected), as on Effect main (#10557).
+- `encoding.xml.decode` and `decode_string` take `positions=True`, which sets the one-based
+  `line` and `column` of each start tag's `<` on its `StartElement`, counted as for
+  `XmlError`, as in Effect 4.1.4 (#10406).
 
 ### Fixed
 
@@ -212,6 +215,12 @@
   decoded) the equivalence found `{"A": 1}` equal to `{"A": 2}` and to `{}`, and the formatter
   wrote `{}`. `ast.IndexSignature.selects_decoded` is the decoded-side test, beside `selects`
   for keys of an input to decode.
+- `encoding.xml.decode` fails with a `Syntax` error rather than `Unsupported` on an encoding
+  declaration the bytes contradict (UTF-16, UTF-32, UCS-2 and UCS-4, or US-ASCII and
+  ISO-8859-1 after a UTF-8 byte order mark), and no longer reads a document starting with a
+  byte order mark as US-ASCII, as on Effect main (#10574). One function classifies a
+  declaration against the bytes, and `tests/test_xml_encoding_declarations.py` checks every
+  spelling with and without a byte order mark.
 
 ### Performance
 

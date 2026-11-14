@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from typing import Literal, assert_never
 
 from pyfect._digits import is_digits
 from pyfect.encoding.xml._chars import (
@@ -72,8 +73,19 @@ def _normalize_attribute(s: str) -> str:
     return _ATTRIBUTE_WHITESPACE.sub(" ", s)
 
 
-def _is_utf8(encoding: str) -> bool:
-    return encoding.lower() in ("utf-8", "us-ascii")
+_WIDE_ENCODING = re.compile(r"utf-(?:16|32)(?:be|le)?|(?:iso-10646-)?ucs-[24]")
+"""Encodings whose declaration could not have been read as ASCII bytes."""
+
+type DeclaredEncoding = Literal["utf-8", "us-ascii", "unsupported", "contradictory"]
+
+
+def classify_encoding(encoding: str, *, bom: bool) -> DeclaredEncoding:
+    """What the bytes say about the ``encoding`` their declaration names: they
+    were read as ASCII, after a UTF-8 byte order mark when ``bom``."""
+    lower = encoding.lower()
+    if _WIDE_ENCODING.fullmatch(lower) or (bom and lower in ("us-ascii", "iso-8859-1")):
+        return "contradictory"
+    return "utf-8" if lower == "utf-8" else "us-ascii" if lower == "us-ascii" else "unsupported"
 
 
 def _index_or_end(s: str, search: str, start: int) -> int:
@@ -94,7 +106,9 @@ def _describe_token(s: str, i: int) -> str:
 
 
 class Parser:
-    def __init__(self, max_token_size: float, max_depth: float, is_bytes: bool) -> None:
+    def __init__(
+        self, max_token_size: float, max_depth: float, is_bytes: bool, positions: bool
+    ) -> None:
         self.out: list[Event] = []
         # The text being parsed, which starts at document offset ``_base``
         self._buf = ""
@@ -102,6 +116,7 @@ class Parser:
         # Number of characters received, excluding a byte order mark
         self.received = 0
         self._started = False
+        self._bom = False
         # A token that continues in the next chunk
         self._pending: list[str] | None = None
         self._pending_start = 0
@@ -113,6 +128,12 @@ class Parser:
         self._line = 1
         self._line_start = 0
         self._counted = 0
+        # Indexes in ``_buf`` of the next CR and LF from ``_counted``, or
+        # ``len(_buf)`` if there is none, so that counting to each start tag of a
+        # long line does not search to its end again. -1 until ``_count`` has run
+        # on ``_buf``.
+        self._next_cr = -1
+        self._next_lf = -1
         self._state = _PROLOG
         self._stack: list[str] = []
         self._open_name_size = 0
@@ -124,6 +145,7 @@ class Parser:
         self._max_token_size = max_token_size
         self._max_depth = max_depth
         self._is_bytes = is_bytes
+        self._positions = positions
         self._ascii = False
 
     def feed(self, chunk: str, force: bool = False) -> None:
@@ -135,6 +157,7 @@ class Parser:
         if not self._started:
             self._started = True
             if chunk[:1] == "﻿":
+                self._bom = True
                 chunk = chunk[1:]
         if self._is_bytes:
             non_ascii = _NON_ASCII.search(chunk)
@@ -168,10 +191,10 @@ class Parser:
 
     def error(self, kind: XmlErrorKind, message: str, at: int) -> XmlError:
         if at > self._counted:
+            # The parser is not used after an error, so ``_buf`` can be replaced
             if self._pending is not None:
-                self._count("".join(self._pending), self._pending_start, at - self._pending_start)
-            else:
-                self._count(self._buf, self._base, at - self._base)
+                self._load("".join(self._pending), self._pending_start)
+            self._count(at - self._base)
         column = at - self._line_start + 1
         return XmlError(
             kind,
@@ -180,28 +203,32 @@ class Parser:
             column,
         )
 
-    def _count(self, s: str, base: int, to: int) -> None:
-        """Advances the line count from ``_counted`` to ``to``, an index of ``s``,
-        which starts at document offset ``base``. Counting resumes only where
-        parsing stopped, which is never between a CR and an LF."""
+    def _count(self, to: int) -> None:
+        """Advances the line count from ``_counted`` to ``to``, an index of
+        ``_buf``. Counting resumes only where parsing stopped, which is never
+        between a CR and an LF."""
+        s = self._buf
+        base = self._base
         i = max(self._counted - base, 0)
         if i >= to:
             return
-        cr = s.find("\r", i)
-        lf = s.find("\n", i)
+        cr = _index_or_end(s, "\r", i) if self._next_cr == -1 else self._next_cr
+        lf = _index_or_end(s, "\n", i) if self._next_lf == -1 else self._next_lf
         while True:
-            if cr != -1 and cr < to and (lf == -1 or cr < lf):
+            if cr < to and cr < lf:
                 self._line += 1
                 self._line_start = base + cr + 1
-                cr = s.find("\r", cr + 1)
-            elif lf != -1 and lf < to:
+                cr = _index_or_end(s, "\r", cr + 1)
+            elif lf < to:
                 # The LF of a CRLF does not start a new line
                 if not (lf > 0 and s[lf - 1] == "\r"):
                     self._line += 1
                 self._line_start = base + lf + 1
-                lf = s.find("\n", lf + 1)
+                lf = _index_or_end(s, "\n", lf + 1)
             else:
                 break
+        self._next_cr = cr
+        self._next_lf = lf
         self._counted = base + to
 
     def _syntax(self, message: str, i: int) -> XmlError:
@@ -238,6 +265,7 @@ class Parser:
     def _load(self, buf: str, base: int) -> None:
         self._buf = buf
         self._base = base
+        self._next_cr = self._next_lf = -1
 
     def _check_pending(self) -> None:
         """Fails an incomplete token over max_token_size, preferring an error in
@@ -298,8 +326,8 @@ class Parser:
                     raise self._syntax(f"unterminated {_describe_token(s, i)}", i)
                 break
             i = end
-        self._count(s, self._base, i)
-        self._buf = ""
+        self._count(i)
+        self._load("", self._base)
         if i < n:
             rest = s if i == 0 else s[i:]
             self._pending = [rest]
@@ -492,7 +520,15 @@ class Parser:
             )
         self._flush_text()
         event_name = from_units(name)
-        self.out.append(StartElement(event_name, attributes))
+        if self._positions:
+            self._count(i)
+            self.out.append(
+                StartElement(
+                    event_name, attributes, self._line, self._base + i - self._line_start + 1
+                )
+            )
+        else:
+            self.out.append(StartElement(event_name, attributes))
         if self_closing:
             self.out.append(EndElement(event_name))
             if not self._stack:
@@ -587,14 +623,25 @@ class Parser:
         version = match[1] or match[2]
         encoding: str | None = match[3] or match[4]
         standalone: str | None = match[5] or match[6]
-        if self._is_bytes and encoding is not None and not _is_utf8(encoding):
-            raise self.error(
-                "Unsupported",
-                f"encoding {encoding} is not supported for byte input, "
-                "decode the bytes to text first",
-                self._base + i,
-            )
-        self._ascii = self._is_bytes and encoding is not None and encoding.lower() == "us-ascii"
+        if self._is_bytes and encoding is not None:
+            declared = classify_encoding(encoding, bom=self._bom)
+            match declared:
+                case "contradictory":
+                    evidence = (
+                        "UTF-8 byte order mark" if self._bom else "ASCII bytes of the declaration"
+                    )
+                    raise self._syntax(f"encoding {encoding} does not match the {evidence}", i)
+                case "unsupported":
+                    raise self.error(
+                        "Unsupported",
+                        f"encoding {encoding} is not supported for byte input, "
+                        "decode the bytes to text first",
+                        self._base + i,
+                    )
+                case "utf-8" | "us-ascii":
+                    self._ascii = declared == "us-ascii"
+                case _:
+                    assert_never(declared)
         self.out.append(
             Declaration(version, encoding, None if standalone is None else standalone == "yes")
         )
