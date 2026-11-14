@@ -207,6 +207,11 @@
   on a plain instance, and a required one read the class's docstring. Other inherited
   attributes, such as properties, are still read. `tests/oracle/test_schema_object_members.py`
   checks every such name, interpreted and compiled.
+- Schema: `to_equivalence` and `to_formatter` select a Record's keys by its key's decoded
+  side, as in Effect 4.1.4 (#10453). With a transformed key (lowercase encoded, uppercase
+  decoded) the equivalence found `{"A": 1}` equal to `{"A": 2}` and to `{}`, and the formatter
+  wrote `{}`. `ast.IndexSignature.selects_decoded` is the decoded-side test, beside `selects`
+  for keys of an input to decode.
 
 ### Performance
 

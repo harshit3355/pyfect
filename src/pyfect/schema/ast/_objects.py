@@ -186,8 +186,13 @@ class IndexSignature:
             raise ValueError(f"Invalid index signature parameter {parameter.tag}")
 
     def selects(self, key: object, options: ParseOptions | None = None) -> bool:
-        """``key`` is a value of the parameter's encoded side."""
+        """``key`` is a value of the parameter's encoded side: a key of an input to decode."""
         return type(self.parameter.flip().to_type().parse(key, options or {})) is Success
+
+    def selects_decoded(self, key: object) -> bool:
+        """``key`` is a value of the parameter's decoded side: a key of a decoded value, which
+        is what derivations over decoded values (equivalence, formatter) read."""
+        return type(self.parameter.to_type().parse(key, {})) is Success
 
 
 def get_index_signature_keys(
