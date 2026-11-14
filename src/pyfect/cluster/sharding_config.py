@@ -58,6 +58,14 @@ class ShardingConfigService:
     joins wait, at most four times this long; ``0`` publishes every change at
     once."""
     runner_health_check_interval: Duration
+    """How often runners are health checked (default 1 minute); unhealthy
+    ones lose their shards. The checks run on one runner, the host of the
+    runner health singleton, so they cannot see that runner crash: it keeps
+    its shards until runner storage stops listing it, which for SQL runner
+    storage is once its last heartbeat is older than
+    ``shard_lock_expiration``. To notice a crash of that host sooner, lower
+    ``shard_lock_expiration``, at the cost of less tolerance for slow or
+    unavailable lock storage."""
     simulate_remote_serialization: bool
 
 
