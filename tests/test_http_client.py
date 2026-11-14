@@ -4,7 +4,7 @@ responses, and the httpx backend cancelling requests."""
 import gc
 import sys
 import threading
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
@@ -14,6 +14,7 @@ from _threads import live_threads
 import pyfect as fx
 from pyfect import testing
 from pyfect.http import client as c
+from pyfect.http import cookies
 from pyfect.http import request as req
 from pyfect.http import response as res
 from pyfect.http.abort import AbortSignal
@@ -188,11 +189,11 @@ def test_interrupting_a_body_read_aborts_the_request() -> None:
     assert signals[0].aborted
 
 
-def test_with_scope_ties_only_its_own_request_to_the_scope() -> None:
-    """Effect keys the scope's controller on the request ``with_scope``
-    sends: a request another client makes meanwhile keeps its own."""
+def test_with_scope_owns_requests_another_client_sends_while_it_executes() -> None:
+    """As Effect's ``withScope`` (#10363): ownership follows the execution, so a request a
+    middleware sends with another client is attached to the scope too, unless that client's
+    request runs in a scope of its own."""
     signals: list[AbortSignal] = []
-    kept: list[res.HttpClientResponse] = []
 
     def send(
         request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, _fiber: Any
@@ -201,11 +202,70 @@ def test_with_scope_ties_only_its_own_request_to_the_scope() -> None:
         return fx.succeed(res.make(request, "body"))
 
     other = c.make(send)
-    scoped = c.make(send).tap(lambda _r: other.get("http://other/").map(kept.append)).with_scope()
-    _run(fx.scoped(scoped.get("http://test/")))
-    assert signals[0].aborted
-    assert not signals[1].aborted
-    assert _run(kept[0].text) == "body"
+    shared = c.make(send).tap(lambda _r: other.get("http://other/")).with_scope()
+    _run(fx.scoped(shared.get("http://test/")))
+    assert [signal.aborted for signal in signals] == [True, True]
+
+    signals.clear()
+    seen: list[list[bool]] = []
+    own = other.with_scope()
+
+    def helper(_response: res.HttpClientResponse) -> fx.Effect[None, HttpClientError]:
+        helped = fx.scoped(own.get("http://other/"))
+        return helped.and_then(fx.sync(lambda: seen.append([s.aborted for s in signals])))
+
+    apart = c.make(send).tap(helper).with_scope()
+    _run(fx.scoped(apart.get("http://test/")))
+    assert seen == [[False, True]]
+    assert [signal.aborted for signal in signals] == [True, True]
+
+
+type _Wrap = Callable[[c.HttpClientService[HttpClientError, Any]], c.HttpClientService[Any, Any]]
+
+_REWRITERS: dict[str, _Wrap] = {
+    "map_request": lambda client: client.map_request(lambda r: r.set_header("x-rewritten", "1")),
+    "with_cookies_ref": lambda client: client.with_cookies_ref(
+        fx.run_blocking(fx.Ref.make((cookies.make_cookie_unsafe("a", "1"),)))
+    ),
+    "follow_redirects": lambda client: client.follow_redirects(),
+    "retry_transient": lambda client: client.retry_transient(times=1),
+}
+
+
+@pytest.mark.parametrize("outside", [True, False], ids=["with_scope outside", "with_scope inside"])
+@pytest.mark.parametrize("wrapper", list(_REWRITERS))
+def test_with_scope_owns_every_request_the_transport_sends(wrapper: str, outside: bool) -> None:
+    """Effect #10363: whichever wrapper rewrites or resends the request, and on whichever side
+    of ``with_scope`` it sits, every request the transport saw stays open until the scope
+    closes (but a redirect hop, which is discarded), and closing it aborts them all."""
+    signals: list[AbortSignal] = []
+
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        signals.append(signal)
+        if request.url.endswith("/start"):
+            return fx.succeed(res.make(request, None, status=302, headers={"location": "/end"}))
+        if len(signals) == 1 and wrapper == "retry_transient":
+            return fx.succeed(res.make(request, None, status=503))
+        return fx.succeed(res.make(request, "body"))
+
+    wrap = _REWRITERS[wrapper]
+    base = c.make(send)
+    client = wrap(base).with_scope() if outside else wrap(base.with_scope())
+    url = "http://test/start" if wrapper == "follow_redirects" else "http://test/"
+    open_: list[list[bool]] = []
+    kept: list[res.HttpClientResponse] = []
+
+    def record(response: res.HttpClientResponse) -> None:
+        kept.append(response)
+        open_.append([signal.aborted for signal in signals])
+
+    _run(fx.scoped(client.get(url).map(record)))
+    # follow_redirects aborts the hop it discards at once, as Effect's does.
+    expected = {"follow_redirects": [True, False], "retry_transient": [False, False]}
+    assert open_ == [expected.get(wrapper, [False])]
+    assert [signal.aborted for signal in signals] == [True] * len(open_[0])
 
 
 def test_transient_statuses_are_effects_list_not_every_5xx() -> None:

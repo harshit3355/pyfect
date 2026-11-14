@@ -228,6 +228,12 @@
   as in Effect 4.1.4 (#10366). It closed as soon as the body ended, before the middleware and
   the server span. A body transferred twice keeps its first exit, and `to_web_handler` now
   transfers through the same path.
+- `HttpClient.with_scope` owns every request the client sends while it executes, as in Effect
+  4.1.4 (#10363): redirect hops and requests rewritten by middleware stay open until the scope
+  closes on whichever side of `follow_redirects` it is, concurrent runs of one response effect
+  get their own owners, a request interrupted before its response is aborted, and one sent
+  after the scope closed is aborted before the transport starts it. Requests another client
+  sends while this one executes now belong to the scope too.
 
 ### Performance
 

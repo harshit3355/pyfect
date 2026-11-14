@@ -38,10 +38,13 @@ import pytest
 import pyfect as fx
 from pyfect import clock, testing
 from pyfect import schema as S
+from pyfect import scope as scope_
 from pyfect import stream as stream_
+from pyfect.deferred import Deferred
 from pyfect.duration import millis
 from pyfect.errors import TimeoutException
 from pyfect.exit import Failure
+from pyfect.exit import succeed as succeed_exit
 from pyfect.http import client as c
 from pyfect.http import headers as h
 from pyfect.http import request as req
@@ -723,3 +726,87 @@ def test_cookies_without_set_cookie() -> None:
     """reads cookies when Headers has no getSetCookie"""
     response = res.make(req.get("http://localhost"), headers={"content-type": "text/plain"})
     assert response.cookies.is_empty()
+
+
+# --- withScope owns what the client executes (Effect #10363) ----------------------------
+
+
+@testing.effect
+def test_keeps_a_redirect_scoped_when_with_scope_is_applied_outside_follow_redirects():
+    """keeps a redirect scoped when withScope is applied outside followRedirects"""
+    final = Deferred[AbortSignal]()
+
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        if request.url.endswith("/start"):
+            return fx.succeed(res.make(request, None, status=302, headers={"location": "/final"}))
+        return final.succeed(signal).and_then(fx.never)
+
+    client = c.make(send).follow_redirects().with_scope()
+    request_scope = yield from scope_.make()
+    yield from client.get("https://origin.test/start").pipe(scope_.provide(request_scope)).fork()
+    signal = yield from final.wait()
+    assert not signal.aborted
+    yield from request_scope.close(succeed_exit(None))
+    assert signal.aborted
+
+
+@testing.effect
+def test_keeps_separate_with_scope_owners_for_concurrent_runs_of_one_response_effect():
+    """keeps separate withScope owners for concurrent runs of one response effect"""
+    signals: dict[int, AbortSignal] = {}
+    dispatched = Deferred[None]()
+    both_arrived = Deferred[None]()
+    arrived = [0]
+
+    def send(
+        _request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        signals[fiber.id] = signal
+        ready = dispatched.succeed(None).as_void() if len(signals) == 2 else fx.void
+        return ready.and_then(fx.never)
+
+    def hold(
+        sending: fx.Effect[res.HttpClientResponse, HttpClientError],
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        def arrive() -> int:
+            arrived[0] += 1
+            return arrived[0]
+
+        # Hold both runs between with_scope and dispatch until both have entered.
+        entered = fx.sync(arrive).flat_map(
+            lambda n: both_arrived.succeed(None).as_void() if n == 2 else fx.void
+        )
+        return entered.and_then(both_arrived.wait()).and_then(sending)
+
+    client = c.make(send).pipe(c.transform_response(hold)).with_scope()
+    effect_ = client.get("https://origin.test/slow")
+    scope_a = yield from scope_.make()
+    scope_b = yield from scope_.make()
+    fiber_a = yield from effect_.pipe(scope_.provide(scope_a)).fork()
+    fiber_b = yield from effect_.pipe(scope_.provide(scope_b)).fork()
+    yield from dispatched.wait()
+    yield from scope_a.close(succeed_exit(None))
+    assert signals[fiber_a.id].aborted
+    assert not signals[fiber_b.id].aborted
+
+
+@testing.effect
+def test_aborts_a_with_scope_request_interrupted_before_its_response():
+    """aborts a withScope request interrupted before its response"""
+    started = Deferred[AbortSignal]()
+
+    def send(
+        _request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        return started.succeed(signal).and_then(fx.never)
+
+    client = c.make(send).with_scope()
+    request_scope = yield from scope_.make()
+    fiber = (
+        yield from client.get("https://origin.test/slow").pipe(scope_.provide(request_scope)).fork()
+    )
+    signal = yield from started.wait()
+    yield from fiber.interrupt()
+    assert signal.aborted
