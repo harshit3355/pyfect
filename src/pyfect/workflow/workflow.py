@@ -420,10 +420,11 @@ def into_result[A, E, R](
         suspend_on_failure = instance.workflow.annotations.get_unsafe(SuspendOnFailure)
 
         # Run on a child, so an external interrupt can suspend the workflow.
-        body: Effect[A, E, R | Scope] = (
-            effect.fork(start_immediately=True)
-            .flat_map(lambda fiber: fiber.join().on_interrupt(fiber.interrupt()))
-            .interruptible()
+        # The outer uninterruptible region protects the fork and the
+        # cancellation hook. Only the join is interruptible, so suspension
+        # waits for the handler's cleanup.
+        body: Effect[A, E, R | Scope] = effect.fork(start_immediately=True).flat_map(
+            lambda fiber: fiber.join().interruptible().on_interrupt(fiber.interrupt())
         )
         if suspend_on_failure:
 

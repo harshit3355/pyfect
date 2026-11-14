@@ -1076,6 +1076,50 @@ def test_layer_memory_closes_every_suspended_run_scope_when_a_finalizer_dies():
 
 
 @testing.effect
+def test_layer_memory_defers_finalizers_of_a_replay_after_a_defect_until_completion():
+    """WorkflowEngine / layerMemory defers finalizers of a replay after a defect until completion"""
+    gate = durable_deferred.make("WorkflowEngine/ReplayAfterDefect/Gate")
+    finalized: list[int] = []
+    runs = 0
+    Replays = workflow.make(
+        "WorkflowEngine/ReplayAfterDefect",
+        payload=S.Struct(Empty),
+        idempotency_key=lambda _: "one",
+    ).annotate(workflow.CaptureDefects, False)
+
+    def handler(_p: Empty, _id: str):
+        def body():
+            nonlocal runs
+            runs += 1
+            run = runs
+            if run == 1:
+                return (yield from fx.die("boom"))
+            yield from workflow.add_finalizer(lambda _: fx.sync(lambda: finalized.append(run)))
+            yield from gate.wait()
+
+        return fx.gen(body)
+
+    def program():
+        execution_id = yield from Replays.execution_id({})
+        first = yield from Replays.execute({}).exit()
+        assert isinstance(first, fx.Failure), "first run must die"
+
+        yield from Replays.resume(execution_id)
+        result = yield from Replays.poll(execution_id)
+        while not isinstance(result, Suspended):
+            yield from fx.yield_now()
+            result = yield from Replays.poll(execution_id)
+        assert finalized == [], "a suspended replay must keep its finalizers"
+
+        token = gate.token_from_execution_id(workflow=Replays, execution_id=execution_id)
+        yield from gate.succeed(token=token, value=None)
+        yield from Replays.execute({})
+        assert finalized == [3, 2]
+
+    yield from fx.gen(program).pipe(_with_engine(Replays.to_layer(handler)))
+
+
+@testing.effect
 def test_layer_memory_hides_deposited_interrupts_from_body_finalizers():
     """WorkflowEngine / layerMemory hides deposited interrupts from body finalizers"""
     gate = durable_deferred.make("WorkflowEngine/InterruptBodyFinalizer/Gate")

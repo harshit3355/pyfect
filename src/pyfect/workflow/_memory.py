@@ -17,6 +17,7 @@ from pyfect.effect import suspend as suspend_effect
 from pyfect.exit import Exit, Failure, Success
 from pyfect.fiber_map import FiberMap
 from pyfect.scope import CloseableScope, Scope
+from pyfect.semaphore import Semaphore
 from pyfect.workflow._encoded import (
     AnyWorkflow,
     DeferredState,
@@ -92,12 +93,22 @@ class _Execution:
     done: Deferred[None]
     # The parent of every run's scope. The scopes of runs that suspended
     # stay open under it, so their finalizers last until the execution ends.
+    # Runs fork from ``run_scope()``, never from this field.
     scope: CloseableScope
     interrupted: bool = False
     interrupted_unsafe: bool = False
     # The strongest wake asked for while a run was still finishing.
     resume_requested: WakeMode | None = None
     run: _Run | None = None
+
+    def run_scope(self) -> CloseableScope:
+        """The open scope a new run forks from. A run that ended without
+        suspending (a defect, say) closed the execution scope; forking from it
+        would close the new run's scope at once, running its finalizers, so a
+        resumed execution starts a fresh one."""
+        if self.scope.is_closed:
+            self.scope = CloseableScope()
+        return self.scope
 
 
 @dataclass(slots=True)
@@ -116,6 +127,9 @@ class _MemoryEngine:
         self.activities: dict[str, _ActivityRecord] = {}
         self.deferred_results: dict[str, Exit[Any, Any]] = {}
         self.deferred_state: DeferredState = make_deferred_state()
+        # Run setup can yield before ``state.run`` is set, so concurrent wakes
+        # would otherwise each start a run under the same execution scope.
+        self.run_setup = Semaphore(1)
         self.service = make_unsafe(
             Encoded(
                 register=self.register,
@@ -150,7 +164,7 @@ class _MemoryEngine:
                 return
             state.run = yield from self._start_run(state)
 
-        return gen(run)
+        return self.run_setup.with_permits(gen(run))
 
     def _queue_wake(self, state: _Execution, execution_id: str, mode: WakeMode) -> Effect[None]:
         # Queue wakes until the run finishes cleanup; explicit wakes take priority.
@@ -170,8 +184,11 @@ class _MemoryEngine:
         entry = self.workflows[state.instance.workflow.tag]
         # Each run gets a fresh scope, so a replay rebuilds its compensations
         # instead of registering them again.
+        execution_scope = state.run_scope()
         instance = WorkflowInstanceService.initial(
-            state.instance.workflow, state.instance.execution_id, scope=state.scope.fork_unsafe()
+            state.instance.workflow,
+            state.instance.execution_id,
+            scope=execution_scope.fork_unsafe(),
         )
         state.instance = instance
         suspend_on_failure = instance.workflow.annotations.get_unsafe(SuspendOnFailure)
@@ -201,7 +218,7 @@ class _MemoryEngine:
             # The final run's scope closed with the real exit; closing the
             # parent now closes the earlier ones, last first, with success, so
             # their superseded compensations are skipped.
-            closed = state.scope.close(Success(None))
+            closed = execution_scope.close(Success(None))
             if isinstance(ex, Success) and isinstance(ex.value, Complete):
                 return closed.and_then(state.done.succeed(None)).as_void()
             return closed

@@ -199,6 +199,14 @@
   shutdown cleanup still give up after three, so shutdown is not held by an outage, and a
   top-level `execute` still dies at once. `tests/test_cluster_engine_or_die_sites.py` pins
   each place the engine turns a storage failure into a defect to the one Effect has.
+- Workflows: `workflow.layer_memory` keeps the `add_finalizer` finalizers of a run resumed
+  after a defect until the execution completes; the new run forked from the execution scope
+  the defect had closed, so they ran at once. Run setup is serialized, so concurrent wakes
+  can't start two runs, as in Effect 4.1.4 (#10393).
+- Workflows: `into_result` interrupted right after the handler starts runs the handler's
+  cleanup before the workflow's finalizers; only the join is interruptible now, as in Effect
+  4.1.4 (#10472). A test interrupts it after every op of the run, not only at Effect's one
+  point.
 
 ### Performance
 
