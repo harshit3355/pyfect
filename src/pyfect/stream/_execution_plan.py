@@ -13,7 +13,8 @@ from pyfect.execution_plan._events import CurrentMetadata as PlanMetadata
 from pyfect.execution_plan._model import ExecutionPlan, Step
 from pyfect.execution_plan._run import PlanRun, fallback_schedule, first_schedule
 from pyfect.exit import Exit
-from pyfect.schedule import CurrentMetadata, Metadata, Schedule, Stop
+from pyfect.pull import catch_done
+from pyfect.schedule import CurrentMetadata, Metadata, Schedule
 from pyfect.schedule._model import to_step_with_metadata
 from pyfect.stream._base import AnyStream, StreamBase
 from pyfect.stream._constructors import fail, suspend, unwrap
@@ -61,14 +62,12 @@ class _RetryWithoutReset:
         return provided.catch_all(self.again)
 
     def again(self, error: Any) -> _AnyStream:
-        decision: Effect[Metadata[Any, Any] | Stop[Any], Any, Any] = self.step(error)
-        return unwrap(decision.map(lambda d: self.decided(error, d)))
+        stepped = self.step(error).map(self.stepped)
+        return unwrap(catch_done(stepped, lambda _: _Succeed(fail(error))))
 
-    def decided(self, error: Any, decision: Metadata[Any, Any] | Stop[Any]) -> _AnyStream:
-        if isinstance(decision, Stop):
-            return fail(error)
-        self.meta = decision
-        return unwrap(yield_now().as_(suspend(self.loop)))
+    def stepped(self, next_meta: Metadata[Any, Any]) -> _AnyStream:
+        self.meta = next_meta
+        return unwrap(yield_now().as_(self.loop()))
 
 
 class _StreamPlanRun(PlanRun):

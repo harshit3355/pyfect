@@ -1,111 +1,126 @@
-"""The work behind ``Schedule``'s methods. Each combinator wraps the inner
-step function and keeps its own ``_MetadataCounter``, as Effect does."""
+"""The work behind ``Schedule``'s methods, op for op as Effect's: each
+combinator maps the inner step function made by ``to_step`` and keeps its
+own ``_MetadataCounter``."""
 # pyright: reportPrivateUsage=false
 
 from __future__ import annotations
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, Never, cast
 
-from pyfect._core import Effect, _Gen, _Sync
+from pyfect._core import Effect, _FailCause, _Succeed, _Sync
+from pyfect.cause import done
+from pyfect.duration import Duration, from_input_unsafe, millis, zero
 from pyfect.duration import Input as DurationInput
-from pyfect.duration import from_input_unsafe, millis, zero
+from pyfect.pull import Pull, catch_done, match_effect
 from pyfect.random import next as next_double
 from pyfect.result import Err, Ok, Result
 from pyfect.schedule._model import (
-    Continue,
-    Decision,
     Metadata,
     Schedule,
     StepFn,
-    Stop,
     _MetadataCounter,
     from_step,
     to_step,
 )
 
 
-def _wrap[O, I, E, R, O2, E2, R2](
-    schedule: Schedule[O, I, E, R],
-    wrap: Callable[[StepFn[O, I, E, R], _MetadataCounter], StepFn[O2, I, E2, R2]],
-) -> Schedule[O2, I, E2, R | R2]:
-    return from_step(to_step(schedule).map(lambda step: wrap(step, _MetadataCounter())))
+def _as_effect(result: object) -> Effect[Any, Any, Any] | None:
+    return cast("Effect[Any, Any, Any]", result) if isinstance(result, Effect) else None
 
 
-def map_effect[O, I, E, R, B, E2, R2](
-    schedule: Schedule[O, I, E, R], f: Callable[[Metadata[O, I]], Effect[B, E2, R2]]
-) -> Schedule[B, I, E | E2, R | R2]:
-    def wrap(step: StepFn[O, I, E, R], meta: _MetadataCounter) -> StepFn[B, I, E | E2, R | R2]:
-        def mapped(now: float, input: I) -> Effect[Decision[B], E | E2, R | R2]:
-            def body() -> Any:
-                decision = yield from step(now, input)
-                if isinstance(decision, Stop):
-                    m = meta.full(now, input, decision.output, zero)
-                    return Stop((yield from f(m)))
-                m = meta.full(now, input, decision.output, decision.delay)
-                return Continue((yield from f(m)), decision.delay)
+def map_[O, I, E, R](
+    schedule: Schedule[O, I, E, R], f: Callable[[Metadata[O, I]], Any]
+) -> Schedule[Any, I, Any, Any]:
+    """Effect's ``Schedule.map``: ``f`` returns the new output, or an effect
+    of it."""
 
-            return _Gen(body)
+    def make(step: StepFn[O, I, E, R]) -> StepFn[Any, I, Any, Any]:
+        meta = _MetadataCounter()
+
+        def mapped(now: float, input: I) -> Pull[tuple[Any, Duration], Any, Any, Any]:
+            def on_success(result: tuple[O, Duration]) -> Effect[tuple[Any, Duration], Any, Any]:
+                output, delay = result
+                value = f(meta.full(now, input, output, delay))
+                eff = _as_effect(value)
+                if eff is None:
+                    return _Succeed((value, delay))
+                return eff.map(lambda o: (o, delay))
+
+            def on_done(output: O) -> Effect[Never, Any, Any]:
+                value = f(meta.full(now, input, output, zero))
+                eff = _as_effect(value)
+                return done(value) if eff is None else eff.flat_map(done)
+
+            return match_effect(
+                step(now, input), on_success=on_success, on_failure=_fail_cause, on_done=on_done
+            )
 
         return mapped
 
-    return _wrap(schedule, wrap)
+    return from_step(to_step(schedule).map(make))
 
 
 def tap[O, I, E, R, E2, R2](
     schedule: Schedule[O, I, E, R], f: Callable[[Metadata[O, I]], Effect[object, E2, R2]]
 ) -> Schedule[O, I, E | E2, R | R2]:
-    def wrap(step: StepFn[O, I, E, R], meta: _MetadataCounter) -> StepFn[O, I, E | E2, R | R2]:
-        def tapped(now: float, input: I) -> Effect[Decision[O], E | E2, R | R2]:
-            def body() -> Any:
-                decision = yield from step(now, input)
-                if isinstance(decision, Continue):
-                    yield from f(meta.full(now, input, decision.output, decision.delay))
-                return decision
+    def make(step: StepFn[O, I, E, R]) -> StepFn[O, I, E | E2, R | R2]:
+        meta = _MetadataCounter()
 
-            return _Gen(body)
+        def tapped(now: float, input: I) -> Pull[tuple[O, Duration], E | E2, O, R | R2]:
+            def run(result: tuple[O, Duration]) -> Effect[object, E2, R2]:
+                output, delay = result
+                return f(meta.full(now, input, output, delay))
+
+            return step(now, input).tap(run)
 
         return tapped
 
-    return _wrap(schedule, wrap)
+    return from_step(to_step(schedule).map(make))
 
 
-def while_effect[O, I, E, R, E2, R2](
-    schedule: Schedule[O, I, E, R], predicate: Callable[[Metadata[O, I]], Effect[bool, E2, R2]]
-) -> Schedule[O, I, E | E2, R | R2]:
-    def wrap(step: StepFn[O, I, E, R], meta: _MetadataCounter) -> StepFn[O, I, E | E2, R | R2]:
-        def checked(now: float, input: I) -> Effect[Decision[O], E | E2, R | R2]:
-            def body() -> Any:
-                decision = yield from step(now, input)
-                if isinstance(decision, Stop):
-                    return decision
-                m = meta.full(now, input, decision.output, decision.delay)
-                return decision if (yield from predicate(m)) else Stop(decision.output)
+def while_[O, I, E, R](
+    schedule: Schedule[O, I, E, R], predicate: Callable[[Metadata[O, I]], Any]
+) -> Schedule[O, I, Any, Any]:
+    """Effect's ``Schedule.while``: ``predicate`` returns a bool, or an
+    effect of one."""
 
-            return _Gen(body)
+    def make(step: StepFn[O, I, E, R]) -> StepFn[O, I, Any, Any]:
+        meta = _MetadataCounter()
+
+        def checked(now: float, input: I) -> Pull[tuple[O, Duration], Any, O, Any]:
+            def decide(result: tuple[O, Duration]) -> Pull[tuple[O, Duration], Any, O, Any]:
+                output, delay = result
+                value = predicate(meta.full(now, input, output, delay))
+                eff = _as_effect(value)
+                check = _Succeed(value) if eff is None else eff
+                return check.flat_map(lambda ok: _Succeed(result) if ok else done(output))
+
+            return step(now, input).flat_map(decide)
 
         return checked
 
-    return _wrap(schedule, wrap)
+    return from_step(to_step(schedule).map(make))
 
 
 def modify_delay[O, I, E, R, E2, R2](
     schedule: Schedule[O, I, E, R], f: Callable[[Metadata[O, I]], Effect[DurationInput, E2, R2]]
 ) -> Schedule[O, I, E | E2, R | R2]:
-    def wrap(step: StepFn[O, I, E, R], meta: _MetadataCounter) -> StepFn[O, I, E | E2, R | R2]:
-        def modified(now: float, input: I) -> Effect[Decision[O], E | E2, R | R2]:
-            def body() -> Any:
-                decision = yield from step(now, input)
-                if isinstance(decision, Stop):
-                    return decision
-                m = meta.full(now, input, decision.output, decision.delay)
-                return Continue(decision.output, from_input_unsafe((yield from f(m))))
+    def make(step: StepFn[O, I, E, R]) -> StepFn[O, I, E | E2, R | R2]:
+        meta = _MetadataCounter()
 
-            return _Gen(body)
+        def modified(now: float, input: I) -> Pull[tuple[O, Duration], E | E2, O, R | R2]:
+            def replace(result: tuple[O, Duration]) -> Effect[tuple[O, Duration], E2, R2]:
+                output, delay = result
+                return f(meta.full(now, input, output, delay)).map(
+                    lambda replacement: (output, from_input_unsafe(replacement))
+                )
+
+            return step(now, input).flat_map(replace)
 
         return modified
 
-    return _wrap(schedule, wrap)
+    return from_step(to_step(schedule).map(make))
 
 
 def jittered[O, I, E, R](schedule: Schedule[O, I, E, R]) -> Schedule[O, I, E, R]:
@@ -117,13 +132,18 @@ def jittered[O, I, E, R](schedule: Schedule[O, I, E, R]) -> Schedule[O, I, E, R]
 
 
 def passthrough[O, I, E, R](schedule: Schedule[O, I, E, R]) -> Schedule[I, I, E, R]:
-    def wrap(step: StepFn[O, I, E, R], _meta: _MetadataCounter) -> StepFn[I, I, E, R]:
-        def echo(decision: Decision[O], input: I) -> Decision[I]:
-            return Stop(input) if isinstance(decision, Stop) else Continue(input, decision.delay)
+    def make(step: StepFn[O, I, E, R]) -> StepFn[I, I, E, R]:
+        def echo(now: float, input: I) -> Pull[tuple[I, Duration], E, I, R]:
+            return match_effect(
+                step(now, input),
+                on_success=lambda result: _Succeed((input, result[1])),
+                on_failure=_fail_cause,
+                on_done=lambda _: done(input),
+            )
 
-        return lambda now, input: step(now, input).map(lambda d: echo(d, input))
+        return echo
 
-    return _wrap(schedule, wrap)
+    return from_step(to_step(schedule).map(make))
 
 
 def concat_result[O, O2, I, E, R](
@@ -139,40 +159,44 @@ def concat_result[O, O2, I, E, R](
 
 
 class _ConcatResult[O, I, E, R]:
-    """One run of ``concat_result``: steps through ``left``, then ``right``.
-    The current step lives on this object, not in closures that reach each
-    other (that cycle would keep both schedules alive after the run)."""
+    """One run of ``concat_result``: steps through ``left`` until it is done,
+    then ``right``. The current steps live on this object, not in closures
+    that reach each other (that cycle would keep both schedules alive after
+    the run)."""
 
-    __slots__ = ("left", "left_step", "on_left", "right", "right_step")
+    __slots__ = ("left", "left_step", "right", "right_step", "side")
 
     def __init__(self, left: Schedule[O, I, E, R], right: Schedule[O, I, E, R]) -> None:
         self.left = left
         self.right = right
-        self.on_left = True
+        self.side = 0
         self.left_step: StepFn[O, I, E, R] | None = None
         self.right_step: StepFn[O, I, E, R] | None = None
 
-    def recur(self, now: float, input: I) -> Effect[Decision[O], E, R]:
+    def recur(self, now: float, input: I) -> Pull[tuple[O, Duration], E, O, R]:
         left_step = self.left_step
         if left_step is not None:
-            return _Gen(lambda: self.until_done(left_step, now, input))
+            return catch_done(left_step(now, input), lambda _: self.next_side(now, input))
         right_step = self.right_step
         if right_step is not None:
             return right_step(now, input)
-        return _Gen(lambda: self.start(now, input))
+        made = to_step(self.left if self.side == 0 else self.right)
+        return made.flat_map(lambda step: self.started(step, now, input))
 
-    def start(self, now: float, input: I) -> Any:
-        step = yield from to_step(self.left if self.on_left else self.right)
-        if self.on_left:
-            self.on_left = False
+    def started(
+        self, step: StepFn[O, I, E, R], now: float, input: I
+    ) -> Pull[tuple[O, Duration], E, O, R]:
+        self.side += 1
+        if self.side == 1:
             self.left_step = step
         else:
             self.right_step = step
-        return (yield from self.recur(now, input))
+        return self.recur(now, input)
 
-    def until_done(self, step: StepFn[O, I, E, R], now: float, input: I) -> Any:
-        decision = yield from step(now, input)
-        if isinstance(decision, Stop):
-            self.left_step = None
-            return (yield from self.recur(now, input))
-        return decision
+    def next_side(self, now: float, input: I) -> Pull[tuple[O, Duration], E, O, R]:
+        self.left_step = None
+        return self.recur(now, input)
+
+
+def _fail_cause(cause: Any) -> Effect[Any, Any, Any]:
+    return _FailCause(cause)

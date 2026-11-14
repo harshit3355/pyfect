@@ -9,22 +9,28 @@ so resources do not pile up over repetitions.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Generator
 from typing import Any
 
-from pyfect._core import Effect, _FailCause, _Locally, _MatchCause, _Succeed, _Suspend
+from pyfect._core import Effect, _FailCause, _Gen, _Locally, _MatchCause, _Succeed, _Suspend
 from pyfect.cause import Fail
 from pyfect.cause import fail as fail_cause
 from pyfect.channel._base import AnyChannel, AnyPull, end_with
 from pyfect.channel._channel import Channel, from_transform, transform_pull
-from pyfect.channel._constructors import unwrap_effect
+from pyfect.channel._constructors import suspend, unwrap_effect
 from pyfect.channel._context import provide_service_effect
 from pyfect.channel._lifecycle import on_first
 from pyfect.exit import Exit, Failure
-from pyfect.pull import done_exit_from_cause
+from pyfect.pull import catch_done, done_exit_from_cause
 from pyfect.schedule import Schedule
 from pyfect.schedule._drive import resolve_policy
-from pyfect.schedule._model import CurrentMetadata, Metadata, Stop, to_step_with_metadata
+from pyfect.schedule._model import (
+    CurrentMetadata,
+    Metadata,
+    MetadataStep,
+    to_step_with_metadata,
+    to_step_with_sleep,
+)
 from pyfect.scope import CloseableScope, Scope
 
 type Channel_ = Channel[Any, Any, Any, Any, Any, Any, Any]
@@ -76,11 +82,13 @@ class _RepeatLoop:
     def __call__(self, cause: Any) -> AnyPull:
         assert self.current is not None
         ex = done_exit_from_cause(cause)
+        # As Effect's: ``on_exit`` and ``make_pull`` are called in the
+        # continuations, not as effects of their own.
         return (
             self.current[1]
             .close(ex)
-            .and_then(self.on_exit(ex, self.scope))
-            .and_then(_Suspend(self.make_pull))
+            .flat_map(lambda _: self.on_exit(ex, self.scope))
+            .flat_map(lambda _: self.make_pull())
         )
 
 
@@ -91,21 +99,18 @@ def _with_metadata(self: AnyChannel, read: Callable[[], Metadata[Any, Any]]) -> 
 def repeat(self: AnyChannel, policy: Policy) -> Channel_:
     schedule = resolve_policy(policy, None, None, None, None)
 
-    def start(step: Callable[[Any], Effect[Any, Any, Any]]) -> AnyChannel:
+    def start(step: MetadataStep[Any, Any, Any, Any]) -> AnyChannel:
         meta: Metadata[Any, Any] = CurrentMetadata.default()
 
         def stepped(ex: Exit[Any, Any], _: CloseableScope) -> Effect[Any, Any, Any]:
             if isinstance(ex, Failure):
                 return _FailCause(ex.cause)
 
-            def keep(decision: Metadata[Any, Any] | Stop[Any]) -> Effect[None, Any, Any]:
+            def keep(next_meta: Metadata[Any, Any]) -> None:
                 nonlocal meta
-                if isinstance(decision, Stop):
-                    return end_with(ex.value)
-                meta = decision
-                return _VOID
+                meta = next_meta
 
-            return step(ex.value).flat_map(keep)
+            return catch_done(step(ex.value).map(keep), lambda _: end_with(ex.value))
 
         return repeat_loop(_with_metadata(self, lambda: meta), stepped)
 
@@ -122,8 +127,8 @@ def forever(self: AnyChannel) -> Channel_:
 def retry(self: AnyChannel, policy: Policy) -> Channel_:
     schedule = resolve_policy(policy, None, None, None, None)
 
-    def build() -> AnyChannel:
-        step: Callable[[Any], Effect[Any, Any, Any]] | None = None
+    def build() -> Channel_:
+        step: MetadataStep[Any, Any, Any, Any] | None = None
         meta: Metadata[Any, Any] = CurrentMetadata.default()
 
         def reset(_: Any) -> Effect[None]:
@@ -139,38 +144,32 @@ def retry(self: AnyChannel, policy: Policy) -> Channel_:
                 return _FailCause(found)
             error = found.error
 
-            def keep(decision: Metadata[Any, Any] | Stop[Any]) -> Effect[None, Any, Any]:
-                nonlocal meta
-                if isinstance(decision, Stop):
-                    return _FailCause(fail_cause(error))
-                meta = decision
-                return _VOID
-
-            def with_step(made: Callable[[Any], Effect[Any, Any, Any]]) -> Effect[Any, Any, Any]:
-                nonlocal step
+            # Effect's ``Effect.gen`` making the step once, then stepping.
+            def body() -> Generator[Effect[Any, Any, Any], Any]:
+                nonlocal step, meta
+                made: MetadataStep[Any, Any, Any, Any] = (
+                    (yield to_step_with_metadata(schedule)) if step is None else step
+                )
                 step = made
-                return made(error).flat_map(keep)
+                meta = yield made(error)
 
-            make = _Succeed(step) if step is not None else to_step_with_metadata(schedule)
-            return _Locally(make.flat_map(with_step), lambda ctx: ctx.add(Scope, scope))
+            failed = _FailCause(fail_cause(error))
+            stepping = catch_done(_Gen(body), lambda _: failed)
+            return _Locally(stepping, lambda ctx: ctx.add(Scope, scope))
 
         with_reset = on_first(_with_metadata(self, lambda: meta), reset)
         return repeat_loop(with_reset, stepped)
 
-    return from_transform(lambda upstream, scope: build()._transform(upstream, scope))
+    return suspend(build)
 
 
 def schedule(self: AnyChannel, policy: Schedule[Any, Any, Any, Any]) -> Channel_:
+    # Effect's: the pull, tapped with the step (which sleeps); the step's
+    # ``Done`` ends the channel with the schedule's output.
     def with_step(pull: AnyPull, step: Callable[[Any], Effect[Any, Any, Any]]) -> AnyPull:
-        def paced(item: Any) -> Effect[Any, Any, Any]:
-            def decided(decision: Metadata[Any, Any] | Stop[Any]) -> Effect[Any, Any, Any]:
-                return end_with(decision.output) if isinstance(decision, Stop) else _Succeed(item)
-
-            return step(item).flat_map(decided)
-
-        return pull.flat_map(paced)
+        return pull.tap(step)
 
     return transform_pull(
         self,
-        lambda pull, _: to_step_with_metadata(policy).map(lambda step: with_step(pull, step)),
+        lambda pull, _: to_step_with_sleep(policy).map(lambda step: with_step(pull, step)),
     )

@@ -144,7 +144,10 @@ class _FlatMapRun:
         if self.child_scope is None:
             self.child_scope = self.scope.fork_unsafe()
         used = self.child_scope
-        return self.f(value)._transform(self.upstream, used).flat_map(partial(self.keep, used))
+        # Effect's ``flatMapEager``: a transform that is already its pull
+        # hands it on in this op.
+        transformed = self.f(value)._transform(self.upstream, used)
+        return transformed.flat_map_eager(partial(self.keep, used))
 
     def keep(self, used: CloseableScope, inner: AnyPull) -> AnyPull:
         self.inner, self.used = inner, used

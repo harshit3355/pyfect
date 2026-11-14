@@ -13,8 +13,9 @@ some fail.
 from __future__ import annotations
 
 import threading
-from collections.abc import Callable
-from typing import Any, Literal, Never, overload
+from collections.abc import Callable, Generator
+from functools import partial
+from typing import Any, Literal, Never, cast, overload
 
 from pyfect._concurrency import for_each
 from pyfect._core import (
@@ -24,6 +25,8 @@ from pyfect._core import (
     _FromExit,
     _Gen,
     _Locally,
+    _OnExit,
+    _RestoreInterruptible,
     _Succeed,
     _Suspend,
     _Sync,
@@ -31,12 +34,16 @@ from pyfect._core import (
     uninterruptible_mask,
 )
 from pyfect._effect_args import require_effect
+from pyfect._effect_base import Step
+from pyfect._effect_resources import _call_user_now, _run_finalizer
 from pyfect._fiber import Fiber, Uninterruptible
 from pyfect._interrupt_reason import closed
 from pyfect.context import Tag
 from pyfect.exit import Exit, as_void_all
 
 type Finalizer = Callable[[Exit[Any, Any]], Effect[object, Never, Any]]
+
+_VOID: Effect[None] = _Succeed(None)
 
 
 type Strategy = Literal["sequential", "parallel"]
@@ -97,7 +104,7 @@ class CloseableScope:
             # As Effect's ``provideContext``: the closing fiber's services,
             # overridden by those in scope at registration.
             def finalizer(ex: Exit[Any, Any]) -> Effect[object, Never, Any]:
-                return _Locally(_call_user(f, ex), lambda current: current.merge(ctx))
+                return _Locally(_call_user_now(f, ex), lambda current: current.merge(ctx))
 
             ended = self._add(object(), finalizer)
             return _Succeed(None) if ended is None else finalizer(ended).as_void()
@@ -134,13 +141,26 @@ class CloseableScope:
             return
         fiber.add_observer_unsafe(lambda _: self._remove(fiber))
 
+    def _add_finalizer_exit(self, f: Finalizer) -> Effect[object, Never, Any]:
+        """Register ``f``, or run it now if the scope is closed (the body of
+        Effect's ``scopeAddFinalizerExit``)."""
+        ended = self._add(object(), f)
+        return _VOID if ended is None else f(ended)
+
     def close(self, ex: Exit[Any, Any]) -> Effect[None]:
         """Run every finalizer, last added first (all at once in a parallel
         scope). Closing twice is a no-op."""
 
         # Uninterruptible before the scope is marked closed, so an interrupt
-        # can't land between marking it and running its finalizers.
-        return _Suspend(lambda: self.close_unsafe(ex) or _Succeed(None)).uninterruptible()
+        # can't land between marking it and running its finalizers (Effect's
+        # ``withFiber`` with ``fiberEnterUninterruptibleUnsafe``).
+        def body(fiber: Fiber[Any, Any]) -> Effect[None]:
+            if fiber._interruptible:
+                fiber._push(_RestoreInterruptible(True))
+                fiber._interruptible = False
+            return self.close_unsafe(ex) or _Succeed(None)
+
+        return _WithFiber(body)
 
     def close_unsafe(self, ex: Exit[Any, Any]) -> Effect[None] | None:
         """Mark the scope closed now and return the effect that runs its
@@ -157,6 +177,10 @@ class CloseableScope:
             parent._remove(self)
         if not entries:
             return None
+        if len(entries) == 1:
+            # As Effect's ``scopeCloseUnsafe``: a lone finalizer runs as it is.
+            # Its value is the finalizer's; callers only sequence on it.
+            return cast("Effect[None]", _call_user_now(entries[0][1], ex))
         run = _run_parallel if self._strategy == "parallel" else _run_sequential
         return run(entries, ex)
 
@@ -187,11 +211,11 @@ def _fail_with_all(exits: list[Exit[Any, Never]]) -> Effect[None]:
 
 
 def _run_sequential(entries: _Entries, ex: Exit[Any, Any]) -> Effect[None]:
-    def run_all():
+    def run_all() -> Generator[Effect[Any, Any, Any], Any]:
         exits: list[Exit[Any, Never]] = []
         for _key, fin in entries:
-            exits.append((yield from _call_user(fin, ex).exit()))
-        return (yield from _fail_with_all(exits))
+            exits.append((yield _call_user_now(fin, ex).exit()))
+        yield _fail_with_all(exits)
 
     return _Gen(run_all)
 
@@ -268,12 +292,23 @@ def scoped(eff: Effect[Any, Any, Any]) -> Effect[Any, Any, Any]:
     """Run ``eff`` in a new scope and close it when ``eff`` ends."""
     require_effect(eff, "eff")
 
-    def body() -> Effect[Any, Any, Any]:
+    # Effect's op for op: one ``withFiber`` that adds the scope to the
+    # fiber's context and pushes an ``OnExit`` frame, which puts the context
+    # back and closes the scope (handing the exit straight on if it is empty).
+    def enter(fiber: Fiber[Any, Any]) -> Effect[Any, Any, Any]:
+        before = fiber._view
         scope = CloseableScope()
-        inner: Effect[Any, Any, Any] = _Locally(eff, lambda ctx: ctx.add(Scope, scope))
-        return inner.on_exit(scope.close)
+        fiber._set_context(fiber._context.add(Scope, scope))
 
-    return _Suspend(body)
+        def finish(ex: Exit[Any, Any]) -> Step:
+            fiber._use_view(before)
+            after = scope.close_unsafe(ex)
+            return _FromExit(ex) if after is None else _run_finalizer(after, ex)
+
+        fiber._stack.append(_OnExit(eff, finish))
+        return eff
+
+    return _WithFiber(enter)
 
 
 def scoped_with[A, E = Never, R = Never](
@@ -304,13 +339,22 @@ def acquire_release[A, E = Never, RR = Never](
     scope."""
     require_effect(acquire, "acquire")
 
-    def body():
-        a = yield from acquire
-        scope = yield from Scope()
-        yield from scope.add_finalizer(lambda ex: release(a, ex))
-        return a
+    # Effect's op for op: ``contextWith``, ``uninterruptibleMask``, the
+    # scope, then ``tap`` adding the finalizer (``scopeAddFinalizerExit``).
+    def with_context(fiber: Fiber[Any, Any]) -> Effect[A, E, RR | Scope]:
+        ctx = fiber._context
 
-    return _Gen(body).uninterruptible()
+        def add(scope: CloseableScope, a: A) -> Effect[object]:
+            def finalizer(ex: Exit[Any, Any]) -> Effect[object, Never, Any]:
+                return _Locally(_call_user_now(release, a, ex), lambda current: current.merge(ctx))
+
+            return _Suspend(lambda: scope._add_finalizer_exit(finalizer))
+
+        return uninterruptible_mask(
+            lambda _: Scope().flat_map(lambda scope: acquire.tap(partial(add, scope)))
+        )
+
+    return _WithFiber(with_context)
 
 
 def acquire_use_release[A, B, EE = Never, RR = Never](
@@ -323,7 +367,9 @@ def acquire_use_release[A, B, EE = Never, RR = Never](
     require_effect(acquire, "acquire")
     return uninterruptible_mask(
         lambda restore: acquire.flat_map(
-            lambda a: restore(_call_user(use, a)).on_exit_primitive(lambda ex: release(a, ex))
+            lambda a: _call_user(lambda: restore(use(a))).on_exit_primitive(
+                lambda ex: release(a, ex)
+            )
         )
     )
 

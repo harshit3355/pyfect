@@ -17,8 +17,9 @@ from pyfect.clock import Clock, ClockService, sleep
 from pyfect.duration import Input as DurationInput
 from pyfect.duration import from_input_unsafe, from_nanos_or_infinite, nanos_or_infinite
 from pyfect.latch import Latch
+from pyfect.pull import catch_done
 from pyfect.schedule import Schedule
-from pyfect.schedule._model import Stop, to_step_with_sleep
+from pyfect.schedule._model import to_step_with_sleep
 from pyfect.scope import CloseableScope
 from pyfect.stream._base import AnyStream
 from pyfect.stream._mapping import one
@@ -31,13 +32,9 @@ type AnyStream_ = Stream[Any, Any, Any]
 _VOID: AnyEffect = _Succeed(None)
 
 
-def _none(_: object) -> None:
-    return None
-
-
 def schedule(self: AnyStream, policy: Schedule[Any, Any, Any, Any]) -> AnyStream_:
-    scheduled = self._channel.flatten_array().schedule(policy).map_done(_none)
-    return Stream(scheduled.map(one))
+    # Effect's Stream.schedule, op for op: the schedule's output is the channel's done value.
+    return Stream(self._channel.flatten_array().schedule(policy).map(one))
 
 
 def repeat_elements(self: AnyStream, policy: Schedule[Any, Any, Any, Any]) -> AnyStream_:
@@ -49,7 +46,7 @@ def repeat_elements(self: AnyStream, policy: Schedule[Any, Any, Any, Any]) -> An
                 lambda: (
                     pull
                     if (decide := repeating.decide) is None
-                    else _FlatMap(decide, repeating.decided)
+                    else catch_done(decide, repeating.ended)
                 )
             )
         )
@@ -59,30 +56,25 @@ def repeat_elements(self: AnyStream, policy: Schedule[Any, Any, Any, Any]) -> An
 
 class _RepeatElements:
     """One run of ``repeat_elements``: ``decide`` is the schedule's step for
-    the item in ``chunk`` while it repeats."""
+    the item while it repeats, succeeding with its chunk."""
 
-    __slots__ = ("chunk", "decide", "policy", "pull_item")
+    __slots__ = ("decide", "policy", "pull_item")
 
     def __init__(self, pull_item: AnyEffect, policy: Schedule[Any, Any, Any, Any]) -> None:
         self.pull_item = pull_item
         self.policy = policy
-        self.chunk: Chunk = ()
         self.decide: AnyEffect | None = None
 
     def first(self) -> Generator[AnyEffect, Any, Chunk]:
         item = yield self.pull_item
         chunk = (item,)
         step = yield to_step_with_sleep(self.policy)
-        self.chunk = chunk
-        self.decide = step(item)
+        self.decide = step(item).as_(chunk)
         return chunk
 
-    def decided(self, decision: object) -> AnyEffect:
-        if isinstance(decision, Stop):
-            self.decide = None
-            self.chunk = ()
-            return _Gen(self.first)
-        return _Succeed(self.chunk)
+    def ended(self, _: object) -> AnyEffect:
+        self.decide = None
+        return _Gen(self.first)
 
 
 # --- timeouts -----------------------------------------------------------------

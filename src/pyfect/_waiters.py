@@ -40,6 +40,7 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 
 from pyfect._core import WOKEN, Effect, _Callback, _Sync
+from pyfect._fiber import _thread, current_run_scheduler
 
 if TYPE_CHECKING:
     from pyfect._fiber import Fiber
@@ -60,6 +61,10 @@ class _Waiter:
         self.fiber = fiber
 
 
+_MIXED = object()
+"""A wait list's waiters belong to several runs, or one has no fiber."""
+
+
 def unlocked(lock: Lock, wakes: list[Callable[[], None]]) -> None:
     """Call ``wakes`` with ``lock``, which the caller holds, let go meanwhile: a woken
     fiber of the run on this thread runs at once and may take it."""
@@ -75,8 +80,6 @@ def unlocked(lock: Lock, wakes: list[Callable[[], None]]) -> None:
 
 def of_this_run(fiber: Fiber[Any, Any] | None) -> bool:
     """Whether ``fiber`` belongs to the run of the fiber running on this thread."""
-    from pyfect._fiber import current_run_scheduler
-
     return fiber is not None and fiber._run_scheduler is current_run_scheduler()
 
 
@@ -105,13 +108,16 @@ def wake_soon(task: Callable[[], None]) -> None:
 class WaitList:
     """Fibers waiting on ``lock``'s primitive. Call the notifiers holding ``lock``."""
 
-    __slots__ = ("_lock", "_soon", "_waiters")
+    __slots__ = ("_lock", "_run", "_soon", "_waiters")
 
     def __init__(self, lock: Lock) -> None:
         self._lock = lock
         self._waiters: deque[_Waiter] = deque()
         # Whether a ``notify_ready_soon`` task is pending.
         self._soon = False  # pragma: no mutate, falsy either way
+        # The run every waiter belongs to, or ``_MIXED``: a notifier of that run
+        # has no waiter of another run to wake now, and skips looking for one.
+        self._run: object = _MIXED
 
     def wait(self, ready: Callable[[], bool]) -> Effect[None]:
         """Park until notified, or not at all if ``ready()`` already holds."""
@@ -123,15 +129,27 @@ class WaitList:
                 if ready():
                     resume(WOKEN)
                     return None
-                waiter = _Waiter(ready, lambda: resume(WOKEN), current_fiber())
+                fiber = current_fiber()
+                waiter = _Waiter(ready, lambda: resume(WOKEN), fiber)
+                run = _MIXED if fiber is None else fiber._run_scheduler
+                if not self._waiters:
+                    self._run = run
+                elif self._run is not run:
+                    self._run = _MIXED
                 self._waiters.append(waiter)
             return _Sync(lambda: self._discard(waiter))
 
         return _Callback(register)
 
     def notify_ready(self) -> None:
-        """Wake every waiter whose condition holds now."""
-        unlocked(self._lock, [waiter.wake for waiter in self._take(lambda _: True)])
+        """Wake, in order, each waiter whose condition holds when its turn
+        comes (Effect's ``releaseTakers``): a woken fiber of this run runs at
+        once and may change what the waiters behind it see."""
+        for waiter in list(self._waiters):
+            if waiter not in self._waiters or not waiter.ready():
+                continue
+            self._waiters.remove(waiter)
+            unlocked(self._lock, [waiter.wake])
 
     def _take(self, which: Callable[[_Waiter], bool]) -> list[_Waiter]:
         """Take out the waiters ``which`` picks whose condition holds now."""
@@ -151,8 +169,16 @@ class WaitList:
         most calls (an offer with no taker) skip."""
         if not self._waiters:
             return
-        foreign = self._take(lambda waiter: not of_this_run(waiter.fiber))
-        unlocked(self._lock, [waiter.wake for waiter in foreign])
+        # ``current_run_scheduler()``, inlined: an offer calls this for each item.
+        drain = _thread.drain
+        if (
+            self._run is _MIXED
+            or drain is None
+            or drain.current is None
+            or self._run is not drain.run_scheduler
+        ):
+            foreign = self._take(lambda waiter: not of_this_run(waiter.fiber))
+            unlocked(self._lock, [waiter.wake for waiter in foreign])
         if self._soon or not self._waiters:
             return
         self._soon = True
