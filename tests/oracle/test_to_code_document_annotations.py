@@ -8,9 +8,13 @@ Omitted:
   Union": ported with ``mode="one_of"``, the only mode a Python document can tell from the default.
 """
 
+import collections
+import enum
 import re
+import types
 from collections.abc import Callable
-from typing import Any
+from datetime import UTC, datetime
+from typing import Any, NamedTuple
 
 import pytest
 
@@ -123,6 +127,42 @@ def test_emits_supported_annotation_trees_atomically() -> None:
     assert '"negative": float("-inf")' in runtime
     assert "omitted" not in runtime
     assert "callback" not in runtime
+
+
+class _Level(enum.IntEnum):
+    A = 1
+
+
+class _Point(NamedTuple):
+    x: int
+
+
+class _Instance:
+    value = 1
+
+
+def test_omits_unsupported_object_annotations_atomically() -> None:
+    """toCodeDocument annotations / omits unsupported object annotations atomically
+
+    Effect's plain objects and arrays are exactly ``dict``, ``list`` and ``tuple`` here, and a
+    leaf is exactly a ``bool``, ``int``, ``float`` or ``str``: a subclass (an ``IntEnum``, a
+    ``namedtuple``, an ``OrderedDict``) would print as something else or not as Python."""
+    schema = S.String.annotate(
+        kept={"value": 1},
+        map=collections.OrderedDict[str, int](a=1),
+        counter=collections.Counter("a"),
+        proxy=types.MappingProxyType({"a": 1}),
+        set={1},
+        date=datetime(1970, 1, 1, tzinfo=UTC),
+        bytes=b"\x01\x02",
+        instance=_Instance(),
+        int_enum=_Level.A,
+        named_tuple=_Point(1),
+        nested={"value": 1, "map": collections.OrderedDict[str, int](a=1)},
+        array=[1, {1}],
+    )
+    runtime = R.to_code_document(R.to_representations((schema,))).codes[0].runtime
+    assert runtime == 'S.String.annotate(kept={"value": 1})'
 
 
 def test_preserves_fallback_identifiers() -> None:

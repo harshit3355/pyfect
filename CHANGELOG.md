@@ -246,6 +246,13 @@
   recursive definition intersected with itself, and rejects other recursive intersections
   with an error instead of failing, as in Effect 4.1.4 (#10521). A recursive definition that
   can't be resolved fails with "Cannot resolve recursive definition ... during normalization."
+- Schema code generation (`representation.to_code_document`) prints an annotation value only
+  when it and every value inside it is exactly a `None`, `bool`, `int`, `float`, `str`,
+  `list`, `tuple` or `dict`, as Effect 4.1.4 prints only plain objects and arrays (#10532).
+  An `IntEnum` member printed as `<C.A: 1>`, which isn't Python, and a `namedtuple`,
+  `OrderedDict`, `Counter` or `MappingProxyType` printed as a plain list or dict; such
+  annotations are now omitted. `tests/properties/test_code_value_literals.py` checks that
+  whatever is printed evaluates back to the value.
 
 ### Performance
 

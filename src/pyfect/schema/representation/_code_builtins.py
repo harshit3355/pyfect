@@ -58,23 +58,24 @@ def string_literal(value: str) -> str:
     return _json_text.quote(value)
 
 
-def value_literal(value: object) -> str | None:  # noqa: PLR0911
-    """``value`` as a Python expression; ``None`` for what has none."""
-    match value:
-        case None | bool():
-            return repr(value)
-        case str():
-            return string_literal(value)
-        case int():
-            return repr(value)
-        case float():
-            return repr(value) if math.isfinite(value) else f'float("{value}")'
-        case list() | tuple():
-            return _sequence(cast("list[object]", value))
-        case Mapping():
-            return _mapping(cast("Mapping[object, object]", value))
-        case _:
-            return None
+def value_literal(value: object) -> str | None:
+    """``value`` as a Python expression; ``None`` for what has none. Only exact ``None``,
+    ``bool``, ``int``, ``float``, ``str``, ``list``, ``tuple`` and ``dict`` values print, as
+    Effect prints only plain objects and arrays: a subclass (an ``IntEnum``, a ``namedtuple``,
+    an ``OrderedDict``) would print as another value, or not as Python."""
+    kind = type(value)
+    if value is None or kind is bool or kind is int:
+        return repr(value)
+    if kind is str:
+        return string_literal(cast("str", value))
+    if kind is float:
+        number = cast("float", value)
+        return repr(number) if math.isfinite(number) else f'float("{number}")'
+    if kind is list or kind is tuple:
+        return _sequence(list(cast("list[object] | tuple[object, ...]", value)))
+    if kind is dict:
+        return _mapping(cast("dict[object, object]", value))
+    return None
 
 
 def _sequence(values: list[object]) -> str | None:
