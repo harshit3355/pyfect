@@ -15,6 +15,7 @@ from pyfect.ai import ai_error as E
 from pyfect.ai import chat
 from pyfect.ai.openai import client, language_model
 from pyfect.exit import Failure, Success
+from pyfect.http.error import HttpClientError, TransportError
 from pyfect.redacted import make as redact
 
 from ._ai_http import unexpected
@@ -181,3 +182,56 @@ def test_a_closed_connection_forgets_its_response_ids():
     assert len(server.sockets) == 2
     assert "previous_response_id" not in requests[1]
     assert len(requests[1]["input"]) == 3
+
+
+@testing.live
+def test_a_failing_connection_request_fails_the_stream_with_an_ai_error():
+    """As Effect 4.1.4's ``makeSocket`` (#10512): a client transform failing to prepare the
+    connection request does not fail the layer, which primes the socket and ignores its
+    failure; the response stream fails with an ``AiError``, and a later one connects."""
+    server = WsServer()
+    failing = [True]
+
+    def prepare(request: Any) -> fx.Effect[Any, Any]:
+        if failing[0]:
+            return fx.fail(HttpClientError(TransportError(request, description="no credentials")))
+        return fx.succeed(request)
+
+    def drive() -> Any:
+        service = yield from client.OpenAiClient()
+        payload = cast("client.CreateResponse", {"model": "m", "input": "a"})
+        first = yield from (
+            service.create_response_stream(payload)
+            .flat_map(lambda sent: sent[1].run_collect())
+            .exit()
+        )
+        failing[0] = False
+        second = yield from ws_turn(
+            server,
+            {"model": "m", "input": "b"},
+            lambda _: server.send(*ws_completed("resp_1", "msg_1", "ok")),
+        )
+        return first, second
+
+    turns = (
+        fx.gen(drive)
+        .pipe(client.with_web_socket_mode)
+        .pipe(
+            fx.provide(
+                client.layer(
+                    api_key=redact("sk-test"),
+                    api_url=_URL,
+                    transform_client=lambda http: http.map_request_effect(prepare),
+                )
+            )
+        )
+        .pipe(fx.provide(server.layer))
+        .pipe(fx.provide(unexpected().layer))
+    )
+    first, second = yield from turns
+    assert isinstance(first, Failure)
+    reason = _reason(first)
+    assert isinstance(reason, E.NetworkError)
+    assert reason.reason == "TransportError"
+    assert isinstance(second, Success)
+    assert len(server.sockets) == 1
