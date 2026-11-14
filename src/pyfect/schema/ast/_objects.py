@@ -44,8 +44,14 @@ _NOT_OBJECTS = (type(None), bool, int, float, complex, str, bytes, list, tuple, 
 """What JavaScript's ``typeof input === "object"`` and ``!Array.isArray`` turn away."""
 
 
+OBJECT_MEMBERS: frozenset[str] = frozenset(dir(object)) | {"__dict__", "__module__", "__weakref__"}
+"""Names every instance inherits (Effect's ``Object.prototype`` keys): a field with one of
+these names is present only as the instance's own attribute."""
+
+
 class ObjectKeys(Mapping[object, object]):
-    """An instance read as keys: any attribute, and its own ones when enumerating."""
+    """An instance read as keys: any attribute, and its own ones when enumerating. A name in
+    ``OBJECT_MEMBERS`` counts only as an own attribute (``Object.hasOwn``), as in Effect."""
 
     __slots__ = ("value",)
 
@@ -54,6 +60,8 @@ class ObjectKeys(Mapping[object, object]):
 
     def __getitem__(self, key: object) -> object:
         if isinstance(key, str):
+            if key in OBJECT_MEMBERS:
+                return _own_attribute(self.value, key)
             try:
                 return getattr(self.value, key)
             except AttributeError:
@@ -61,7 +69,11 @@ class ObjectKeys(Mapping[object, object]):
         raise KeyError(key)  # pragma: no mutate, never shown
 
     def __contains__(self, key: object) -> bool:
-        return isinstance(key, str) and hasattr(self.value, key)
+        if not isinstance(key, str):
+            return False
+        if key in OBJECT_MEMBERS:
+            return key in _own_attributes(self.value)
+        return hasattr(self.value, key)
 
     def __iter__(self) -> Iterator[object]:
         return iter(_own_attributes(self.value))
@@ -77,13 +89,31 @@ def reads_properties(value: object) -> bool:
     return not isinstance(value, _NOT_OBJECTS) and not callable(value)
 
 
-def _own_attributes(value: object) -> list[str]:
-    names: list[str] = list(getattr(value, "__dict__", ()))
+def _own_attribute(value: object, name: str) -> object:
+    """The instance's own ``name``: its ``__dict__`` entry (which a data descriptor such as
+    ``__class__`` would hide from ``getattr``) or its slot."""
+    own: object = getattr(value, "__dict__", None)
+    if isinstance(own, dict) and name in own:
+        return cast("dict[str, object]", own)[name]
+    if name in _slot_names(value):
+        try:
+            return getattr(value, name)
+        except AttributeError:
+            pass
+    raise KeyError(name)  # pragma: no mutate, never shown
+
+
+def _slot_names(value: object) -> Iterator[str]:
     for cls in type(value).__mro__:
         slots: object = cls.__dict__.get("__slots__", ())
-        for name in (slots,) if isinstance(slots, str) else cast("tuple[str, ...]", slots):
-            if name not in names and name != "__weakref__" and hasattr(value, name):
-                names.append(name)
+        yield from (slots,) if isinstance(slots, str) else cast("tuple[str, ...]", slots)
+
+
+def _own_attributes(value: object) -> list[str]:
+    names: list[str] = list(getattr(value, "__dict__", ()))
+    for name in _slot_names(value):
+        if name not in names and name != "__weakref__" and hasattr(value, name):
+            names.append(name)
     return names
 
 

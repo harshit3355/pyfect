@@ -755,3 +755,30 @@ def test_does_not_replay_declaration_defects():
     assert str(raised.value) == "Sync adapter can only throw schema errors"
     assert str(raised.value.__cause__) == "declaration defect"
     assert runs == 1
+
+
+class _Plain:
+    """A plain instance: the members of ``object`` (Effect's ``Object.prototype``) are inherited."""
+
+
+def _object_member_fields() -> Any:
+    return struct(
+        __class__=Opt(S.String),
+        __str__=Opt(S.NullOr(S.String)),
+        __doc__=S.String.pipe(S.with_decoding_default_key(fx.succeed("default"))),
+    )
+
+
+def test_treats_declared_fields_named_after_object_prototype_members_as_absent():
+    """treats declared fields named after Object.prototype members as absent from a plain object"""
+    assert S.decode_unknown_sync(_object_member_fields())(_Plain()) == {"__doc__": "default"}
+    assert S.is_(struct(__class__=Opt(S.String)))(_Plain()) is True
+
+
+def test_reports_an_inherited_required_object_prototype_field_as_missing():
+    """reports an inherited required Object.prototype field as missing"""
+
+    inherits = type("Inherits", (), {"__str__": "inherited"})
+    with pytest.raises(S.SchemaError) as raised:
+        S.decode_unknown_sync(struct(__str__=S.String))(inherits())
+    assert _message(raised) == 'Missing key\n  at ["__str__"]'

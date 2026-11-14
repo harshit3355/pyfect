@@ -200,6 +200,13 @@
   lost the first character of a string starting with one. The shared UTF-8 helper now takes
   `ignore_bom` with no default, and `tests/properties/test_encoding_properties.py` round-trips
   generated text through every module.
+- Schema: a struct reading an instance treats a field named after a member every instance
+  inherits from `object` (`__doc__`, `__str__`, `__class__`, `__module__`, ...) as present only
+  when it is the instance's own attribute (its `__dict__` or a slot), as Effect 4.1.4 does for
+  `Object.prototype` members (#9612). An optional `__doc__` field failed with "Expected string"
+  on a plain instance, and a required one read the class's docstring. Other inherited
+  attributes, such as properties, are still read. `tests/oracle/test_schema_object_members.py`
+  checks every such name, interpreted and compiled.
 
 ### Performance
 
