@@ -197,6 +197,8 @@
 - A server request with no body streams as empty, as in Effect 4.1.4 (#10506). Its `stream`
   failed with "can not create stream from empty body", which included every bodyless request
   the live server received.
+- `prompt.integer` and `prompt.number` keep a typed minus sign when a zero follows it, as in
+  Effect (#10558): typing `-0.05` submitted `0.05` and `-07` submitted `7`.
 
 ### Performance
 

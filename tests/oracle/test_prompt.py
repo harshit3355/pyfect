@@ -9,6 +9,7 @@ datetimes where Effect has a JavaScript ``Date``.
 from __future__ import annotations
 
 import dataclasses
+import math
 import re
 import sys
 from collections.abc import Generator
@@ -36,7 +37,7 @@ from pyfect.cli.prompt import (
 )
 from pyfect.file_system import FileInfo, FileSystem, FileType, NoopFileSystem, layer_noop
 from pyfect.queue import Queue
-from pyfect.terminal import Terminal, TerminalService, UserInput
+from pyfect.terminal import QuitError, Terminal, TerminalService, UserInput
 from pyfect.testing import Services
 
 from ._mock_terminal import display_lines, input_key, input_text
@@ -242,6 +243,50 @@ def test_preserves_a_leading_zero_in_the_fractional_part(env: Services[Env]):
     yield from input_key("enter")
     value = yield from prompt.number("Rate")
     assert value == 0.05
+
+
+@testing.effect
+def test_accepts_a_negative_value_between_minus_1_and_0(env: Services[Env]):
+    """accepts a negative value between -1 and 0"""
+    yield from input_text("-0.05")
+    yield from input_key("enter")
+    value = yield from prompt.number("Rate")
+    assert value == -0.05
+
+
+@testing.effect
+def test_preserves_the_sign_of_a_negative_integer_with_a_leading_zero(env: Services[Env]):
+    """preserves the sign of a negative integer with a leading zero"""
+    yield from input_text("-07")
+    yield from input_key("enter")
+    value = yield from prompt.integer("Count")
+    assert value == -7
+
+
+_TYPED_NUMBERS = [
+    f"{sign}{whole}{fraction}"
+    for sign in ("", "-")
+    for whole in ("0", "00", "07", "10")
+    for fraction in ("", ".0", ".05", ".5")
+]
+
+
+@pytest.mark.parametrize("text", _TYPED_NUMBERS)
+def test_a_number_typed_key_by_key_submits_its_value(text: str) -> None:
+    def typed[N: float](prompt_: prompt.Prompt[N]) -> fx.Effect[N, QuitError]:
+        @fx.fn
+        def body():
+            yield from input_text(text)
+            yield from input_key("enter")
+            return (yield from prompt_)
+
+        return body().pipe(fx.provide(test_layer))
+
+    value = fx.run_sync(typed(prompt.number("Rate")).or_die())
+    assert (value, math.copysign(1, value)) == (float(text), math.copysign(1, float(text)))
+    if "." not in text:
+        whole = fx.run_sync(typed(prompt.integer("Count")).or_die())
+        assert whole == int(text)
 
 
 @testing.effect
