@@ -14,7 +14,8 @@ import re
 from collections.abc import Callable
 from dataclasses import replace
 
-from pyfect._js import js_number
+from pyfect._digits import to_int
+from pyfect._js import int_text, js_number
 from pyfect.exit import Exit, Success
 from pyfect.exit import fail as fail_exit
 from pyfect.json_schema import JsonSchema
@@ -90,11 +91,7 @@ UNKNOWN_TO_JSON = ast.Link(ast.json, _PASSTHROUGH)
 """Any JSON value, unchanged: what an opaque declaration is written as."""
 
 
-def _int_of(text: str) -> int:
-    return int(text)
-
-
-_INT_TO_STRING = ast.Link(BIG_INT_STRING, T.transform(decode=_int_of, encode=str))
+_INT_TO_STRING = ast.Link(BIG_INT_STRING, T.transform(decode=to_int, encode=int_text))
 _FINITE_TEXT = r"[+-]?(?:\d+(?:\.\d+)?|\.\d+)(?:[Ee][+-]?\d+)?"
 NUMBER_KEY_PATTERN = f"^(?:{_FINITE_TEXT}|Infinity|-Infinity|NaN)$"
 """The text of any number (a JavaScript pattern): a number-keyed mapping's keys."""

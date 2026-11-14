@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.5 (unreleased)
+
+### Fixed
+
+- Integers past 4300 digits, which Python's `int` and `str` refuse and JavaScript reads and
+  prints in full, no longer crash the parsers that read them: `BigDecimal.format()` and
+  `normalize()` of a decimal with that many digits (it parsed, then raised), ISO 8601
+  durations (`duration.from_iso`, `DurationFromString`) and their `format_iso`, YAML
+  integers, `JSON.parse` (`schema.parse_json` and the other JSON readers), `Int` record keys
+  in JSON and representation documents' `bigint` values. Each is read in full, as in
+  Effect; an `Int` key or a template literal `BigInt` past what its schema accepts is a
+  `SchemaError` where it was a defect. `big_decimal.from_number` of an `int` too large for a
+  float is that integer. Conversions go through `pyfect._digits.to_int` and
+  `pyfect._js.int_text`, which take time a little above linear (a million digits in under
+  a second to read, two to print), and `tests/fuzz/test_long_digit_runs.py` replays every
+  fuzz target's corpus with its digit runs stretched past 4300. Found by fuzzing (text).
+
 ## 0.6.4 (2026-11-14)
 
 ### Added

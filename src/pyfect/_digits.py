@@ -4,7 +4,8 @@
 ``int`` alone accepts signs, spaces, underscores and non-ASCII digits, and
 raises past 4300 digits, so every such parse goes through this module (a
 guard test bans ``.isdigit()`` and hand-written digit-run regexes
-elsewhere).
+elsewhere, and ``tests/fuzz/test_long_digit_runs.py`` feeds every parser
+digit runs past 4300).
 """
 
 from __future__ import annotations
@@ -45,6 +46,28 @@ def digits_value(value: str) -> int | None:
     """``value`` as an int when it is ASCII digits, however many (what
     JavaScript's ``BigInt`` reads), else ``None``."""
     return _run_value(value) if is_digits(value) else None
+
+
+def signed_digits_value(value: str) -> int | None:
+    """``digits_value`` after an optional ``+`` or ``-``: what JavaScript's
+    ``BigInt`` reads of a decimal integer, however long."""
+    sign = value[:1]
+    if sign not in ("+", "-"):
+        return digits_value(value)
+    magnitude = digits_value(value[1:])
+    return None if magnitude is None else -magnitude if sign == "-" else magnitude
+
+
+def to_int(value: str) -> int:
+    """``int(value)`` for an optionally signed run of ASCII digits of any
+    length; ``ValueError`` for anything else. Python's ``int`` refuses more
+    than 4300 digits, which JavaScript's ``BigInt`` and ``Number`` read, so
+    text from outside is never handed to it whole (a fuzz test stretches
+    every digit run past the limit, ``tests/fuzz/test_long_digit_runs.py``)."""
+    out = signed_digits_value(value)
+    if out is None:
+        raise ValueError(f"Not an integer: {value[:40]!r}")
+    return out
 
 
 def _run_value(run: str) -> int:

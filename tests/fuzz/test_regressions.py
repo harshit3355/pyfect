@@ -138,3 +138,47 @@ def test_a_number_from_json_string_past_the_floats_is_an_infinity_written_null(t
     assert decoded == float(text)
     assert S.encode_unknown_sync(schema)(decoded) == "null"
     assert S.encode_unknown_sync(schema)(float("nan")) == "null"
+
+
+_DIGITS = "7" * 6578
+"""More digits than Python's ``int`` reads or ``str`` prints (4300)."""
+_VALUE = int(_DIGITS[:4000]) * 10**2578 + int(_DIGITS[4000:])
+
+
+def test_a_big_decimal_past_4300_digits_formats_and_parses_back() -> None:
+    """``normalize`` handed its digits without trailing zeros to ``int``, which raised."""
+    from pyfect import big_decimal
+
+    parsed = big_decimal.from_string_unsafe(_DIGITS + "000.500")
+    assert parsed.format() == _DIGITS + "000.5"
+    assert big_decimal.from_string_unsafe(parsed.format()) == parsed
+    assert big_decimal.from_number_unsafe(10**5000) == big_decimal.BigDecimal(10**5000, 0)
+
+
+def test_an_iso_duration_past_4300_digits_is_read_and_written_in_full() -> None:
+    from pyfect import duration
+
+    found = duration.from_iso("PT" + _DIGITS + "S")
+    assert found is not None
+    iso = found.format_iso()
+    assert iso is not None
+    assert duration.from_iso(iso) == found
+
+
+def test_yaml_and_json_integers_past_4300_digits_are_read_in_full() -> None:
+    from pyfect import _json_text
+
+    assert yaml.parse("a: " + _DIGITS) == {"a": _VALUE}
+    assert _json_text.parse("[-" + _DIGITS + "]") == [-_VALUE]
+
+
+def test_digit_runs_past_4300_in_schemas_fail_as_schema_errors() -> None:
+    """An ``Int`` key past the safe integers, and a template literal ``BigInt`` past the
+    1000 digits ``BigInt`` coercion reads (§4, security hardening), are schema failures;
+    they were defects."""
+    keys = S.decode_unknown_exit(S.to_codec_json(S.Record(S.Int, S.String)))({_DIGITS: "x"})
+    template = S.decode_unknown_exit(S.TemplateLiteral(["a", S.BigInt]))("a" + _DIGITS)
+    for exit in (keys, template):
+        assert isinstance(exit, Failure)
+        assert isinstance(exit.cause.find_error(), Ok)
+        assert isinstance(exit.cause.find_defect(), Err)

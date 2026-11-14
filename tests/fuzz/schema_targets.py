@@ -81,7 +81,10 @@ def _as_number(value: object) -> object:
     """Numbers as JavaScript has them, one ``Number`` type: an ``int`` the JSON
     text of a large float re-parses to is that float."""
     if isinstance(value, int) and not isinstance(value, bool) and abs(value) > 2**53:
-        return float(value)
+        try:
+            return float(value)
+        except OverflowError:  # past the floats JavaScript's number is an infinity
+            return math.inf if value > 0 else -math.inf
     if isinstance(value, dict):
         items = cast("dict[object, object]", value).items()
         return {key: _as_number(item) for key, item in items}
