@@ -23,7 +23,7 @@ from pyfect.ai.anthropic._server_tools import (
     SERVER_RESULT_BLOCKS,
     is_code_execution_failure,
 )
-from pyfect.ai.anthropic._tools import to_codec_lenient
+from pyfect.ai.anthropic._tools import ToolCodecs, to_codec_lenient
 from pyfect.ai.id_generator import IdGenerator
 from pyfect.ai.response import FinishReason
 from pyfect.ai.tool import NameMapper
@@ -143,13 +143,13 @@ def citation_source(citation: dict[str, Any], documents: list[CitableDocument]) 
 
 
 def transform_params(
-    options: lm.ProviderOptions, tool_name: str, params: object
+    options: lm.ProviderOptions, codecs: ToolCodecs, tool_name: str, params: object
 ) -> Effect[object, AiError, Any]:
-    """A non-strict tool's request used the plain JSON Schema when
-    Anthropic's codec rejected its parameters, so its calls decode with the
-    plain codec too."""
+    """A call's parameters, decoded with the codec its tool was advertised with."""
+    tool = next((t for t in options.tools if t.name == tool_name), None)
+    transformer = codecs.transformer(tool) if tool is not None else to_codec_lenient
     return PT.transform_params(
-        "AnthropicLanguageModel", options, tool_name, params, transformer=to_codec_lenient
+        "AnthropicLanguageModel", options, tool_name, params, transformer=transformer
     )
 
 
@@ -316,6 +316,7 @@ def usage_part(
 @dataclass
 class _Response:
     options: lm.ProviderOptions
+    codecs: ToolCodecs
     message: W.Message
     response: HttpClientResponse
     results: ServerResults
@@ -349,7 +350,7 @@ class _Response:
             self.parts.append({"type": "text", "text": P.dumps(block.get("input"))})
             return
         name = self.results.names.get_custom_name(block["name"])
-        params = yield from transform_params(self.options, name, block.get("input"))
+        params = yield from transform_params(self.options, self.codecs, name, block.get("input"))
         part: Part = {"type": "tool-call", "id": block["id"], "name": name, "params": params}
         caller = caller_metadata(block)
         if caller is not None:
@@ -458,6 +459,7 @@ class _Response:
 
 def make_response(
     options: lm.ProviderOptions,
+    codecs: ToolCodecs,
     message: W.Message,
     response: HttpClientResponse,
     names: NameMapper,
@@ -465,6 +467,6 @@ def make_response(
     results = ServerResults(names, citable_documents(options.prompt))
     return now_iso().flat_map(
         lambda timestamp: fx.gen(
-            lambda: _Response(options, message, response, results, timestamp).run()
+            lambda: _Response(options, codecs, message, response, results, timestamp).run()
         )
     )

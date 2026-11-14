@@ -165,6 +165,137 @@ GlobToolkit = K.make(GlobTool)
 GlobLayer = GlobToolkit.to_layer(GlobTool.handler(lambda _, __: fx.succeed("found.ts")))
 
 
+# tool schema strictness ----------------------------------------------------------------
+
+
+class _Contact(TypedDict):
+    id: str
+    name: NotRequired[str]
+    nickname: NotRequired[str | None]
+    fields: NotRequired[dict[str, str]]
+
+
+Contact = T.make(
+    "UpdateContact",
+    parameters=S.Struct(_Contact, name=S.String.check(S.is_min_length(1), S.is_max_length(255))),
+)
+
+# (name, model, config, the tool's own Strict, the request's strict)
+_STRICTNESS: list[tuple[str, str, alm.ConfigService, bool | None, bool | None]] = [
+    ("global non-strict", "claude-sonnet-4-5", {"strict_json_schema": False}, None, False),
+    ("tool opt-out", "claude-sonnet-4-5", {"strict_json_schema": True}, False, False),
+    ("tool opt-in", "claude-sonnet-4-5", {"strict_json_schema": False}, True, True),
+    ("default strict", "claude-sonnet-4-5", {}, None, True),
+    ("unsupported model", "claude-sonnet-4-20250514", {}, True, None),
+    ("disabled capability", "claude-sonnet-4-5", {"structured_outputs": False}, True, None),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "model", "config", "tool_strict", "strict"),
+    _STRICTNESS,
+    ids=[c[0] for c in _STRICTNESS],
+)
+@testing.effect
+def test_tool_schema_strictness(
+    name: str,
+    model: str,
+    config: alm.ConfigService,
+    tool_strict: bool | None,
+    strict: bool | None,
+):
+    """tool schema strictness: each case's strict field, advertised schema and decoded params"""
+    mock = mock_json(
+        _message(
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_null",
+                    "name": "UpdateContact",
+                    "input": {"id": "c1", "nickname": None},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_record",
+                    "name": "UpdateContact",
+                    "input": {"id": "c1", "fields": {"a": "x"}},
+                },
+            ],
+            model=model,
+            stop_reason="tool_use",
+        )
+    )
+    response = yield from _provided(
+        lm.generate_text(
+            "Update the contact",
+            toolkit=K.make(Contact.annotate(T.Strict, tool_strict)),
+            disable_tool_call_resolution=True,
+        ),
+        mock,
+        model,
+        config,
+    )
+    (body,) = mock.bodies
+    tool = body["tools"][0]
+    assert tool.get("strict") is strict, name
+    schema = tool["input_schema"]
+    if strict is True:
+        assert schema["required"] == ["id", "name", "nickname", "fields"]
+        # The strict codec's null-to-omission normalization stays
+        assert response.tool_calls[0].params == {"id": "c1"}
+    else:
+        assert schema["required"] == ["id"]
+        assert schema["properties"]["name"] == {"type": "string", "minLength": 1, "maxLength": 255}
+        assert schema["properties"]["fields"]["type"] == "object"
+        assert schema["properties"]["fields"]["additionalProperties"] == {"type": "string"}
+        assert [call.params for call in response.tool_calls] == [
+            {"id": "c1", "nickname": None},
+            {"id": "c1", "fields": {"a": "x"}},
+        ]
+
+
+@pytest.mark.parametrize("initial_content", [True, False], ids=["initial content", "JSON deltas"])
+@testing.effect
+def test_tool_schema_strictness_streaming(initial_content: bool):
+    """tool schema strictness / preserves non-strict params in streaming ${initialContent ? "initial content" : "JSON deltas"}"""  # noqa: E501
+    inputs = [{"id": "c1", "nickname": None}, {"id": "c1", "fields": {"a": "x"}}]
+    content = [
+        {"type": "tool_use", "id": f"call_{index}", "name": "UpdateContact", "input": input}
+        for index, input in enumerate(inputs)
+    ]
+    start = _start("claude-sonnet-4-5")
+    start["message"]["content"] = content if initial_content else []
+    blocks: list[object] = []
+    if not initial_content:
+        for index, block in enumerate(content):
+            blocks += [
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {**block, "input": {}},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(block["input"]),
+                    },
+                },
+                {"type": "content_block_stop", "index": index},
+            ]
+    mock = mock_sse([start, *blocks, _delta("tool_use"), _STOP])
+    parts = yield from _provided(
+        lm.stream_text(
+            "Update the contact", toolkit=K.make(Contact), disable_tool_call_resolution=True
+        ).run_collect(),
+        mock,
+        "claude-sonnet-4-5",
+        {"strict_json_schema": False},
+    )
+    assert [p.params for p in parts if isinstance(p, R.ToolCallPart)] == inputs
+
+
 # streamText ----------------------------------------------------------------------------
 
 
