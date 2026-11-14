@@ -221,6 +221,13 @@
   byte order mark as US-ASCII, as on Effect main (#10574). One function classifies a
   declaration against the bytes, and `tests/test_xml_encoding_declarations.py` checks every
   spelling with and without a byte order mark.
+- Schema: `TemplateLiteral` and `TemplateLiteralParser` accept `S.Enum` parts, matched by the
+  text of the enum's values (a parser decodes the member), and their JSON Schema pattern is
+  the alternation of those values, as on Effect main (#10576). They raised `ValueError:
+  Invalid TemplateLiteral part Enum`, though the part's type accepted them. An enum without
+  members matches no string. `ast._template_literal.PART_KINDS` lists the part kinds, and
+  `tests/test_template_literal_parts.py` runs one part of each kind through matching, the
+  parser, the strategy, the JSON Schema pattern and representations.
 
 ### Performance
 

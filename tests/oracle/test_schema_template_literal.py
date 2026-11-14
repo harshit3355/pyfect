@@ -17,6 +17,7 @@ Omitted:
 
 from __future__ import annotations
 
+import enum
 from typing import Any, NewType, NotRequired, TypedDict
 
 import pytest
@@ -245,15 +246,58 @@ def test_non_empty_string_plus_string():
     SchemaAsserts(S.TemplateLiteral(S.NonEmptyString, S.String)).decoding().succeed("a")
 
 
-def test_rejects_checks_on_literal_template_literal_and_union_parts():
-    """TemplateLiteral / rejects checks on Literal, TemplateLiteral, and Union parts"""
+def test_rejects_checks_on_literal_enum_template_literal_and_union_parts():
+    """TemplateLiteral / rejects checks on Literal, Enum, TemplateLiteral, and Union parts"""
     check: S.Filter[object] = S.make_filter(lambda _: True)
     with pytest.raises(ValueError, match="Invalid TemplateLiteral part Literal"):
         S.TemplateLiteral(S.Literal("a").check(check))
+    with pytest.raises(ValueError, match="Invalid TemplateLiteral part Enum"):
+        S.TemplateLiteral(S.Enum(_A).check(check))
     with pytest.raises(ValueError, match="Invalid TemplateLiteral part TemplateLiteral"):
         S.TemplateLiteral(S.TemplateLiteral("a").check(check))
     with pytest.raises(ValueError, match="Invalid TemplateLiteral part Union"):
         S.TemplateLiteral(S.Union(S.Literal("a"), S.Literal("b")).check(check))
+
+
+class _A(enum.Enum):
+    A = "a"
+
+
+class _TaskOrOne(enum.Enum):
+    Task = "task"
+    One = 1
+
+
+class _EmptyOrTask(enum.Enum):
+    Empty = ""
+    Task = "task"
+
+
+class _NoMembers(enum.Enum):
+    pass
+
+
+def test_enum_plus_underscore_plus_string():
+    """TemplateLiteral / Enum + "_" + string"""
+    decoding = SchemaAsserts(S.TemplateLiteral(S.Enum(_TaskOrOne), "_", S.String)).decoding()
+    decoding.succeed("task_build")
+    decoding.succeed("1_build")
+    decoding.fail("needs_build", _MISMATCH)
+
+
+def test_constructs_empty_enum_parts_but_matches_no_strings():
+    """TemplateLiteral.test / constructs empty enum parts but matches no strings"""
+    schema = S.TemplateLiteral(S.Enum(_NoMembers))
+    for text in ["", "task", "1"]:
+        assert not S.is_(schema)(text)
+
+
+def test_matches_empty_string_enum_members_before_a_separator():
+    """TemplateLiteral.test / matches empty-string enum members before a separator"""
+    schema = S.TemplateLiteral(S.Enum(_EmptyOrTask), "_", S.String)
+    assert S.is_(schema)("_build")
+    assert S.is_(schema)("task_build")
+    assert not S.is_(schema)("other_build")
 
 
 def test_a():
@@ -517,6 +561,53 @@ def test_parser_h_plus_1_2_3():
     """TemplateLiteralParser / "h" + (1 | 2 | 3)"""
     levels: S.LiteralsSchema[int] = S.Literals(1, 2, 3)
     SchemaAsserts(S.TemplateLiteralParser("h", levels)).decoding().succeed("h1", ("h", 1))
+
+
+def test_parser_h_plus_enum():
+    """TemplateLiteralParser / "h" + Enum"""
+    asserts = SchemaAsserts(S.TemplateLiteralParser("h", S.Enum(_TaskOrOne)))
+    decoding = asserts.decoding()
+    decoding.succeed("htask", ("h", _TaskOrOne.Task))
+    decoding.succeed("h1", ("h", _TaskOrOne.One))
+    asserts.encoding().succeed(("h", _TaskOrOne.One), "h1")
+
+
+class _NumericFirst(enum.Enum):
+    Numeric = 1
+    Text = "1"
+
+
+class _TextFirst(enum.Enum):
+    Text = "1"
+    Numeric = 1
+
+
+@pytest.mark.parametrize("members", [_NumericFirst, _TextFirst], ids=["0", "1"])
+def test_uses_enum_string_conversion_for_colliding_members(members: type[enum.Enum]):
+    """TemplateLiteralParser.test / uses enum string conversion for colliding members %#"""
+    member = S.Enum(members)
+    schema = S.TemplateLiteralParser(member)
+    expected = S.decode_sync(S.to_codec_string_tree(member))("1")
+    assert S.is_(S.TemplateLiteral(member))("1")
+    assert S.decode_sync(schema)("1") == (expected,)
+    assert S.encode_sync(schema)((members["Numeric"],)) == "1"
+    assert S.encode_sync(schema)((members["Text"],)) == "1"
+
+
+def test_constructs_empty_enum_parts_but_fails_to_decode_strings():
+    """TemplateLiteralParser.test / constructs empty enum parts but fails to decode strings"""
+    schema = S.TemplateLiteralParser(S.Enum(_NoMembers))
+    for text in ["", "task", "1"]:
+        assert isinstance(S.decode_unknown_exit(schema)(text), Failure)
+
+
+def test_decodes_and_encodes_empty_string_enum_members_before_a_separator():
+    """TemplateLiteralParser.test / decodes and encodes empty-string enum members before a
+    separator"""
+    schema = S.TemplateLiteralParser(S.Enum(_EmptyOrTask), "_", S.String)
+    assert S.decode_sync(schema)("_build") == (_EmptyOrTask.Empty, "_", "build")
+    assert S.decode_sync(schema)("task_build") == (_EmptyOrTask.Task, "_", "build")
+    assert S.encode_sync(schema)((_EmptyOrTask.Empty, "_", "build")) == "_build"
 
 
 def test_parser_nested_parser_with_string():
