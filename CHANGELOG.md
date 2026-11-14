@@ -207,6 +207,12 @@
   cleanup before the workflow's finalizers; only the join is interruptible now, as in Effect
   4.1.4 (#10472). A test interrupts it after every op of the run, not only at Effect's one
   point.
+- `RateLimiter`: a fixed-window `consume` with `on_exceeded="fail"` admits at most `limit`
+  per `window`: the first admission opens a window of the full `window` that later admissions
+  don't extend. Each admission extended it by `window / limit`, so the window let in more
+  than `limit` and `reset_after` read short. Fixed in the memory and Redis stores, as in
+  Effect 4.1.4 (#10390). A test replays random call sequences on both stores and compares
+  them, so the Lua script and the memory store can't drift apart again.
 
 ### Performance
 

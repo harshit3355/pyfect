@@ -91,7 +91,12 @@ class MemoryRateLimiterStore:
             if limit is not None and counter.count + tokens > limit:
                 return counter.count + tokens, counter.expires_at - now
             counter.count += tokens
-            counter.expires_at += refill_rate_millis * tokens
+            if limit is None:
+                counter.expires_at += refill_rate_millis * tokens
+            elif counter.expires_at == now and tokens > 0:
+                # A capped window opens on its first positive admission and
+                # lasts the full window.
+                counter.expires_at = now + refill_rate_millis * limit
             return counter.count, counter.expires_at - now
 
         return clock_with(lambda clock: sync(lambda: self._locked(lambda: run(clock))))

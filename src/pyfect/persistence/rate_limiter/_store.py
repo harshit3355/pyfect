@@ -37,10 +37,13 @@ class RateLimiterStoreService(Protocol):
     def fixed_window(
         self, *, key: str, tokens: float, refill_rate_millis: float, limit: float | None
     ) -> Effect[tuple[float, float], RateLimiterError]:
-        """Add ``tokens`` to ``key``'s count, each extending its window by
-        ``refill_rate_millis``, unless ``limit`` is given and would be
-        passed. Gives ``(count, ttl_millis)``: the count reached (or that
-        would be), and how long the window has left."""
+        """Add ``tokens`` to ``key``'s count, unless ``limit`` is given and
+        would be passed. Gives ``(count, ttl_millis)``: the count reached (or
+        that would be), and how long the window has left. Without a
+        ``limit`` each token extends the window by ``refill_rate_millis``;
+        with one, the first positive admission into an empty or expired key
+        opens a window of ``refill_rate_millis * limit`` that later
+        admissions don't extend."""
         ...
 
     def token_bucket(

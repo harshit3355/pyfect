@@ -368,6 +368,27 @@ def store_caps_a_zero_limit():
     assert uncapped == (1, 60_000)
 
 
+def full_window_lifetime():
+    limiter = yield from rl.make
+
+    def consume() -> fx.Effect[rl.ConsumeResult, rl.RateLimiterError]:
+        return limiter.consume(
+            algorithm="fixed-window",
+            on_exceeded="fail",
+            key="fixed-window-full-lifetime",
+            limit=5,
+            window="1 minute",
+        )
+
+    results = yield from fx.for_each([0, 1, 2, 3, 4], lambda _: consume())
+    error = yield from exceeded(consume())
+    assert [result.remaining for result in results] == [4, 3, 2, 1, 0]
+    # Redis TTLs use wall time rather than TestClock.
+    for result in results:
+        assert abs(to_millis(result.reset_after) - 60_000) <= 1_000
+    assert abs(to_millis(error.retry_after) - 60_000) <= 1_000
+
+
 def refill_key_isolation():
     limiter = yield from rl.make
 
@@ -436,6 +457,10 @@ class RateLimiterSuite:
     def test_store_caps_a_zero_limit_and_leaves_an_undefined_limit_uncapped(self) -> None:
         """store caps a zero limit and leaves an undefined limit uncapped"""
         self.run(store_caps_a_zero_limit)
+
+    def test_fail_mode_keeps_one_full_window_lifetime_across_admissions(self) -> None:
+        """fail mode keeps one full-window lifetime across admissions"""
+        self.run(full_window_lifetime)
 
     # RateLimiter token-bucket timing (${name})
 

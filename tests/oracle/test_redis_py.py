@@ -20,6 +20,7 @@ the node-redis protocol default`` checks redis-py's (RESP2, no
 from __future__ import annotations
 
 import json
+import random
 import time
 import warnings
 from collections.abc import Callable, Generator
@@ -117,6 +118,45 @@ class TestRateLimiterRedis(rl_suite.RateLimiterSuite):
     @property
     def layer(self) -> fx.Layer[rl.RateLimiterStore, Any]:  # pyright: ignore[reportIncompatibleVariableOverride]
         return rl.layer_store_redis().pipe(fx.provide(_redis_layer()))
+
+
+def test_the_redis_fixed_window_store_agrees_with_the_memory_store() -> None:
+    """The memory store and the Redis Lua script implement one algorithm twice (they
+    disagreed on capped windows until Effect #10390). Random call sequences with no time
+    passing must give the same counts, and lifetimes within Redis's wall-clock drift."""
+    rng = random.Random(10390)
+    # A key keeps one limit, as its consumer's options do.
+    limits = [rng.choice([None, 0, 1, 2.5, 4]) for _ in range(80)]
+    sequences = [[(rng.choice([0, 0.5, 1, 2]), limit) for _ in range(6)] for limit in limits]
+
+    def replay(store: rl.RateLimiterStoreService) -> fx.Effect[list[tuple[float, float]], Any]:
+        def body():
+            results: list[tuple[float, float]] = []
+            for index, calls in enumerate(sequences):
+                for tokens, limit in calls:
+                    results.append(
+                        (
+                            yield from store.fixed_window(
+                                key=f"differential-{index}",
+                                tokens=tokens,
+                                refill_rate_millis=60_000,
+                                limit=limit,
+                            )
+                        )
+                    )
+            return results
+
+        return fx.gen(body)
+
+    def run(layer: fx.Layer[rl.RateLimiterStore, Any]) -> list[tuple[float, float]]:
+        return testing.run_test(rl.RateLimiterStore().flat_map(replay).pipe(fx.provide(layer)))
+
+    memory = run(rl.layer_store_memory)
+    redis = run(rl.layer_store_redis().pipe(fx.provide(_redis_layer())))
+    calls = [call for calls in sequences for call in calls]
+    for call, (m_count, m_ttl), (r_count, r_ttl) in zip(calls, memory, redis, strict=True):
+        assert m_count == r_count, call
+        assert abs(m_ttl - r_ttl) <= 1_000, (call, m_ttl, r_ttl)
 
 
 # --- CircuitBreaker (NodeRedis) -------------------------------------------------------

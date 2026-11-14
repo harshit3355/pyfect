@@ -65,10 +65,11 @@ local refillms = tonumber(ARGV[2])
 local limit = tonumber(ARGV[3])
 local current = tonumber(redis.call("GET", key))
 if not current then
-  if limit and tokens > limit then
+  -- A capped window opens on its first positive admission and lasts the full window.
+  if limit and (tokens > limit or tokens <= 0) then
     return { string.format("%.17g", tokens), 0 }
   end
-  local nextpttl = math.max(1, math.ceil(refillms * tokens))
+  local nextpttl = math.max(1, math.ceil(refillms * (limit or tokens)))
   redis.call("SET", key, tokens, "PX", nextpttl)
   return { string.format("%.17g", tokens), nextpttl }
 end
@@ -77,7 +78,8 @@ local next = current + tokens
 if limit and next > limit then
   return { string.format("%.17g", next), currentpttl }
 end
-local nextpttl = math.max(1, math.ceil(currentpttl + (refillms * tokens)))
+-- A capped window keeps its expiry (PX rather than KEEPTTL, which needs Redis 6.0).
+local nextpttl = math.max(1, limit and currentpttl or math.ceil(currentpttl + (refillms * tokens)))
 redis.call("SET", key, next, "PX", nextpttl)
 -- Use 17 significant digits to round-trip fractional token counts.
 return { string.format("%.17g", next), nextpttl }
