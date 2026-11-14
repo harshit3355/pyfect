@@ -25,6 +25,8 @@
 - `run.InterruptExitCode`, Effect's `Runtime.InterruptExitCode`: an interruption annotated with
   it ends `run_main` with that code. `default_teardown` gives the largest one when every
   interruption carries one, and 130 otherwise (#10475).
+- `http_effect.scope_disable_close` takes the request's `Scope`, as Effect's does, as well as
+  its state.
 
 ### Fixed
 
@@ -221,6 +223,11 @@
   Away) as soon as shutdown starts, other upgraded connections are ended, and any still open
   after the wait are destroyed. A connected, responsive client held a 5-second shutdown for
   the whole 5 seconds and got 1001 only when its handler was interrupted.
+- A request scope moved to a streamed body with `scope_transfer_to_stream` closes once both the
+  request (middleware and tracing included) and the body have finished, with the body's exit,
+  as in Effect 4.1.4 (#10366). It closed as soon as the body ended, before the middleware and
+  the server span. A body transferred twice keeps its first exit, and `to_web_handler` now
+  transfers through the same path.
 
 ### Performance
 
