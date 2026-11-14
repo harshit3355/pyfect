@@ -113,7 +113,13 @@ def flat_map(self: AnyChannel, f: Callable[[Any], AnyChannel]) -> Channel_:
                 if child_scope is None:
                     child_scope = scope.fork_unsafe()
                 used = child_scope
-                return f(value)._transform(upstream, used).flat_map(lambda inner: keep(inner, used))
+                # Effect's ``flatMapEager``: a transform that is already its pull
+                # hands it on in this op.
+                return (
+                    f(value)
+                    ._transform(upstream, used)
+                    .flat_map_eager(lambda inner: keep(inner, used))
+                )
 
             def keep(inner: AnyPull, used: CloseableScope) -> AnyPull:
                 nonlocal child_pull

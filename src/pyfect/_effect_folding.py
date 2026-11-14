@@ -9,8 +9,8 @@ from collections.abc import Callable
 from typing import TYPE_CHECKING, Never
 
 from pyfect import _core
-from pyfect._effect_base import A_co, E_co, EffectBase, R_co, as_effect
-from pyfect._effect_errors import _recovering, _succeed_none
+from pyfect._effect_base import A_co, E_co, EffectBase, R_co, Step, as_effect, succeed_with
+from pyfect._effect_errors import _recovering
 from pyfect.cause import Cause
 from pyfect.exit import Exit, Failure, Success
 from pyfect.result import Err, Ok
@@ -28,8 +28,8 @@ class FoldingMethods(EffectBase[A_co, E_co, R_co]):
     ) -> Effect[B | C, Never, R_co]:
         return _core._MatchCause(
             as_effect(self),
-            _recovering(lambda e: _core._Succeed(on_failure(e))),
-            lambda a: _core._Succeed(on_success(a)),
+            _recovering(lambda e: succeed_with(on_failure(e))),
+            lambda a: succeed_with(on_success(a)),
         )
 
     def match_cause[B, C](
@@ -39,8 +39,8 @@ class FoldingMethods(EffectBase[A_co, E_co, R_co]):
         too. Interruption still propagates."""
         return _core._MatchCause(
             as_effect(self),
-            lambda c: _core._Succeed(on_failure(c)),
-            lambda a: _core._Succeed(on_success(a)),
+            lambda c: succeed_with(on_failure(c)),
+            lambda a: succeed_with(on_success(a)),
         )
 
     def option(self) -> Effect[Option[A_co], Never, R_co]:
@@ -49,7 +49,7 @@ class FoldingMethods(EffectBase[A_co, E_co, R_co]):
         from pyfect.option import Some
 
         return _core._MatchCause(
-            as_effect(self), _recovering(_succeed_none), lambda a: _core._Succeed(Some(a))
+            as_effect(self), _recovering(_none), lambda a: succeed_with(Some(a))
         )
 
     def as_some(self) -> Effect[Some[A_co], E_co, R_co]:
@@ -85,21 +85,25 @@ class FoldingMethods(EffectBase[A_co, E_co, R_co]):
 
     def exit(self) -> Effect[Exit[A_co, E_co], Never, R_co]:
         """Succeed with the outcome as a value. Interruption still
-        propagates; it is not something a fiber can catch."""
+        propagates; it is not something a fiber can catch. An effect that is
+        nothing but its outcome succeeds with it, in one op, as in Effect."""
+        known = _core.known_exit(as_effect(self))
+        if known is not None:
+            return _core._Succeed(known)
         return _core._MatchCause(
             as_effect(self),
-            lambda c: _core._Succeed(Failure(c)),
-            lambda a: _core._Succeed(Success(a)),
+            lambda c: succeed_with(Failure(c)),
+            lambda a: succeed_with(Success(a)),
         )
 
     def result(self) -> Effect[Ok[A_co] | Err[E_co], Never, R_co]:
         """Succeed with ``Ok(value)`` or ``Err(error)``. Defects and
-        interruptions still propagate."""
-        return _core._MatchCause(
-            as_effect(self),
-            _recovering(lambda e: _core._Succeed(Err(e))),
-            lambda a: _core._Succeed(Ok(a)),
-        )
+        interruptions still propagate. As Effect's, it is ``match_eager``."""
+        return as_effect(self).match_eager(on_failure=Err, on_success=Ok)
+
+
+def _none(_: object) -> Step:
+    return succeed_with(None)
 
 
 def _true(_: object) -> bool:

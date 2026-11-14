@@ -1,5 +1,57 @@
 # Changelog
 
+## 0.6.5 (unreleased)
+
+### Deprecated
+
+- `schedule.Continue`, `Stop` and `Decision` warn. Schedules now step as Effect's do, with a
+  `Pull` that succeeds with `(output, delay)` and fails with `cause.done(output)` to stop, and
+  the public step functions translate: `from_step` still takes a step deciding `Continue` or
+  `Stop`, and `to_step`, `to_step_with_metadata` and `to_step_with_sleep` still hand them back.
+  They are removed in 0.7.0, where those three hand back Effect's steps.
+
+### Added
+
+- `schedule.from_step` and `from_step_with_metadata` take Effect's steps too: a step that
+  succeeds with `(output, delay)` to recur and fails with `cause.done(output)` to stop.
+- `pyfect.testing.test_clock_with(f)`, Effect's `TestClock.testClockWith`.
+- `for_each(..., discard=True)`, Effect's `forEach` `discard` option: runs every item and
+  keeps no results.
+
+### Fixed
+
+- Fibers yield where Effect's do under `MaxOpsBeforeYield` (#6): ops are counted and the budget
+  checked as in Effect 4.1.2's run loop. A run counts from zero, the check comes before every op
+  (a budget under 3 livelocks in Effect, so pyfect runs it as 3), a resumed run counts the
+  yield's continuation and the paused op, every 32nd `map` (Effect's `succeedWith`) goes back
+  through the loop, and exits handed straight to a continuation are free. The combinators that
+  run under it are built as Effect's are, op for op: `for_each` and `all` (one child per item,
+  Effect's `iterateConcurrentImpl`, and a `whileLoop` one at a time), `while_loop`,
+  `as_`/`as_void`, `on_exit`, `acquire_release`, `acquire_use_release` and the masks, `race` and
+  `race_all`, `match`/`match_cause`/`option`/`exit`/`result`, semaphore `with_permits`,
+  `release` and `resize`, `Scope.close`, `Fiber.interrupt` and `await_exit`, a channel's build,
+  the clock accessors (`clockWith`), the live and test clocks' `sleep` and `TestClock.adjust`,
+  queue `take` and `poll` (`suspendTake`), queue constructors and `fork`. A failing op meeting
+  an interrupt keeps its cause and gains the interrupt, and an interrupted wait runs its
+  canceler as Effect's `asyncFinalizer` does. Two fibers under a small budget now interleave
+  exactly as in Effect (`tests/oracle/test_max_ops_interleaving.py`, recorded from Node), and
+  the runtime differential tester runs its programs (not its harness) under budgets from 3 to
+  200 rather than an unlimited one, and its checked-in corpus has 1152 programs: none of 19,000
+  generated programs differ (seeds 7, 11, 23, 31 and 47), from 947 of 3000 before. Built op for
+  op as well: schedules and everything that steps them (`retry`, `repeat`, `schedule`, the
+  stream and channel schedule operators), the channel merge (its loop and its workers' end, one
+  generator each as in Effect), sequential `flat_map` (Effect's `flatMapEager`), concurrent
+  `map_effect`, `Stream.map`, `Channel.suspend`, iterator pulls, `Fiber.join`, `exit`/`result`,
+  `scoped` and a scope's lone finalizer, and an interrupt arriving at a wait or at
+  `set_interruptible`. A result a step claimed (a taken permit or item) that the fiber pauses
+  before now reaches its continuation before an interrupt that landed in the pause, as in
+  Effect, and a raising `should_yield` is a defect rather than Effect's endless retry.
+  Interleavings change under the default budget (2048) too, since fibers now yield at other
+  ops.
+- `retry_transient` reads a `Retry-After` HTTP date against the schedule's clock in epoch
+  milliseconds, as Effect's `retryAfterOf(input, now)`. It multiplied the time by 1000 first, so
+  a date in the future read as long past and the retry did not wait for it.
+
 ## 0.6.4 (2026-11-14)
 
 ### Added

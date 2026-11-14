@@ -12,21 +12,27 @@ from pyfect._core import (
     Effect,
     Restore,
     _Callback,
+    _FromExit,
     _Succeed,
     _Suspend,
     _Sync,
+    _WithFiber,
     run_known,
     uninterruptible_mask,
 )
 from pyfect._effect_args import require_effect
 from pyfect._effect_base import Frame, Step
 from pyfect._fiber import current_fiber
+from pyfect._primitives import _OnExit
 from pyfect._waiters import of_this_run, wake_soon
 from pyfect.option import Option, Some
 from pyfect.scope import CloseableScope, Scope
 
 if TYPE_CHECKING:
     from pyfect._fiber import Fiber
+    from pyfect.exit import Exit
+
+_VOID: Effect[None] = _Succeed(None)
 
 
 class _Waiter:
@@ -45,12 +51,10 @@ class _Waiter:
 class _Turn(Frame):
     """Below a parked request. When resumed, the request takes its permits
     if it is now the first queued request that fits, in this same step
-    (``claims``), else it parks again; however the wait ends otherwise
+    (handed on with ``run_known``), else it parks again; however the wait ends otherwise
     (an interrupt), the request leaves the queue."""
 
     __slots__ = ("restore", "semaphore", "then", "waiter")
-    # The take happens here and its result goes straight on.
-    claims = True
 
     def __init__(
         self,
@@ -195,23 +199,24 @@ class Semaphore:
 
     def release(self, n: int = 1) -> Effect[int]:
         """Give back ``n`` permits; succeeds with the number now free."""
-        return _Sync(lambda: self._release(n))
+        return _WithFiber(lambda _: _Succeed(self._release(n)))
 
     def release_all(self) -> Effect[int]:
         """Give back every taken permit; succeeds with the number now free."""
-        return _Sync(lambda: self._release(None))
+        return _WithFiber(lambda _: _Succeed(self._release(None)))
 
     def resize(self, permits: int) -> Effect[None]:
         """Change the total number of permits. Shrinking below what is taken
         makes takers wait until enough are given back."""
 
-        def run() -> None:
+        def run(_: object) -> Effect[None]:
             with self._lock:
                 self._permits = permits
                 woken = self._wake_soon()
             _resume_all(woken)
+            return _VOID
 
-        return _Sync(run)
+        return _WithFiber(run)
 
     def with_permits[A, E, R](self, eff: Effect[A, E, R], n: int = 1) -> Effect[A, E, R]:
         """Run ``eff`` holding ``n`` permits, releasing them however it ends.
@@ -220,7 +225,12 @@ class Semaphore:
         require_effect(eff, "eff")
 
         def body(restore: Restore) -> Effect[A, E, R]:
-            return self._take_then(n, restore, lambda: restore(eff).ensuring(self.release(n)))
+            def released(ex: Exit[A, E]) -> Effect[A, E]:
+                # Effect's ``OnExit`` with no finalizer effect: the exit, an op.
+                self._release(n)
+                return _FromExit(ex)
+
+            return self._take_then(n, restore, lambda: _OnExit(restore(eff), released))
 
         return uninterruptible_mask(body)
 

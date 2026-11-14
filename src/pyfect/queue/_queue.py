@@ -22,7 +22,9 @@ from pyfect._core import (
     uninterruptible_mask,
 )
 from pyfect._effect_args import require_effect
+from pyfect._effect_base import Decided
 from pyfect._fiber import FiberDispatcher, current_fiber
+from pyfect._primitives import _SuspendTake
 from pyfect._waiters import WaitList
 from pyfect.cause import Cause
 from pyfect.cause import fail as fail_cause
@@ -39,6 +41,10 @@ type Strategy = Literal["suspend", "dropping", "sliding"]
 
 _TRUE: Effect[bool] = _FromExit(Success(True))
 _FALSE: Effect[bool] = _FromExit(Success(False))
+# An offer's result as Effect's ``offer`` hands it on: an op of its own after
+# the one that added the item, made once, as this is the hot path.
+_ADDED: Exit[bool, Never] = Decided(True)
+_REFUSED: Exit[bool, Never] = Decided(False)
 
 
 class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
@@ -78,21 +84,21 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
     @classmethod
     def unbounded(cls) -> Effect[Queue[A, E]]:
         """A queue with no capacity limit: ``offer`` never waits or drops."""
-        return _Sync(cls)
+        return _made(cls)
 
     @classmethod
     def bounded(cls, capacity: int) -> Effect[Queue[A, E]]:
         """A queue of ``capacity`` items whose ``offer`` waits while it is
         full. Capacity 0 is a rendezvous: an offer completes when a taker
         takes it."""
-        return _Sync(lambda: cls(capacity, "suspend"))
+        return _made(lambda: cls(capacity, "suspend"))
 
     @classmethod
     def dropping(cls, capacity: int) -> Effect[Queue[A, E]]:
         """A queue of ``capacity`` items that drops a new item offered while
         it is full: ``offer`` returns ``False`` and ``offer_all`` the items it
         refused."""
-        return _Sync(lambda: cls(capacity, "dropping"))
+        return _made(lambda: cls(capacity, "dropping"))
 
     @classmethod
     def sliding(cls, capacity: int) -> Effect[Queue[A, E]]:
@@ -103,7 +109,7 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         As in Effect, ``sliding(0)`` keeps only the newest offered item and
         wakes no parked taker: a taker waiting on it gets that item only when
         the queue ends. Use a capacity of at least 1."""
-        return _Sync(lambda: cls(capacity, "sliding"))
+        return _made(lambda: cls(capacity, "sliding"))
 
     @property
     def capacity(self) -> int | None:
@@ -126,7 +132,7 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
                     resume(_FALSE)
                 return None
 
-        def attempt() -> Effect[bool]:
+        def attempt() -> Effect[bool] | Exit[bool, Never]:
             # As Effect's ``offer``: an item that fits is added in this step,
             # and only a full suspending queue parks the offer. ``acquire``
             # rather than ``with``: this is the hot path, and it is cheaper.
@@ -134,14 +140,14 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
             lock.acquire()
             try:
                 if self._offer(item):
-                    return _TRUE
+                    return _ADDED
                 if isinstance(self._state, st.Open) and self._strategy == "suspend":
                     return _Callback(register)
-                return _FALSE
+                return _REFUSED
             finally:
                 lock.release()
 
-        return _Suspend(attempt)
+        return _SuspendTake(attempt)
 
     def flush(self) -> Effect[None]:
         """Wake the takers that can go on now, not in a scheduled task."""
@@ -277,16 +283,19 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
     def take(self) -> Effect[A, E]:
         """Wait for an item."""
 
-        def attempt() -> Effect[A, E]:
+        # As Effect's ``take``: an item there is taken in this op; otherwise
+        # wait, then take again.
+        def attempt() -> Effect[A, E] | Exit[A, E]:
             lock = self._lock  # ``acquire`` rather than ``with``, as in ``offer``
             lock.acquire()
             try:
                 ex = self._take()
-                return self._wait_then(1, attempt) if ex is None else _FromExit(ex)
+                return self._wait_then(1, take) if ex is None else ex
             finally:
                 lock.release()
 
-        return _Suspend(attempt)
+        take: Effect[A, E] = _SuspendTake(attempt)
+        return take
 
     def take_unsafe(self) -> Exit[A, E] | None:
         """An item, the failure of a finished queue, or ``None`` if ``take``
@@ -335,7 +344,7 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
             ex = self.take_unsafe()
             return _Succeed(Some(ex.value) if isinstance(ex, Success) else None)
 
-        return _Suspend(attempt)
+        return _SuspendTake(attempt)
 
     def peek(self) -> Effect[A, E]:
         """Wait for an item and succeed with it, leaving it in the queue.
@@ -383,7 +392,8 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
                         self._release()
                         return _Succeed(items)
 
-        return _Suspend(attempt)
+        take: Effect[list[A], E] = _SuspendTake(attempt)
+        return take
 
     @overload
     def collect[AA](self: Queue[AA, Done[Any]]) -> Effect[list[AA], Never]: ...
@@ -614,20 +624,21 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
                         if minimum <= 0 or (maximum is not None and maximum <= 0):
                             return _Succeed([])
                         if not self._can_take(minimum):
-                            return self._wait_then(minimum, attempt)
+                            return self._wait_then(minimum, take)
                         if self._items:
                             items = self._take_buffered(maximum or len(self._items))
                         else:
                             taken = st.take_offer(offers, self._lock, self._wake_offer)
                             if taken is None:
-                                return self._wait_then(minimum, attempt)
+                                return self._wait_then(minimum, take)
                             items = [taken]
                         self._release()
                         return _Succeed(items)
 
-        return _Suspend(attempt)
+        take: Effect[list[A], E] = _SuspendTake(attempt)
+        return take
 
-    def _wait_then[T](self, minimum: int, retry: Callable[[], Effect[T, E]]) -> Effect[T, E]:
+    def _wait_then[T](self, minimum: int, retry: Effect[T, E]) -> Effect[T, E]:
         """Park until a take of ``minimum`` items can complete (or the queue
         is done), then ``retry``."""
         match self._state:
@@ -635,7 +646,7 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
                 return _FailCause(cause)
             case st.Open(takers=takers) | st.Closing(takers=takers):
                 ready = self._finished_or(lambda: self._can_take(minimum))
-                return takers.wait(ready).and_then(_Suspend(retry))
+                return takers.wait(ready).and_then(retry)
 
     def _finished_or(self, ready: Callable[[], bool]) -> Callable[[], bool]:
         return lambda: isinstance(self._state, st.Done) or ready()
@@ -703,3 +714,8 @@ def _catch_done[T](cause: Cause[Any], value: T) -> Effect[T, Any]:
             return _Succeed(value)
         case rest:
             return _FailCause(rest.error)
+
+
+def _made[Q](make: Callable[[], Q]) -> Effect[Q]:
+    """As Effect's ``Queue.make``: ``withFiber``, then ``succeed(queue)``."""
+    return _WithFiber(lambda _: _Succeed(make()))

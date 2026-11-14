@@ -50,7 +50,7 @@ from collections import deque
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Generic, Literal, Never, TypeVar
+from typing import TYPE_CHECKING, Any, Generic, Literal, Never, TypeVar, cast
 
 from pyfect._core import (
     SUSPEND,
@@ -69,8 +69,10 @@ from pyfect._core import (
     run_known,
     woken_with,
 )
+from pyfect._effect_base import Decided, HandedOn
 from pyfect._interrupt_reason import closed
 from pyfect._metric_ref import FiberRuntimeMetrics
+from pyfect._primitives import known_exit
 from pyfect._priority_buckets import PriorityBuckets
 from pyfect._stack_frame import CurrentStackFrame, InterruptorStackTrace, StackFrame, StackTrace
 from pyfect._tracer_ref import CurrentTracer
@@ -103,8 +105,9 @@ if TYPE_CHECKING:
 A_co = TypeVar("A_co", covariant=True)
 E_co = TypeVar("E_co", covariant=True, default=Never)
 
-# Effect's ``maxInlineSteps``: how many continuations run back to back
-# before the loop may yield.
+# Effect's ``maxInlineSteps`` (a power of two): of the successes frames
+# hand on with ``succeed_with``, every this-many-th goes back through the
+# loop, where the fiber may yield.
 _INLINE_STEPS = 32
 
 # How many fiber runs may nest on one thread (a resume running the woken
@@ -113,6 +116,7 @@ _INLINE_STEPS = 32
 _MAX_NESTED_RUNS = 16
 
 _EXITS = (Success, Failure)
+_VOID: Effect[None] = _Succeed(None)
 
 type RunScheduler = SyncScheduler | AsyncioScheduler
 """The schedulers pyfect runs fibers on: each fiber of one keeps its own batch."""
@@ -235,15 +239,14 @@ class _Wait:
             self.fiber = None
             if isinstance(effect, _Retry):
                 self.woken = True
-            else:
-                self.canceler = None
+            canceler, self.canceler = self.canceler, None
             if self.registering:
                 self.sync_result = effect
                 return
         if fiber._on_run_thread():
-            fiber._resume(self, effect)
+            fiber._resume(self, effect, canceler)
         else:
-            fiber._scheduler.schedule(lambda: fiber._resume(self, effect))
+            fiber._scheduler.schedule(lambda: fiber._resume(self, effect, canceler))
 
 
 class _Yielded:
@@ -251,12 +254,15 @@ class _Yielded:
     An interrupt takes it over (``Fiber._deliver_interrupt``); the queued
     task then finds it gone and does nothing."""
 
-    __slots__ = ("ops", "step")
+    __slots__ = ("decided", "ops", "step")
 
-    def __init__(self, step: Step, ops: int = 0) -> None:
+    def __init__(self, step: Step, *, ops: int, decided: bool) -> None:
         self.step = step
-        # The steps the resumed run starts with spent (see ``Fiber._pause``).
+        # The ops the resumed run starts with spent (see ``Fiber._pause_due``).
         self.ops = ops
+        # ``step`` holds a claimed result (``run_known``): an interrupt that
+        # lands in the pause waits until it has reached its continuation.
+        self.decided = decided
 
 
 class _CancelIfFailed(Frame):
@@ -265,14 +271,9 @@ class _CancelIfFailed(Frame):
     canceler, uninterruptibly, so a parked entry it left is taken back."""
 
     __slots__ = ("canceler",)
-    # Passes the wake-up's claimed result straight on.
-    claims = True
 
     def __init__(self, canceler: Effect[Any, Any, Any]) -> None:
         self.canceler = canceler
-
-    def _on_success(self, value: Any, fiber: Fiber[Any, Any]) -> Step:
-        return Success(value)
 
     def _on_failure(self, cause: Cause[Any], fiber: Fiber[Any, Any]) -> Step:
         fiber._push(_RestoreInterruptible(fiber._interruptible))
@@ -307,8 +308,10 @@ class Fiber(Generic[A_co, E_co]):
         "_batch_run",
         "_children",
         "_ctx",
+        "_decided_on_resume",
         "_exit",
         "_interrupt",
+        "_interrupt_fresh",
         "_interruptible",
         "_interrupts_after_resume",
         "_observers",
@@ -323,6 +326,7 @@ class Fiber(Generic[A_co, E_co]):
         "_stack",
         "_stack_frame",
         "_tracer_hook",
+        "_view",
         "_waiting",
         "_yielded",
         "current_op_count",
@@ -355,6 +359,11 @@ class Fiber(Generic[A_co, E_co]):
         self._waiting: _Wait | None = None
         self._yielded: _Yielded | None = None
         self._ops_on_resume = 0
+        self._decided_on_resume = False  # pragma: no mutate, taken at every run's start
+        # An interrupt delivered to the running fiber that its loop has not met
+        # yet (Effect's ``_deferredInterrupt``): it replaces whatever comes
+        # next, a failure too, where one met later is added to failures.
+        self._interrupt_fresh = False
         self._phase: _Phase = "pending"
         # The ``contextvars`` context the fiber parked or paused in, which
         # it resumes in (Effect's captured async context), or that started
@@ -374,34 +383,46 @@ class Fiber(Generic[A_co, E_co]):
 
     def await_exit(self) -> Effect[Exit[A_co, E_co], Never, Never]:
         """Wait for the fiber and succeed with its ``Exit``."""
+        # As Effect's ``fiberAwait``: ``succeed(exit)``.
+        return self._when_exited(_Succeed)
+
+    def join(self) -> Effect[A_co, E_co, Never]:
+        """Wait for the fiber and take on its result: its value, or its
+        failure."""
+        # As Effect's ``fiberJoin``: the exit itself.
+        return self._when_exited(_FromExit)
+
+    def _when_exited[B, EB](
+        self, then: Callable[[Exit[A_co, E_co]], Effect[B, EB]]
+    ) -> Effect[B, EB]:
+        """``then(exit)`` once the fiber has ended: at once for an ended
+        fiber (no callback, as Effect's), else on its observer."""
+        if self._exit is not None:
+            return then(self._exit)
 
         def register(resume: Callable[[Effect[Any, Any, Any]], None]) -> Effect[None] | None:
             if self._exit is not None:
-                resume(_Succeed(self._exit))
+                resume(then(self._exit))
                 return None
 
             def observer(ex: Exit[Any, Any]) -> None:
-                resume(woken_with(_Succeed(ex)))
+                resume(woken_with(then(ex)))
 
             self._observers.append(observer)
             if self._exit is not None:
                 # It finished on another thread (a fiber of another run)
                 # between the check and the append; resume counts once.
-                resume(_Succeed(self._exit))
+                resume(then(self._exit))
                 return None
             return _Sync(lambda: self._remove_observer(observer))
 
         return _Callback(register)
 
-    def join(self) -> Effect[A_co, E_co, Never]:
-        """Wait for the fiber and take on its result: its value, or its
-        failure."""
-        return self.await_exit().flat_map(_FromExit)
-
     def interrupt(self) -> Effect[None, Never, Never]:
         """Interrupt the fiber and wait until it has finished cleaning up.
         Read the outcome with ``await_exit``."""
-        return _WithFiber(lambda me: self._interrupt_from(me, me.id))
+        # As Effect: ``withFiber`` giving its id to ``interruptAs``.
+        return _WithFiber(lambda me: self.interrupt_as(me.id))
 
     def interrupt_as(
         self, by: int | None, annotations: Context | None = None
@@ -529,10 +550,16 @@ class Fiber(Generic[A_co, E_co]):
         view = _last_view[0]
         if (
             view is None
-            or view.given is not context
+            or (view.given is not context and view.context is not context)
             or view.run_scheduler is not self._run_scheduler
         ):
             view = _last_view[0] = _RunView.of(context, self._run_scheduler)
+        self._use_view(view)
+
+    def _use_view(self, view: _RunView) -> None:
+        """Switch to ``view``'s context (one this fiber computed before)."""
+        _last_view[0] = view
+        self._view = view
         self._ctx = view.context
         self._scheduler: Scheduler = view.scheduler
         self._ops_budget: float = view.ops_budget
@@ -684,69 +711,108 @@ class Fiber(Generic[A_co, E_co]):
                 # Parked or paused: resume in this context, not the waker's.
                 self._async_context = contextvars.copy_context() if parked_in is None else parked_in
 
-    def _loop(self, start: Step) -> None:
+    def _loop(self, start: Step) -> None:  # noqa: PLR0912
         cur: Step = start
-        # Steps are counted as Effect's ``currentOpCount``: the run pauses
-        # before the step that reaches ``MaxOpsBeforeYield`` (Effect's
-        # ``shouldYield``), but always takes its first step, so a budget
-        # of 1 or 2 still makes progress. An ``EffectScheduler`` is asked
-        # before every step, the first too, as in Effect.
+        # Ops are counted as Effect's ``currentOpCount``: one per effect
+        # stepped, and one per success a frame hands on with
+        # ``succeed_with`` (Effect's ``succeedWith``), every
+        # ``_INLINE_STEPS``-th of which goes back through the loop as one
+        # more op. Before each op that goes through the loop the fiber
+        # pauses once the budget is spent (Effect's ``shouldYield``); an
+        # exit handed straight to the next frame is no op, as in Effect.
         ops, self._ops_on_resume = self._ops_on_resume, 0
-        first = ops + 1 if self._should_yield is None else 0
-        # Whether ``cur`` is the exit a step (or a frame that ``claims``)
-        # just returned: a result it decided (a taken item, an applied
-        # update) reaches its continuation with no pause in between, where
-        # an interrupt could drop it.
-        decided = False  # pragma: no mutate, a run starts at most 2 ops in
+        # A claimed result the fiber paused before reaches its continuations
+        # before an interrupt that landed in the pause: in Effect they all
+        # run within the claiming op, so the interrupt waits for the next op.
+        guard, self._decided_on_resume = self._decided_on_resume, False
+        inline_mask = _INLINE_STEPS - 1
         while True:
-            if self._interrupt is not None and self._interruptible:
-                cur = self._with_interrupt(cur, self._interrupt)
+            if (
+                self._interrupt is not None
+                and self._interruptible
+                and not (guard and (cur is start or not isinstance(cur, Effect)))
+            ):
+                guard = False  # pragma: no mutate, cur holds the interrupt now
+                cur = self._interrupting(cur, self._interrupt)
 
             if isinstance(cur, Effect):
                 ops += 1
-                if ops >= self._ops_budget and ops > first and self._pause_due(cur, ops):
+                if ops >= self._ops_budget and self._pause_due(cur, ops):
                     return
                 try:
                     hook = self._tracer_hook
                     cur = cur._step(self) if hook is None else _run_hooked(hook, cur, self)
                 except BaseException as exc:
                     cur = self._raised(exc)
-                decided = True
+                    continue
+                if (
+                    type(cur) is Decided
+                    and self._stack
+                    and self._interrupt is None
+                    and self._tracer_hook is None
+                ):
+                    # A claimed success (an offer's ``True``) is Effect's exit
+                    # op: counted, and handed to its frame, here rather than
+                    # in a pass of its own, which the queue's hot path feels.
+                    ops += 1
+                    if ops >= self._ops_budget and self._pause_due(cur, ops):
+                        return
+                    try:
+                        cur = self._stack.pop()._on_success(cur.value, self)
+                    except BaseException as exc:
+                        cur = self._raised(exc)
             elif isinstance(cur, _EXITS):
-                if not self._stack:
-                    if self._stack_frame is not None and isinstance(cur, Failure):
-                        cur = self._in_frame(cur, self._stack_frame)
+                kind = type(cur)
+                # A claimed success is Effect's exit op.
+                if kind is Decided:
+                    ops += 1
+                    if ops >= self._ops_budget and self._pause_due(cur, ops):
+                        return
+                stack = self._stack
+                if not stack:
                     nxt = self._finish(cur)
                     if nxt is None:
                         return
                     cur = nxt
                     continue
-                # A continuation counts as a step, but as in Effect a fiber
-                # may yield before one only every ``_INLINE_STEPS`` steps: a
-                # long chain of ``map``s still yields, while a primitive's
-                # result normally reaches its continuation in the same step.
-                ops += 1
-                if (
-                    not decided
-                    and ops % _INLINE_STEPS == 0
-                    and ops >= self._ops_budget
-                    and ops > first
-                    and self._pause_due(cur, ops)
-                ):
-                    return
-                frame = self._stack.pop()
-                decided = frame.claims
-                cur = self._continue(frame, cur)
+                # A ``succeed_with`` counts; every ``_INLINE_STEPS``-th
+                # goes through the loop as one more op.
+                if kind is HandedOn and not (ops := ops + 1) & inline_mask:
+                    ops += 1
+                    if ops >= self._ops_budget and self._pause_due(cur, ops):
+                        return
+                frame = stack.pop()
+                if kind is not Failure and self._tracer_hook is None:
+                    # ``_continue``'s common case, inlined: this runs for
+                    # every frame a success reaches.
+                    try:
+                        cur = frame._on_success(cast("Success[Any]", cur).value, self)
+                    except BaseException as exc:
+                        cur = self._raised(exc)
+                else:
+                    cur = self._continue(frame, cur)
             elif cur is SUSPEND:
                 return  # a resume callback will call _run again
             else:  # untyped user code handed back something that is not an effect
                 cur = exit_die(TypeError(f"not a valid effect: {cur!r}"))
 
+    def _interrupting(self, cur: Step, interrupt: Cause[Any]) -> Step:
+        """``cur`` with ``interrupt`` delivered: a fresh interrupt replaces
+        it (Effect's ``_deferredInterrupt``, failures included); a pending
+        one is merged into a failure (``_with_interrupt``)."""
+        if self._interrupt_fresh:
+            self._interrupt_fresh = False
+            return _failing(interrupt)
+        return self._with_interrupt(cur, interrupt)
+
     def _pause_due(self, cur: Step, ops: int) -> bool:
-        """Past the budget: pause before ``cur``, unless an
-        ``EffectScheduler`` (asked before each step, as Effect) says not to. A raising
-        ``should_yield`` is a defect, which the fiber goes on with after the
-        pause."""
+        """The budget is spent: pause before ``cur``, unless an
+        ``EffectScheduler`` (asked before each op, as in Effect) says not
+        to. If ``cur`` is a result just claimed (``run_known``), an
+        interrupt that lands in the pause waits until it has reached its
+        continuation, where Effect would drop it. A raising
+        ``should_yield`` is a defect, which the fiber goes on with after
+        the pause."""
         check = self._should_yield
         if check is not None:
             self.current_op_count = ops
@@ -754,18 +820,26 @@ class Fiber(Generic[A_co, E_co]):
                 if not check.should_yield(self):
                     return False
             except BaseException as exc:
-                cur = self._raised(exc)
-        self._pause(cur)
+                # A plain exit, no op: Effect would ask the raising check
+                # again before its ``exitDie`` op, and spin forever.
+                died = self._raised(exc)
+                cur = died.outcome if isinstance(died, _FromExit) else died
+        # Effect pauses with ``flatMap(yieldNow, () => cur)``: the resumed
+        # run counts that continuation as its first op and ``cur`` as its
+        # second. An exit ``cur`` is a frame's ``succeed_with`` at the
+        # inline limit, which Effect hands back to the loop as an op, or a
+        # claimed success, Effect's exit op.
+        resumed = 1
+        decided = isinstance(cur, Effect) and cur._holds_decided
+        if type(cur) is HandedOn or type(cur) is Decided:
+            # A claimed success is an op too, which the resumed run counts.
+            decided = type(cur) is Decided
+            cur = Success(cur.value)
+            resumed += 1
+        self._queue_yielded(_Yielded(cur, ops=resumed, decided=decided), 0)
         return True
 
-    def _pause(self, cur: Step) -> None:
-        """The step budget is spent: let other fibers run, then go on with
-        ``cur``. Effect pauses with ``flatMap(yieldNow, () => cur)``, whose
-        continuation is the first step of the resumed run, so that run
-        starts one step into its budget."""
-        self._queue_yielded(_Yielded(cur, ops=1))
-
-    def _queue_yielded(self, yielded: _Yielded, priority: int = 0) -> None:
+    def _queue_yielded(self, yielded: _Yielded, priority: int) -> None:
         self._yielded = yielded
         run = self._batch_run
         if (
@@ -795,6 +869,7 @@ class Fiber(Generic[A_co, E_co]):
         if self._yielded is yielded:
             self._yielded = None
             self._ops_on_resume = yielded.ops
+            self._decided_on_resume = yielded.decided
             self._drive(yielded.step)
 
     def _continue(self, frame: Frame, ex: Exit[Any, Any]) -> Step:
@@ -825,11 +900,16 @@ class Fiber(Generic[A_co, E_co]):
         as interrupted (the fiber goes on with that on its next turn), and
         the ``KeyboardInterrupt`` goes on to the runner, which interrupts
         the main fiber and waits for its finalizers, as when Ctrl-C lands
-        while every fiber is parked."""
+        while every fiber is parked.
+
+        Effect's loop catches the raise and goes on with ``exitDie``, an op
+        of its own."""
         if isinstance(exc, KeyboardInterrupt):
-            self._pause(Failure(self._record_interrupt(None, None)))
+            interrupted = Failure(self._record_interrupt(None, None))
+            unwind = _Yielded(interrupted, ops=1, decided=False)  # pragma: no mutate, unwinds only
+            self._queue_yielded(unwind, 0)
             raise exc
-        return exit_die(exc)
+        return _FromExit(exit_die(exc))
 
     @staticmethod
     def _in_frame(failure: Failure[Any], frame: StackFrame) -> Failure[Any]:
@@ -840,13 +920,23 @@ class Fiber(Generic[A_co, E_co]):
 
     @staticmethod
     def _with_interrupt(cur: Step, cause: Cause[Never]) -> Step:
+        """``cur`` once the fiber is interrupted: a failure, or an op that is
+        one (Effect's failure exits add the interrupts as they run), gains
+        the interrupt; anything else becomes it, an op of its own, as
+        Effect's ``failCause`` in place of the next op or continuation."""
         if isinstance(cur, Failure):
-            with_interrupts = cur.cause.add_interrupts(cause)
-            return cur if with_interrupts is cur.cause else Failure(with_interrupts)
-        return Failure(cause)
+            return Failure(cur.cause.add_interrupts(cause))
+        known = known_exit(cur) if isinstance(cur, Effect) else None
+        if isinstance(known, Failure):
+            return _failing(known.cause.add_interrupts(cause))
+        return _failing(cause)
 
     def _finish(self, ex: Exit[Any, Any]) -> Step | None:
         """The stack is empty. Interrupt children first; then complete."""
+        if type(ex) is HandedOn or type(ex) is Decided:
+            ex = Success(ex.value)
+        elif self._stack_frame is not None and isinstance(ex, Failure):
+            ex = self._in_frame(ex, self._stack_frame)
         if self._children:
             children = list(self._children)
             self._interruptible = False  # pragma: no mutate, falsy either way
@@ -898,6 +988,8 @@ class Fiber(Generic[A_co, E_co]):
         ``fork*`` with ``startImmediately``); otherwise it is scheduled.
         Required, so each port states which of the two Effect does."""
         interruptible = self._interruptible if uninterruptible == "inherit" else not uninterruptible
+        # The child switches to this fiber's context: hand it this view.
+        _last_view[0] = self._view
         child: Fiber[Any, Any] = Fiber(
             self._run_scheduler, self._ctx, None if daemon else self, interruptible=interruptible
         )
@@ -919,7 +1011,8 @@ class Fiber(Generic[A_co, E_co]):
         return SUSPEND
 
     def _yield_now(self, priority: int = 0) -> Step:  # pragma: no mutate, callers pass priority
-        self._queue_yielded(_Yielded(Success(None)), priority)
+        # Effect resumes with ``exitVoid``, the resumed run's first op.
+        self._queue_yielded(_Yielded(_VOID, ops=0, decided=False), priority)
         return SUSPEND
 
     def _suspend(self, register: Register[Any, Any, Any]) -> Step:
@@ -941,19 +1034,23 @@ class Fiber(Generic[A_co, E_co]):
             return self._cancel_wait(wait)
         return SUSPEND
 
-    def _resume(self, wait: _Wait, effect: Effect[Any, Any, Any]) -> None:
+    def _resume(
+        self, wait: _Wait, effect: Effect[Any, Any, Any], canceler: Effect[Any, Any, Any] | None
+    ) -> None:
         """Run a claimed resume now. In Effect a resume runs the fiber at
         once, so an interrupt that arrived while another thread's resume
         was queued lands only once the resumed run has finished, parked or
         yielded. A wake-up (``_Retry``) decides nothing until it runs, so an
         interrupt that arrived first wins over it, at its first step, and
         the wait's canceler runs."""
-        # The wait lets go of its canceler, which may keep what it waited on.
-        canceler, wait.canceler = wait.canceler, None
         if self._waiting is wait:
             self._waiting = None
-            if wait.woken and canceler is not None:
-                self._push(_CancelIfFailed(canceler))
+            if canceler is not None:
+                # Effect keeps the canceler's frame under every wait: an
+                # interrupt the wait resumes with runs it too. Below a
+                # wake-up it also runs on any failure before the wake-up
+                # decides.
+                self._push(_CancelIfFailed(canceler) if wait.woken else _AsyncFinalizer(canceler))
             self._evaluate(effect)
         deferred, self._interrupts_after_resume = self._interrupts_after_resume, []
         for by, interruptor in deferred:
@@ -979,18 +1076,26 @@ class Fiber(Generic[A_co, E_co]):
             self._interrupts_after_resume.append((by, annotations))
             return
         interrupt = self._record_interrupt(by, annotations)
-        if not self._interruptible or self._phase == "running":
-            return  # the loop raises it at its next interruptible step
+        if not self._interruptible:
+            return  # met when the fiber becomes interruptible again
         yielded = self._yielded
-        if yielded is not None:
-            # Queued after a yield or a pause: unwind now (Effect's
-            # evaluate of a yielded fiber); the queued task does nothing.
+        if self._phase == "running":
+            self._interrupt_fresh = True  # the loop raises it at its next step
+        elif yielded is not None:
+            # Queued after a yield or a pause: unwind now (Effect's evaluate of
+            # a yielded fiber with ``failCause``, which drops the op it paused
+            # before); the queued task does nothing. A result the fiber had
+            # claimed first reaches its continuations, as in Effect.
             self._yielded = None
+            self._decided_on_resume = yielded.decided
+            self._interrupt_fresh = True
             self._evaluate(yielded.step)
         elif self._phase == "pending":
             self._evaluate(Failure(interrupt))
-        # Otherwise it is queued to run on this thread, nested deeper than
-        # runs may go, and meets the interrupt at its first step.
+        else:
+            # Queued to run on this thread, nested deeper than runs may go:
+            # it meets the interrupt at its first step.
+            self._interrupt_fresh = True
 
     def _record_interrupt(self, by: int | None, annotations: Context | None) -> Cause[Never]:
         cause = interrupt_cause(by)
@@ -1079,20 +1184,50 @@ class Fiber(Generic[A_co, E_co]):
         to continue with (the canceler, then the interrupt)."""
         self._waiting = None
         assert self._interrupt is not None
-        if wait.canceler is None:
-            return Failure(self._interrupt)
-        # Run the canceler uninterruptibly, then end with the interrupt; a
-        # failing canceler is a failing finalizer (Effect's asyncFinalizer).
-        self._push(_RestoreInterruptible(True))
-        self._interruptible = False  # pragma: no mutate, falsy either way
-        return _run_finalizer(wait.canceler, Failure(self._interrupt))
+        # As Effect's ``evaluate(failCause(interrupted))``: the interrupt is
+        # an op, which meets the canceler's frame.
+        if wait.canceler is not None:
+            self._push(_AsyncFinalizer(wait.canceler))
+        return _failing(self._interrupt)
+
+
+class _AsyncFinalizer(Frame):
+    """Effect's ``asyncFinalizer``, under a wait with a canceler: when the
+    wait ends with a cause holding interrupts (the fiber's, or one the wait
+    resumed with), the canceler, run uninterruptibly, then that cause; a
+    failing canceler is a failing finalizer. Any other failure goes back
+    through the loop, an op of its own, as in Effect."""
+
+    __slots__ = ("canceler",)
+
+    def __init__(self, canceler: Effect[Any, Any, Any]) -> None:
+        self.canceler = canceler
+
+    def _on_failure(self, cause: Cause[Any], fiber: Fiber[Any, Any]) -> Step:
+        if fiber._interruptible:
+            fiber._push(_RestoreInterruptible(True))
+            fiber._interruptible = False
+        if not cause.has_interrupts:
+            return _failing(cause)
+        return _run_finalizer(self.canceler, Failure(cause))
 
 
 def _no_op() -> None:
     pass
 
 
+def _failing(cause: Cause[Never]) -> Effect[Never]:
+    return _FromExit(Failure(cause))
+
+
 def _run_hooked(hook: ContextHook, cur: Effect[Any, Any, Any], fiber: Fiber[Any, Any]) -> Step:
+    # An exit runs no user code, so it needs no context. Hooking it would
+    # make a raising hook turn the defect it raised into another one,
+    # forever (Effect hooks its ``exitDie`` too, and spins).
+    if isinstance(cur, _FromExit):
+        known = known_exit(cur)
+        if known is not None:
+            return known
     step: Callable[[], Step] = partial(cur._step, fiber)
     return hook(step, fiber)
 
@@ -1144,7 +1279,9 @@ class _RunView:
         elif should_yield is not None:
             budget = 0  # pragma: no mutate, ops >= 1 at every check
         else:
-            budget = max(1, context.lookup(MaxOpsBeforeYield)[1])  # pragma: no mutate, 1 acts as 2
+            # Under 3 Effect's fiber yields before every op it resumes
+            # with, forever; here it gets 3's one op per run.
+            budget = max(3, context.lookup(MaxOpsBeforeYield)[1])
         hook = context.lookup(CurrentTracer)[1].context
         runtime_metrics = context.lookup(FiberRuntimeMetrics)[1]
         frame = context.lookup(CurrentStackFrame)[1]
