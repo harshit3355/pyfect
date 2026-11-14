@@ -1,8 +1,11 @@
 """Ref, Deferred, Queue, Semaphore."""
 
-import time
+from typing import Any
+
+import pytest
 
 import pyfect as fx
+from pyfect.semaphore import Semaphore
 from pyfect.testing import run_test as run
 
 
@@ -182,23 +185,34 @@ def test_a_semaphore_waiter_too_large_for_a_release_keeps_its_place():
     assert order == ["b", "a"]
 
 
-def test_a_release_wakes_only_the_waiters_its_permits_can_serve():
+def test_a_release_wakes_only_the_waiters_its_permits_can_serve(monkeypatch: pytest.MonkeyPatch):
     """Waking every waiter on each release makes N contending fibers cost
     O(N^2): each woken fiber that finds the permit taken parks again. Effect
     resumes a waiter at once, so the first one takes the permit and the rest
-    stay parked; here a release wakes as many as its free permits serve."""
+    stay parked; here a release wakes as many as its free permits serve.
+
+    Counts parks rather than timing the run: a wall-clock limit failed the
+    0.6.4 release on a loaded 3.13 runner (3.06 s, 0.2 s locally). Each fiber
+    but the first parks once; waking every waiter parked 89,401 times for 300."""
+    parks = [0]
+    park = Semaphore._park  # pyright: ignore[reportPrivateUsage]
+
+    def counted(self: Semaphore, waiter: Any) -> Any:
+        parks[0] += 1
+        return park(self, waiter)
+
+    monkeypatch.setattr(Semaphore, "_park", counted)
+    n = 3000
 
     @fx.gen
     def program():
         sem = yield from fx.Semaphore.make(1)
         yield from fx.all(
-            *[sem.with_permits(fx.yield_now()) for _ in range(3000)], concurrency="unbounded"
+            *[sem.with_permits(fx.yield_now()) for _ in range(n)], concurrency="unbounded"
         )
 
-    start = time.perf_counter()
     run(program)
-    # Linear is about 0.1 s here; waking every waiter took over 20 s.
-    assert time.perf_counter() - start < 3
+    assert parks[0] == n - 1
 
 
 def test_semaphore_limits_concurrency():
