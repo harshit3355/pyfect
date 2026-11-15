@@ -3,7 +3,9 @@
 import gc
 import os
 import re
+import subprocess
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 
@@ -24,6 +26,24 @@ _COMPILER_LEFT = (
     "reset it with _registry.reset(), as the fresh_registry fixture in "
     "tests/oracle/_schema_compiler.py does, and walk modules with tests/_pyfect_modules.py"
 )
+
+
+def _install_pre_push_hook() -> None:
+    """Point git at .githooks/pre-push, which checks a push's Python files before CI does. Every
+    checkout that runs the tests gets it; a hooks path someone set is left alone."""
+    root = Path(__file__).resolve().parent.parent
+    git = ["git", "-C", str(root), "config"]
+    try:
+        current = subprocess.run(
+            [*git, "core.hooksPath"], capture_output=True, text=True, check=False
+        )
+        if current.returncode == 1 and (root / ".git").exists():
+            subprocess.run([*git, "core.hooksPath", ".githooks"], check=True)
+    except OSError:  # no git
+        pass
+
+
+_install_pre_push_hook()
 
 
 def pytest_collection_finish(session: pytest.Session) -> None:
