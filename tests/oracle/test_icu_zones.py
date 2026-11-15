@@ -265,9 +265,8 @@ def test_table_is_what_the_recorded_node_gives() -> None:
 
 def test_every_id_keeps_its_name_and_equals_its_resolved_zone() -> None:
     """Effect 4.1.4 (#10439): ``id`` is the id given, ``Equal`` and ``Hash`` use the resolved
-    one. Checked for every id ICU knows, as written and in upper case. A zone whose data the
-    system's tz database lacks (Ubuntu moves old names to ``tzdata-legacy``) is ``None``
-    under every one of its ids."""
+    one. Checked for every id ICU knows, as written and in upper case. A zone read from a tz
+    region Zone the system's tz database lacks is ``None`` under every one of its ids."""
     for zone_id, canonical in CANONICAL.items():
         resolved = date_time.zone_named(canonical)
         for written in (zone_id, zone_id.upper()):
