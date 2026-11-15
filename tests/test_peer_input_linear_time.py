@@ -13,6 +13,7 @@ import pytest
 from _complexity import is_linear
 
 from pyfect import schema as S
+from pyfect.http import cookies
 from pyfect.http.find_my_way._router import (
     Router,
     _safe_decode_uri,  # pyright: ignore[reportPrivateUsage]
@@ -50,7 +51,13 @@ def _repeated_header(n: int) -> Callable[[], object]:
     return lambda: request.headers
 
 
+def _cookie_without_equals(n: int) -> Callable[[], object]:
+    header = ";" * n + "=x"
+    return lambda: cookies.parse_header(header)
+
+
 CASES: dict[str, tuple[Case, int]] = {
+    "Cookie header of segments without =": (_cookie_without_equals, 5_000),
     "ASGI request with many lines of one header": (_repeated_header, 5_000),
     "find-my-way path with %25 runs": (_percent_25_path, 20_000),
     "HttpApi parameters joined by a comma": (_comma_params, 100),
@@ -72,6 +79,11 @@ def test_comma_joined_parameters_still_match() -> None:
     found = router.find("GET", "/geo/1,2,3,4")
     assert found is not None
     assert dict(found.params) == {"a": "1", "b": "2", "c": "3,4"}
+
+
+def test_cookie_segments_without_equals_are_skipped() -> None:
+    assert cookies.parse_header("a;b;c=1; d ;e=2") == {"c": "1", "e": "2"}
+    assert cookies.parse_header(";;;=x") == {"": "x"}
 
 
 def test_percent_25_is_kept_encoded_for_parameters() -> None:

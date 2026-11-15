@@ -33,6 +33,8 @@
   server does (`config={"ws_per_message_deflate": True}` turns it back on).
 - An ASGI request's (and WebSocket upgrade's) repeated header lines are joined once, in time
   linear in their number.
+- `cookies.parse_header` skips the segments without `=` before the next `=` at once, in time
+  linear in the header's length.
 
 ## 0.6.5 (2026-11-14)
 

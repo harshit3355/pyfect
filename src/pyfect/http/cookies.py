@@ -418,7 +418,9 @@ def parse_header(header: str) -> dict[str, str]:
         if eq == -1:
             break
         if eq > end:
-            pos = end + 1
+            # Skip every segment without ``=`` before ``eq`` at once (as
+            # jshttp/cookie does): one at a time rescans to ``eq`` for each.
+            pos = header.rfind(";", 0, eq) + 1
             continue
         key = trim(header[pos:eq])
         if key not in result:
