@@ -42,10 +42,9 @@ only if they pass (`tests/test_ci_workflows.py`). After a deliberate speed chang
 - Interrupts from the fiber's own scheduler thread are delivered synchronously (Effect's
   `interruptUnsafe`); from other threads they are scheduled.
 - A thunk or frame that claims state (takes an item, a permit) returns the result in the same
-  step, as an `Exit` or through `run_known(...)`, never as an effect for a later step; a frame
-  that does so (or passes such a result straight on) sets `claims = True`. The loop never
-  pauses (step budget) between a step's `Exit`, or a `claims` frame's, and its continuation,
-  so no yield or interrupt can lose an already-decided result. `tests/test_decided_results.py`
+  step, as a plain `Exit` or through `run_known(...)`, never with `succeed_with` or as an
+  effect for a later step. The loop never pauses (step budget) between a plain `Exit` and its
+  continuation, so no yield or interrupt can lose an already-decided result. `tests/test_decided_results.py`
   interrupts every claiming primitive at each yield, also with every continuation a possible
   pause, and fails if one breaks this; add new claiming primitives to its cases.
 - User callbacks (finalizers, `use`, `on_exit` functions) run through `_core._call_user`, so a
