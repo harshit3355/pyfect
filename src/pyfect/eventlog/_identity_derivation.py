@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from typing import Any, Never
 
 from pyfect._core import Effect
-from pyfect._js import text_encode
+from pyfect._text_keys import key_bytes
 from pyfect.crypto import aead, digest, key_format, secure_random, signature
 from pyfect.crypto import web_crypto as web
 from pyfect.effect import gen, succeed, suspend
@@ -56,7 +56,7 @@ class IdentityRootSecretMaterial:
 def derive_secret_bytes(root_secret: bytes, label: str) -> Effect[bytes, Never, digest.Digest]:
     """SHA-256(label || 0x00 || root secret)."""
     return digest.Digest().flat_map(
-        lambda service: service.digest(digest.sha256, text_encode(label) + b"\x00" + root_secret)
+        lambda service: service.digest(digest.sha256, key_bytes(label) + b"\x00" + root_secret)
     )
 
 

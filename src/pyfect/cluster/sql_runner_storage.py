@@ -29,6 +29,7 @@ from pyfect import layer as layer_
 from pyfect._core import Effect
 from pyfect._fiber import Fiber
 from pyfect._js import text_encode
+from pyfect._text_keys import key_bytes
 from pyfect.cause import Cause
 from pyfect.cluster._resource_ref import ResourceRef
 from pyfect.cluster._shard_lock import effective_interval
@@ -71,7 +72,7 @@ def _mysql_lock_names(prefix: str, shard_ids: Sequence[str]) -> dict[str, str]:
     return {
         shard_id: name
         if folded[name.lower()] == 1
-        else f"{prefix}.{hashlib.sha256(text_encode(shard_id)).hexdigest()[:40]}"
+        else f"{prefix}.{hashlib.sha256(key_bytes(shard_id)).hexdigest()[:40]}"
         for shard_id, name in names.items()
     }
 

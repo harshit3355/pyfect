@@ -21,6 +21,7 @@ from typing import Any, Never, NewType, Protocol, cast
 
 from pyfect import schema as S
 from pyfect._core import Effect
+from pyfect._text_keys import is_well_formed
 from pyfect.clock import Clock, ClockService, now_millis_unsafe
 from pyfect.context import Tag
 from pyfect.crypto.secure_random import random_bytes_unsafe, uuid_v4_unsafe
@@ -50,7 +51,12 @@ StoreId = NewType("StoreId", str)
 
 EntryIdSchema: S.Codec[EntryId, bytes] = cast("S.Codec[EntryId, bytes]", S.Bytes)
 RemoteIdSchema: S.Codec[RemoteId, bytes] = cast("S.Codec[RemoteId, bytes]", S.Bytes)
-StoreIdSchema: S.Codec[StoreId, str] = cast("S.Codec[StoreId, str]", S.String)
+StoreIdSchema: S.Codec[StoreId, str] = cast(
+    "S.Codec[StoreId, str]",
+    S.String.check(S.make_filter(is_well_formed, expected="well-formed Unicode text")),
+)
+"""A store id: text with no lone surrogate, which would share its bytes with
+the id holding U+FFFD in its place."""
 
 
 @dataclass(eq=False)

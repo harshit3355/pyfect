@@ -189,3 +189,49 @@ def test_pairs_joining_to_one_string_stay_apart(storage: str) -> None:
     assert victim is not None
     assert other is None
     assert seen == 0
+
+
+# A lone surrogate (a client can send ``"\ud800"`` in JSON) and U+FFFD in its
+# place: UTF-8 with replacement would give both pairs the same bytes.
+SURROGATE_PAIRS = [
+    (("victim", "notes\ufffd"), ("victim", "notes\ud800")),
+    (("victim\ufffd", "notes"), ("victim\ud800", "notes")),
+    (("a\ufffd/b", "c/d"), ("a\ud800/b", "c/d")),
+]
+
+
+@pytest.mark.parametrize("storage", ["sql", "memory"])
+@pytest.mark.parametrize(("victim", "other"), SURROGATE_PAIRS)
+def test_a_lone_surrogate_and_its_replacement_name_different_stores(
+    storage: str, victim: tuple[str, str], other: tuple[str, str]
+) -> None:
+    provided: Layer[Any, Any, Any] = (
+        sql_event_log_server_encrypted.layer_storage_subtle().pipe(
+            layer.provide(sqlite.layer(sqlite.SqliteClientConfig(filename=":memory:")))
+        )
+        if storage == "sql"
+        else event_log_server_encrypted.layer_storage_memory
+    )
+
+    @fx.fn
+    def program():
+        storage = yield from Storage()
+        batch = _batch()
+        yield from storage.write(victim[0], StoreId(victim[1]), [batch])
+        seen = yield from storage.latest_sequence(other[0], StoreId(other[1]))
+        acked = yield from storage.entry_sequences(other[0], StoreId(other[1]), batch.entry_ids)
+        return seen, len(acked)
+
+    assert fx.run_blocking(fx.scoped(program()).pipe(fx.provide(provided)).or_die()) == (None, 0)
+
+
+def test_a_lone_surrogate_pair_gets_no_0_6_5_tables_of_its_replacement(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db = tmp_path / "log.db"
+    victim, other = ("a\ufffd/b", "c"), ("a\ud800/b", "c")
+    _write(db, monkeypatch, [victim])
+    assert fx.run_blocking(_migrate(db, *other)) is False
+    assert _read(db, *other) == (None, 0)
+    assert fx.run_blocking(_migrate(db, *victim)) is True
+    assert _read(db, *victim) == (1, 1)

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.6.7 (unreleased)
+
+### Fixed
+
+- Event log servers refuse a public key or store id that is not well-formed Unicode (holds a
+  lone surrogate): `Authenticate` fails `Forbidden` and `StoreIdSchema` does not decode it.
+  The SQL encrypted server's storage names each store's tables from text that keeps such
+  characters apart.
+
 ## 0.6.6 (2026-11-15)
 
 ### Added
