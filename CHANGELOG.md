@@ -2,6 +2,29 @@
 
 ## 0.6.7 (unreleased)
 
+### Fixed
+
+- Cancelling a task awaiting `fx.run_async` / `run_async_exit` (or a `ManagedRuntime`'s) a
+  second time while the interrupted fiber ran its finalizers ended the await before they
+  finished, and the fiber's exit then raised `InvalidStateError` into the loop, which stopped
+  the fiber's other exit observers (an `await_exit` elsewhere hung). Every cancel now waits for
+  the fiber, as Effect's `runPromiseExit` does with its signal aborted twice. A cancelled
+  standard-schema validation raised the same error in the loop. A future's `set_result` /
+  `set_exception` is no longer passed as a callback anywhere (`pyfect._futures.settle` skips a
+  done future), enforced by `tests/test_future_callbacks.py`.
+- `ManagedRuntime.dispose()` called at the same moment from several threads returned, on all
+  but one of them, before the layer's resources were released: each saw no disposal yet and
+  began one. Exactly one call now begins the disposal and every other waits for it, as in
+  Effect.
+- A `ManagedRuntime` run started on one thread while another thread disposed the runtime could
+  join the runtime's fibers only after the disposal had closed them, so nothing awaited it: its
+  work and finalizers ran after the layer's release, with released services, and rarely
+  `run_blocking_exit` raised `AttributeError` instead of returning an `Exit`. A run now either
+  joins before the disposal begins (the disposal interrupts and awaits it, as Effect closes
+  `fiberScope` before `layerScope`) or dies with "ManagedRuntime disposed". The runtime's
+  shared state is used only under one lock, enforced by `tests/test_managed_runtime_lock.py`;
+  `tests/free_threaded/stress.py` runs both races without the GIL.
+
 ## 0.6.6 (2026-11-15)
 
 ### Added

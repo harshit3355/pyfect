@@ -46,6 +46,7 @@ from typing import Any, Never, Protocol, cast, overload
 from pyfect._core import Effect, _Succeed
 from pyfect._effect_args import require_effect
 from pyfect._fiber import Fiber
+from pyfect._futures import settle
 from pyfect._root import ambient_run, loop_running_here, new_root, start_root
 from pyfect.cause import Cause, _raised_tagged_error_hint
 from pyfect.context import Context, Tag
@@ -414,13 +415,20 @@ async def await_fiber[A, E](fiber: Fiber[A, E]) -> Exit[A, E]:
     """Wait on the running loop for ``fiber``, whose run is the loop's.
     Cancelling the awaiting task interrupts the fiber and waits for it."""
     done: asyncio.Future[Exit[A, E]] = asyncio.get_running_loop().create_future()
-    fiber.add_observer_unsafe(done.set_result)
-    try:
-        return await asyncio.shield(done)
-    except asyncio.CancelledError:
-        fiber.interrupt_as_unsafe(None)
-        await done
-        raise
+    fiber.add_observer_unsafe(lambda ex: settle(done, ex))
+    cancelled: asyncio.CancelledError | None = None
+    while True:
+        try:
+            ex = await asyncio.shield(done)
+        except asyncio.CancelledError as error:
+            # Every cancel, the first or a later one, waits for the fiber.
+            if cancelled is None:
+                cancelled = error
+                fiber.interrupt_as_unsafe(None)
+            continue
+        if cancelled is not None:
+            raise cancelled
+        return ex
 
 
 def unwrap[A](ex: Exit[A, Any]) -> A:
