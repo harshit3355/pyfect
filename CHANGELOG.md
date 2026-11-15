@@ -12,6 +12,18 @@
   standard-schema validation raised the same error in the loop. A future's `set_result` /
   `set_exception` is no longer passed as a callback anywhere (`pyfect._futures.settle` skips a
   done future), enforced by `tests/test_future_callbacks.py`.
+- `ManagedRuntime.dispose()` called at the same moment from several threads returned, on all
+  but one of them, before the layer's resources were released: each saw no disposal yet and
+  began one. Exactly one call now begins the disposal and every other waits for it, as in
+  Effect.
+- A `ManagedRuntime` run started on one thread while another thread disposed the runtime could
+  join the runtime's fibers only after the disposal had closed them, so nothing awaited it: its
+  work and finalizers ran after the layer's release, with released services, and rarely
+  `run_blocking_exit` raised `AttributeError` instead of returning an `Exit`. A run now either
+  joins before the disposal begins (the disposal interrupts and awaits it, as Effect closes
+  `fiberScope` before `layerScope`) or dies with "ManagedRuntime disposed". The runtime's
+  shared state is used only under one lock, enforced by `tests/test_managed_runtime_lock.py`;
+  `tests/free_threaded/stress.py` runs both races without the GIL.
 
 ## 0.6.5 (2026-11-14)
 

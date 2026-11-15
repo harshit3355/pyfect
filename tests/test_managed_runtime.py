@@ -2,12 +2,13 @@
 the per-request pattern of a web server's lifespan."""
 
 import asyncio
+import contextlib
 import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass
-from typing import Never
+from typing import Never, Self
 
 import pytest
 
@@ -381,3 +382,113 @@ AFTER_DISPOSE_RAISES: dict[str, Callable[[], object]] = {
 def test_every_raising_run_after_dispose_raises_managed_runtime_disposed(entry: str) -> None:
     with pytest.raises(RuntimeError, match=r"^ManagedRuntime disposed$"):
         AFTER_DISPOSE_RAISES[entry]()
+
+
+def _slow_release(log: list[str]) -> layer.Layer[Name]:
+    release = fx.sleep("20 millis").and_then(fx.sync(lambda: log.append("release")))
+    return layer.effect(Name, fx.acquire_release(fx.succeed("svc"), lambda _n, _ex: release))
+
+
+def test_every_dispose_called_at_once_from_several_threads_waits_for_the_release(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Both callers check ``_disposed`` before either sets it (forced by a
+    barrier where the disposal is created): only one may close the scope,
+    and the other waits for it."""
+    import pyfect.managed_runtime as module
+
+    meet = threading.Barrier(2)
+
+    class MeetingDeferred:
+        def __getitem__(self, _t: object) -> Self:
+            return self
+
+        def __call__(self) -> fx.Deferred[None]:
+            # Fixed, the other caller is held back until this one is done.
+            with contextlib.suppress(threading.BrokenBarrierError):
+                meet.wait(0.5)
+            return fx.Deferred[None]()
+
+    log: list[str] = []
+    runtime = fx.ManagedRuntime.make(_slow_release(log))
+    runtime.run_blocking(Name())
+    monkeypatch.setattr(module, "Deferred", MeetingDeferred())
+    early: list[str] = []
+
+    def dispose() -> None:
+        runtime.dispose()
+        if not log:
+            early.append("returned before the release")
+
+    threads = [threading.Thread(target=dispose) for _ in range(2)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(10)
+    assert (early, log) == ([], ["release"])
+
+
+def test_dispose_waits_for_a_run_it_meets_while_the_run_starts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A disposal on another thread lands between a run reading the
+    services and its fiber starting: the run is still one the disposal
+    interrupts and awaits (Effect closes ``fiberScope`` before
+    ``layerScope``): here before it starts, so it does nothing, and
+    nothing of it comes after the release."""
+    import pyfect.managed_runtime as module
+
+    log: list[str] = []
+    runtime = fx.ManagedRuntime.make(_slow_release(log))
+    runtime.run_blocking(Name())
+    real_start_root = module.start_root
+    disposer = threading.Thread(target=runtime.dispose)
+
+    def start_root_after_disposal_began(fiber: fx.Fiber[object, object], eff: object, **kw: bool):
+        disposer.start()
+        deadline = time.monotonic() + 2
+        while runtime._fiber_scope._closed is None and time.monotonic() < deadline:  # pyright: ignore[reportPrivateUsage]
+            time.sleep(0.001)
+        time.sleep(0.05)  # let an unawaiting disposal reach the release
+        real_start_root(fiber, eff, **kw)  # pyright: ignore[reportArgumentType]
+
+    monkeypatch.setattr(module, "start_root", start_root_after_disposal_began)
+    run = (
+        Name()
+        .and_then(fx.sync(lambda: log.append("work")))
+        .ensuring(fx.sync(lambda: log.append("fin")))
+        .uninterruptible()
+    )
+    ex = runtime.run_blocking_exit(run)
+    disposer.join(10)
+    assert isinstance(ex, fx.Failure) and ex.cause.has_interrupts_only, ex
+    assert log == ["release"]
+
+
+def test_a_run_started_once_disposal_began_dies_disposed(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Effect: a run made after ``dispose`` dies with "ManagedRuntime
+    disposed", also one made while the release is still running."""
+    log: list[str] = []
+    releasing = threading.Event()
+    go_on = threading.Event()
+
+    def release() -> None:
+        releasing.set()
+        go_on.wait(5)
+        log.append("release")
+
+    runtime = fx.ManagedRuntime.make(
+        layer.effect(
+            Name,
+            fx.acquire_release(fx.succeed("svc"), lambda _n, _ex: fx.blocking(release)),
+        )
+    )
+    runtime.run_blocking(Name())
+    disposer = threading.Thread(target=runtime.dispose)
+    disposer.start()
+    assert releasing.wait(5)
+    ex = runtime.run_blocking_exit(Name().tap(lambda _: fx.sync(lambda: log.append("work"))))
+    go_on.set()
+    disposer.join(10)
+    assert _died_disposed(ex), ex
+    assert log == ["release"]

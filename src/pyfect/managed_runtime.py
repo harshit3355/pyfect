@@ -85,15 +85,14 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
 
     __slots__ = (
         "_build_fiber",
-        "_build_lock",
         "_cached",
         "_context_effect",
         "_disposed",
-        "_disposing",
         "_fiber_scope",
         "_fork_outside_runs",
         "_layer",
         "_layer_scope",
+        "_lock",
         "_loop",
         "_managed",
         "_run_scheduler",
@@ -110,12 +109,15 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
         self._scope = CloseableScope()
         self._layer_scope = self._scope.fork_unsafe()
         self._fiber_scope = self._scope.fork_unsafe("parallel")
-        # Fibers the runtime started (requests and the layer build), and
-        # fibers running its disposal: disposal must not wait for them.
+        # Fibers the runtime started (requests and the layer build): a
+        # disposal from one of them must not wait for itself.
         self._managed: WeakSet[Fiber[Any, Any]] = WeakSet()
-        self._disposing: WeakSet[Fiber[Any, Any]] = WeakSet()
         self._build_fiber: Fiber[Context, Any] | None = None
-        self._build_lock = threading.Lock()
+        # Runs and disposals come from many threads. What one of them decides
+        # from ``_disposed``, ``_cached``, ``_context_effect`` and
+        # ``_build_fiber``, and the fiber it joins to the fiber scope, is
+        # decided under this lock (``tests/test_managed_runtime_lock.py``).
+        self._lock = threading.Lock()
         self._disposed: Deferred[None] | None = None
         self._cached: Context | None = None
         self._context_effect: Effect[Context, Any] = _WithFiber(self._context_in)
@@ -138,17 +140,20 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
         the runtime is disposed, it is an effect that dies. One read before
         disposal is not stopped by it, as in Effect: run later, it can still
         succeed, with services whose resources were released."""
-        return self._context_effect
+        with self._lock:
+            return self._context_effect
 
     async def context(self) -> Context[R_contra]:
         """The layer's services, building it on the running loop if needed."""
-        if self._cached is not None:
-            return self._cached
-        return unwrap(await self._run_async_unmanaged(self._context_effect))
+        with self._lock:
+            cached, context_effect = self._cached, self._context_effect
+        if cached is not None:
+            return cached
+        return unwrap(await self._run_async_unmanaged(context_effect))
 
     def _context_in(self, fiber: Fiber[Any, Any]) -> Effect[Context, Any]:
         # Runs from sync runs on any thread and from loops: one build only.
-        with self._build_lock:
+        with self._lock:
             builder = self._build_fiber
             if builder is None:
                 # On the requesting fiber's run and scheduler, as Effect's build.
@@ -171,13 +176,19 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
         return builder.join()
 
     def _cache(self, context: Context) -> Context:
-        self._cached = context
+        with self._lock:
+            # A build finishing as a disposal begins must not bring back the
+            # services the disposal is releasing.
+            if self._disposed is None:
+                self._cached = context
         return context
 
     def _provided[A, E](self, eff: Effect[A, E, Any]) -> tuple[Context, Effect[A, Any, Any]]:
-        """The context to start a request with, and what it runs."""
-        if self._cached is not None:
-            return self._cached, eff
+        """The context to start a request with, and what it runs. Called
+        under ``_lock``."""
+        cached = self._cached
+        if cached is not None:
+            return cached, eff
 
         def with_services(built: Context) -> Effect[A, E, Any]:
             return _Locally(eff, lambda current: current.merge(built))
@@ -272,12 +283,19 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
         uninterruptible: bool = False,
         now: bool = False,
     ) -> Fiber[A, Any]:
-        context, target = self._provided(eff)
-        fiber = new_root(run, context, scheduler=scheduler, uninterruptible=uninterruptible)
+        # What the run starts with and whether the disposal awaits it are
+        # decided together: a run decided before a disposal begins joins the
+        # fiber scope before the disposal can close it, so the disposal
+        # interrupts and awaits it (before it starts, if it has not yet); a
+        # run decided after dies with "ManagedRuntime disposed" (Effect's
+        # ``contextEffect`` then).
+        with self._lock:
+            context, target = self._provided(eff)
+            fiber = new_root(run, context, scheduler=scheduler, uninterruptible=uninterruptible)
+            self._managed.add(fiber)
+            if self._disposed is None:
+                self._fiber_scope._watch(fiber)
         start_root(fiber, target, now=now)
-        self._managed.add(fiber)
-        if fiber not in self._disposing:
-            fiber.run_in(self._fiber_scope)
         return fiber
 
     def _loop_scheduler(self) -> AsyncioScheduler:
@@ -317,23 +335,32 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
         """Runs uninterruptibly: once ``_disposed`` is set the close must
         run, or later calls would wait forever."""
         disposing: frozenset[object] = fiber._context.lookup(_DisposingRuntimes)[1]
-        if self._disposed is not None:
+        done, began = self._begin_disposal(fiber)
+        if not began:
             if self in disposing or any(f in self._managed for f in _lineage(fiber)):
                 return _Succeed(None)
-            return restore(self._disposed.wait())
-        done = self._disposed = Deferred[None]()
-        # Closing the fiber scope interrupts and awaits every request. Spare
-        # the disposing fiber and its ancestors, which would await themselves.
-        for f in _lineage(fiber):
-            self._disposing.add(f)
-            self._fiber_scope._remove(f)
-        self._context_effect = die(RuntimeError("ManagedRuntime disposed"))
-        self._cached = None
+            return restore(done.wait())
         close: Effect[None] = _Locally(
             self._scope.close(Success(None)),
             lambda ctx: ctx.add(_DisposingRuntimes, disposing | {self}),
         )
         return close.ensuring(done.done(Success(None)))
+
+    def _begin_disposal(self, fiber: Fiber[Any, Any]) -> tuple[Deferred[None], bool]:
+        """The disposal, and whether ``fiber`` began it: of callers on any
+        number of threads, exactly one does; the others wait for it."""
+        with self._lock:
+            if self._disposed is not None:
+                return self._disposed, False
+            done = self._disposed = Deferred[None]()
+            # Closing the fiber scope interrupts and awaits every request.
+            # Spare the disposing fiber and its ancestors, which would await
+            # themselves.
+            for f in _lineage(fiber):
+                self._fiber_scope._remove(f)
+            self._context_effect = die(RuntimeError("ManagedRuntime disposed"))
+            self._cached = None
+            return done, True
 
     async def _run_async_unmanaged[A](self, eff: Effect[A, Any]) -> Exit[A, Any]:
         """Run on the loop as a plain run, not one of the runtime's requests
@@ -350,7 +377,7 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
         _refuse_to_block("A sync `with` on a ManagedRuntime", "async with")
         scheduler = self._run_scheduler()
         fiber = new_root(scheduler, Context.empty())
-        fiber._start(self._context_effect)
+        fiber._start(self.context_effect)
         ex = drive(scheduler, fiber)
         if isinstance(ex, Failure):
             self.dispose()
@@ -367,7 +394,7 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
 
     async def __aenter__(self) -> Self:
         """Build the layer on the running loop (see ``__enter__``)."""
-        ex = await self._run_async_unmanaged(self._context_effect)
+        ex = await self._run_async_unmanaged(self.context_effect)
         if isinstance(ex, Failure):
             await self.dispose_async()
             unwrap(ex)

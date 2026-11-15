@@ -10,6 +10,12 @@ and exits.
    other OS threads at random times: every fiber ends, as a success or
    interrupted; finalizers run once; a wait's canceler runs at most once,
    and never for a fiber that succeeded.
+3. ``ManagedRuntime.dispose()`` from several threads at once: every call
+   returns after the layer's release.
+4. ``ManagedRuntime`` runs started on many threads while another disposes:
+   nothing a run does lands after the layer's release, and every run
+   returns an ``Exit`` (a run started once disposal began dies with
+   "ManagedRuntime disposed").
 """
 
 import faulthandler
@@ -21,6 +27,7 @@ from collections.abc import Callable
 from typing import Any
 
 import pyfect as fx
+from pyfect import layer
 
 
 def register_race(n: int) -> list[str]:
@@ -114,12 +121,96 @@ def interrupt_stress(seed: int, n: int) -> list[str]:
     return bad
 
 
+class Db(fx.Tag[str]): ...
+
+
+def concurrent_dispose(trials: int) -> list[str]:
+    early = [_dispose_from_four_threads() for _ in range(trials)]
+    return [f"dispose trial {i}: {n} calls returned early" for i, n in enumerate(early) if n]
+
+
+def _dispose_from_four_threads() -> int:
+    """How many of four simultaneous ``dispose()`` calls returned before the
+    layer's release."""
+    closed: list[str] = []
+    release = fx.sleep("5 millis").and_then(fx.sync(lambda: closed.append("close")))
+    runtime = fx.ManagedRuntime.make(
+        layer.effect(Db, fx.acquire_release(fx.succeed("db"), lambda _db, _ex: release))
+    )
+    runtime.run_blocking(Db())
+    start = threading.Barrier(4)
+    early: list[int] = []
+
+    def dispose() -> None:
+        start.wait()
+        runtime.dispose()
+        if not closed:
+            early.append(1)
+
+    threads = [threading.Thread(target=dispose) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    return len(early)
+
+
+def dispose_while_runs_start(seed: int) -> list[str]:
+    rng = random.Random(seed)
+    lock = threading.Lock()
+    order: list[str] = []
+    raised: list[str] = []
+
+    def note(key: str) -> fx.Effect[None]:
+        def add() -> None:
+            with lock:
+                order.append(key)
+
+        return fx.sync(add)
+
+    runtime = fx.ManagedRuntime.make(
+        layer.effect(Db, fx.acquire_release(fx.succeed("db"), lambda _db, _ex: note("release")))
+    )
+    runtime.run_blocking(Db())
+    start = threading.Barrier(9)
+    run = Db().and_then(note("work")).ensuring(note("fin")).uninterruptible()
+
+    def worker() -> None:
+        start.wait()
+        for _ in range(50):
+            try:
+                ex = runtime.run_blocking_exit(run)
+            except Exception as e:
+                raised.append(f"{type(e).__name__}: {e}")
+                return
+            if isinstance(ex, fx.Failure) and "disposed" in repr(ex.cause):
+                return
+
+    def dispose() -> None:
+        start.wait()
+        time.sleep(rng.random() * 0.002)
+        runtime.dispose()
+
+    threads = [threading.Thread(target=worker) for _ in range(8)]
+    threads.append(threading.Thread(target=dispose))
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    late = order[order.index("release") :].count("fin")
+    bad = [f"runs trial {seed}: {late} runs finished after the release"] if late else []
+    return bad + [f"runs trial {seed}: run_blocking_exit raised {r}" for r in raised[:1]]
+
+
 if __name__ == "__main__":
     faulthandler.dump_traceback_later(120, exit=True)
     sys.setswitchinterval(1e-5)
     problems = register_race(20_000)
     for seed in range(5):
         problems += interrupt_stress(seed, 300)
+    problems += concurrent_dispose(100)
+    for seed in range(150):
+        problems += dispose_while_runs_start(seed)
     print(f"GIL enabled: {sys._is_gil_enabled()}")  # pyright: ignore[reportPrivateUsage]
     for p in problems[:20]:
         print(p)
