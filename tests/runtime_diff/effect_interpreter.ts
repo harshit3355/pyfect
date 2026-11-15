@@ -12,22 +12,146 @@ import { createInterface } from "node:readline"
 
 const R = `${process.env.PYFECT_EFFECT_REF}/packages/effect/src/`
 
-// One Effect bug pyfect does not copy (docs/PARITY.md §4, §5 item 14), fixed here
-// so the comparison sees past it: a fiber ending while interrupted, with a child
-// that does not end at once when interrupted, waits for it interruptibly, so the
-// wait is cut short and the fiber's exit is replaced by the bare interruption (a
-// finalizer's defect is lost). pyfect waits for its children uninterruptibly.
-const EXIT_WAIT = "return this.evaluate(flatMap(interruptChildren, () => exit) as any)"
+// Effect 4.1.2's internal/effect.ts as pyfect runs it: each patch replaces text that must occur
+// exactly once, so a changed source fails loudly instead of comparing against the wrong runtime.
+// pyfect copies the 4.1.4 fixes the fuzzer can reach (docs/PARITY.md §4), so they are applied
+// here as Effect wrote them (`git show <commit>` in the Effect repo).
+type Patch = { why: string; from: string; to: string }
+const PATCHES: Array<Patch> = [
+  {
+    // One Effect bug pyfect does not copy (docs/PARITY.md §4, §5 item 14): a fiber ending while
+    // interrupted, with a child that does not end at once when interrupted, waits for it
+    // interruptibly, so the wait is cut short and the fiber's exit is replaced by the bare
+    // interruption (a finalizer's defect is lost). pyfect waits for its children uninterruptibly.
+    why: "EXIT_WAIT",
+    from: "return this.evaluate(flatMap(interruptChildren, () => exit) as any)",
+    to: "this.interruptible = false; return this.evaluate(flatMap(interruptChildren, () => exit) as any)"
+  },
+  {
+    // Effect 4.1.4 #10367 (abe3084f6): interrupt race losers as soon as the race settles, not
+    // when the racing fiber exits (raceAll).
+    why: "#10367 raceAll",
+    from: `        resume(exit)
+        if (isWinner && options?.onWinner) {
+          options.onWinner({ fiber, index: i, parentFiber: parent })
+        }`,
+    to: `        resume(exit)
+        if (isWinner) {
+          interruptRaceLosers(fibers, parent)
+          options?.onWinner?.({ fiber, index: i, parentFiber: parent })
+        }`
+  },
+  {
+    // #10367, raceAllFirst, and the helper both use.
+    why: "#10367 raceAllFirst",
+    from: `          resume(exit)
+          if (isWinner && options?.onWinner) {
+            options.onWinner({ fiber, index, parentFiber: parent })
+          }
+        })
+      }
+    })
+  })
+`,
+    to: `          resume(exit)
+          if (isWinner) {
+            interruptRaceLosers(fibers, parent)
+            options?.onWinner?.({ fiber, index, parentFiber: parent })
+          }
+        })
+      }
+    })
+  })
+
+const interruptRaceLosers = (fibers: Set<Fiber.Fiber<any, any>>, parent: Fiber.Fiber<any, any>) => {
+  const annotations = fiberStackAnnotations(parent)
+  for (const fiber of fibers) {
+    fiber.interruptUnsafe(parent.id, annotations)
+  }
+}
+`
+  },
+  {
+    // Effect 4.1.4 #10463 (d9101fc1b): a run resumed after an automatic yield counts the resume
+    // as one op and takes the step it saved before asking the scheduler again.
+    why: "#10463 runLoop start",
+    from: `    let yielding = false
+    let current: Primitive | Yield = effect
+    this.currentOpCount = 0`,
+    to: `    let yielding = false
+    let resuming = this._autoYielded
+    this._autoYielded = false
+    let current: Primitive | Yield = effect
+    this.currentOpCount = resuming ? 1 : 0`
+  },
+  {
+    why: "#10463 runLoop yield",
+    from: `          if (
+            !yielding &&
+            !cache.preventYield &&
+            cache.scheduler.shouldYield(this as any)
+          ) {
+            yielding = true
+            const prev = current
+            current = flatMap(yieldNow, () => prev as any) as any
+          }
+          current = cache.tracerContext
+            ? cache.tracerContext(current as any, this)
+            : (current as any)[evaluate](this)`,
+    to: `          if (
+            !resuming &&
+            !yielding &&
+            !cache.preventYield &&
+            cache.scheduler.shouldYield(this as any)
+          ) {
+            yielding = true
+            current = this.yieldNow(current as Primitive, 0, true)
+          } else {
+            resuming = false
+            current = cache.tracerContext
+              ? cache.tracerContext(current as any, this)
+              : (current as any)[evaluate](this)
+          }`
+  },
+  {
+    why: "#10463 yieldNow",
+    from: `  children(): Set<Fiber.Fiber<any, any>> {`,
+    to: `  yieldNow(effect: Primitive, priority = 0, automatic = false): Yield {
+    let resumed = false
+    this.currentDispatcher.scheduleTask(() => {
+      if (resumed) return
+      this._autoYielded = automatic
+      this.evaluate(effect)
+    }, priority)
+    return this.yieldWith(() => {
+      resumed = true
+    })
+  }
+  children(): Set<Fiber.Fiber<any, any>> {`
+  },
+  {
+    why: "#10463 yieldNowWith",
+    from: `    let resumed = false
+    fiber.currentDispatcher.scheduleTask(() => {
+      if (resumed) return
+      fiber.evaluate(exitVoid as any)
+    }, this[args] ?? 0)
+    return fiber.yieldWith(() => {
+      resumed = true
+    })`,
+    to: `    return fiber.yieldNow(exitVoid as any, this[args] ?? 0)`
+  }
+]
 registerHooks({
   load(url, context, nextLoad) {
     const loaded = nextLoad(url, context)
     if (!url.endsWith("/packages/effect/src/internal/effect.ts")) return loaded
-    const source = String(loaded.source)
-    if (!source.includes(EXIT_WAIT)) throw new Error("internal/effect.ts changed: update EXIT_WAIT")
-    return {
-      ...loaded,
-      source: source.replace(EXIT_WAIT, `this.interruptible = false; ${EXIT_WAIT}`)
+    let source = String(loaded.source)
+    for (const { why, from, to } of PATCHES) {
+      if (source.split(from).length !== 2) throw new Error(`internal/effect.ts changed: update the ${why} patch`)
+      source = source.replace(from, () => to)
     }
+    return { ...loaded, source }
   }
 })
 const Effect: any = await import(R + "Effect.ts")
@@ -338,8 +462,9 @@ function runProgram(program: Node, budget: number) {
       yield* TestClock.adjust("1 hour")
     }
     const done = fiber.pollUnsafe()
-    // An uninterruptible program can wait forever: its exit is null.
-    return { exit: done === undefined ? null : exit(done), log, stuck }
+    // An uninterruptible program can wait forever: its exit is null. The log is copied
+    // here, as interpret.py does: a starved program still running goes on logging after this.
+    return { exit: done === undefined ? null : exit(done), log: [...log], stuck }
   })
   return main.pipe(
     Effect.provideService(References.MaxOpsBeforeYield, Number.MAX_SAFE_INTEGER),

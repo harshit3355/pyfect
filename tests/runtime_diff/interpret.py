@@ -505,8 +505,11 @@ def answer(program: Expr, budget: int) -> Json:
             yield from fx.sleep(_millis(1)).and_then(fiber.interrupt()).fork_daemon()
             yield from testing.adjust("1 hour")
         done = fiber.poll_unsafe()
-        # An uninterruptible program can wait forever: its exit is null.
-        return {"exit": None if done is None else exit_json(done), "log": run.log, "stuck": stuck}
+        # An uninterruptible program can wait forever: its exit is null. The log is copied
+        # here: a starved program still running goes on logging after this, while
+        # ``run_blocking_exit`` runs the tasks already queued, and in Effect after it answers.
+        log = list(run.log)
+        return {"exit": None if done is None else exit_json(done), "log": log, "stuck": stuck}
 
     eff = main.pipe(fx.provide_service(fx.MaxOpsBeforeYield, 2**53 - 1)).pipe(
         fx.provide(testing.TestClock.layer())
