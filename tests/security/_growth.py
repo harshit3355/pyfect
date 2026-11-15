@@ -8,11 +8,16 @@ linear work grows ``FACTOR`` times, ``n log n`` a little more, quadratic work ``
 times. ``BOUND`` sits between. Times are the thread's CPU time, the least of a few runs with
 the collector off, so a loaded machine does not decide the outcome; the size first doubles
 until the small run takes ``MIN_SECONDS``, so fixed costs do not hide the growth.
+
+An input that outgrows a CPU cache between the two sizes costs more per unit once, which can
+look superlinear over one step; a ratio over ``BOUND`` is checked again over the next doubling
+past the large size, which superlinear work also exceeds and a one-time step does not.
 """
 
 from __future__ import annotations
 
 import gc
+import math
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -20,6 +25,8 @@ from dataclasses import dataclass
 FACTOR = 8
 BOUND = 24
 """Linear work grows 8 times, ``n log n`` about 10, ``n ** 1.5`` about 23, quadratic 64."""
+EXPONENT = math.log(BOUND, FACTOR)
+"""The growth exponent ``BOUND`` allows, about 1.53, for steps of other factors."""
 MIN_SECONDS = 0.002
 MAX_SIZE = 1 << 22
 RUNS = 3
@@ -51,10 +58,15 @@ class Growth:
     size: int
     small: float
     large: float
+    factor: int = FACTOR
 
     @property
     def ratio(self) -> float:
         return self.large / max(self.small, 1e-6)
+
+    @property
+    def superlinear(self) -> bool:
+        return self.ratio > self.factor**EXPONENT
 
     @property
     def cheap(self) -> bool:
@@ -63,9 +75,9 @@ class Growth:
 
     def __str__(self) -> str:
         return (
-            f"size {self.size}: {self.small * 1000:.2f} ms, size {self.size * FACTOR}: "
-            f"{self.large * 1000:.2f} ms, {self.ratio:.1f}x (linear is {FACTOR}x, "
-            f"the bound {BOUND}x)"
+            f"size {self.size}: {self.small * 1000:.2f} ms, size {self.size * self.factor}: "
+            f"{self.large * 1000:.2f} ms, {self.ratio:.1f}x (linear is {self.factor}x, "
+            f"the bound {self.factor**EXPONENT:.1f}x)"
         )
 
 
@@ -83,8 +95,9 @@ def growth(make: Make, size: int, max_size: int = MAX_SIZE) -> Growth:
 def assert_near_linear(make: Make, size: int, max_size: int = MAX_SIZE) -> Growth:
     """Fails when ``make``'s work grows faster than ``BOUND`` over ``FACTOR`` times the size."""
     found = growth(make, size, max_size)
-    if not found.cheap and found.ratio > BOUND:
-        # One more measurement, so that a pause of the machine during one run does not decide.
-        found = growth(make, found.size, max_size)
-    assert found.cheap or found.ratio <= BOUND, f"superlinear: {found}"
+    if found.cheap or not found.superlinear:
+        return found
+    large = found.size * FACTOR
+    beyond = Growth(large, cpu(make(large)), cpu(make(large * 2)), factor=2)
+    assert not beyond.superlinear, f"superlinear: {found}; then {beyond}"
     return found
