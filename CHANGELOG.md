@@ -35,6 +35,10 @@
   linear in their number.
 - `cookies.parse_header` skips the segments without `=` before the next `=` at once, in time
   linear in the header's length.
+- The client cookie jar (`cookies.merge_into_array`, `with_cookies_ref`) refuses from a
+  plain-http response a `Secure` cookie, a `__Secure-` or `__Host-` name, and a cookie that
+  would replace or shadow a held `Secure` one (RFC 6265bis strict secure cookies), as
+  browsers do; Effect's jar takes them.
 
 ## 0.6.5 (2026-11-14)
 
