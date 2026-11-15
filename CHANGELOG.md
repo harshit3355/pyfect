@@ -20,6 +20,9 @@
   Effect); more fail with `TooManyParts`. Provide `MaxParts` to change it, `None` for no limit.
 - The router (and MCP resource templates) decode a path's `%25` escapes in one pass, in
   time linear in the path's length.
+- An HttpApi path parameter followed by a character the router does not split on
+  (`/geo/:lat,:lng`) matches up to that character, in linear time; Effect's lazy `(.*?)`
+  could let it take the character too, at polynomial cost.
 
 ## 0.6.5 (2026-11-14)
 

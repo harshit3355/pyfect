@@ -7,13 +7,17 @@ parser of peer input belongs in this table."""
 from __future__ import annotations
 
 from collections.abc import Callable
+from typing import TypedDict
 
 import pytest
 from _complexity import is_linear
 
+from pyfect import schema as S
 from pyfect.http.find_my_way._router import (
+    Router,
     _safe_decode_uri,  # pyright: ignore[reportPrivateUsage]
 )
+from pyfect.http_api._path import to_router_path
 
 type Case = Callable[[int], Callable[[], object]]
 
@@ -23,14 +27,43 @@ def _percent_25_path(n: int) -> Callable[[], object]:
     return lambda: _safe_decode_uri(path)
 
 
-CASES: dict[str, Case] = {
-    "find-my-way path with %25 runs": _percent_25_path,
+class _Three(TypedDict):
+    a: str
+    b: str
+    c: str
+
+
+def _comma_params(n: int) -> Callable[[], object]:
+    """An HttpApi path whose parameters are joined by a character find-my-way
+    does not split on, and a segment of them ending where no split matches."""
+    params = S.Struct(_Three)
+    router = Router[str]()
+    router.on("GET", to_router_path("/geo/:a,:b,:c", params), "geo")
+    path = "/geo/" + "," * n + "%0A"
+    return lambda: router.find("GET", path)
+
+
+CASES: dict[str, tuple[Case, int]] = {
+    "find-my-way path with %25 runs": (_percent_25_path, 20_000),
+    "HttpApi parameters joined by a comma": (_comma_params, 100),
 }
+"""Each case and an input size (the cost of a quadratic case at 8x should
+stay at seconds, so it fails quickly)."""
 
 
 @pytest.mark.parametrize("name", sorted(CASES))
 def test_peer_input_is_parsed_in_linear_time(name: str) -> None:
-    assert is_linear(CASES[name], 20_000)
+    make, size = CASES[name]
+    assert is_linear(make, size)
+
+
+def test_comma_joined_parameters_still_match() -> None:
+    params = S.Struct(_Three)
+    router = Router[str]()
+    router.on("GET", to_router_path("/geo/:a,:b,:c", params), "geo")
+    found = router.find("GET", "/geo/1,2,3,4")
+    assert found is not None
+    assert dict(found.params) == {"a": "1", "b": "2", "c": "3,4"}
 
 
 def test_percent_25_is_kept_encoded_for_parameters() -> None:
