@@ -10,6 +10,7 @@ from typing import Any, Never, cast
 from pyfect import exit as Exit
 from pyfect import schema as S
 from pyfect._core import Effect
+from pyfect._peer_keys import PeerKeyDict
 from pyfect.cause import Cause
 from pyfect.context import Context
 from pyfect.effect import context, fail_cause, gen, provide_context, succeed, suspend
@@ -129,7 +130,7 @@ def _headers(encoded: object) -> Headers | None:
 @dataclass(slots=True, eq=False)
 class _Client:
     id: int
-    codecs: dict[RequestId, _Codecs] = field(default_factory=dict[RequestId, _Codecs])
+    codecs: PeerKeyDict[RequestId, _Codecs] = field(default_factory=PeerKeyDict[RequestId, _Codecs])
 
 
 class _Serialized:

@@ -15,6 +15,7 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from typing import Any
 
 from pyfect._equal import dedupe
+from pyfect._peer_keys import HashFlood
 from pyfect.exit import Success
 from pyfect.schema._options import ParseOptions
 from pyfect.schema._schema import Top
@@ -257,7 +258,10 @@ def is_property_names(key_schema: Top, /, **annotations: object) -> Filter[Mappi
 
 
 def _all_unique(items: Sequence[object]) -> bool:
-    return len(dedupe(items)) == len(items)
+    try:
+        return len(dedupe(items)) == len(items)
+    except HashFlood:
+        return False
 
 
 def is_unique(**annotations: object) -> Filter[Sequence[object]]:

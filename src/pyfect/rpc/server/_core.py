@@ -15,6 +15,7 @@ from pyfect import exit as Exit
 from pyfect._core import Effect, _AfterStarted, _WithFiber
 from pyfect._fiber import Fiber
 from pyfect._interrupt_reason import interrupt_closed
+from pyfect._peer_keys import PeerKeyDict
 from pyfect.context import Context
 from pyfect.deferred import Deferred
 from pyfect.effect import (
@@ -104,10 +105,10 @@ class ServerOptions:
 class _Client:
     id: int
     server_client: ServerClient
-    fibers: dict[RequestId, Fiber[Any, Any]] = field(
-        default_factory=dict[RequestId, Fiber[Any, Any]]
+    fibers: PeerKeyDict[RequestId, Fiber[Any, Any]] = field(
+        default_factory=PeerKeyDict[RequestId, Fiber[Any, Any]]
     )
-    latches: dict[RequestId, Latch] = field(default_factory=dict[RequestId, Latch])
+    latches: PeerKeyDict[RequestId, Latch] = field(default_factory=PeerKeyDict[RequestId, Latch])
     ended: bool = False
 
 

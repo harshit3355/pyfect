@@ -14,6 +14,7 @@ from pyfect._core import Effect, uninterruptible_mask
 from pyfect._fiber import Fiber
 from pyfect._layer_core import Layer
 from pyfect._layer_for_life import with_layer
+from pyfect._peer_keys import PeerKeyDict
 from pyfect.cause import Cause
 from pyfect.context import Context
 from pyfect.deferred import Deferred
@@ -95,7 +96,7 @@ class _Serialized:
         self._group = group
         self._protocol = protocol
         self._id = next(_client_ids)
-        self._entries: dict[RequestId, _Entry] = {}
+        self._entries = PeerKeyDict[RequestId, _Entry]()
         self._cache: dict[str, _Schemas] = {}
         self._closing = Deferred[None, Never]()
         self._decode_defect = S.decode_sync(protocol.codec_for(S.Defect()))

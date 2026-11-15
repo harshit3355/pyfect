@@ -23,6 +23,15 @@
   no limit), a new keyword of `to_codec`, `to_codec_direct`, `parser` and
   `rpc.serialization.make_schema_binary`. Past it, decoding fails with a `SchemaError`; a check
   used to run once per reference over the same value.
+- Ints a peer sends no longer cost quadratic time when their hashes collide (CPython does not
+  seed `int` hashes, so `k * (2**61 - 1)` all hash alike). RPC and MCP request ids, on the
+  server and the client, and JSON-RPC batches key them through `pyfect._peer_keys`
+  (`PeerKeyDict`, `PeerKeySet`); a JSON-RPC batch item whose id is not a request id no longer
+  fails the whole body. `S.FrozenSet`, `S.Map`, `is_unique` and `Array.dedupe`-style dedupes
+  refuse values where more than 64 distinct items share one hash (`FrozenSet` and `Map`
+  decode to an `InvalidValue`, `is_unique` fails its check, `dedupe` raises `HashFlood`, a
+  `ValueError`). `tests/test_peer_hash_keys.py` feeds all-colliding ints to each, and keeps
+  maps keyed by `RequestId` from being plain dicts or sets.
 
 ## 0.6.5 (2026-11-14)
 

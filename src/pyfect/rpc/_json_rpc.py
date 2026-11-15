@@ -13,6 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, cast
 
 from pyfect._json_text import stringify
+from pyfect._peer_keys import peer_key
+from pyfect.rpc.message import RequestId, is_request_id
 
 EFFECT_METHOD = "@effect/rpc/"
 JSON_RPC_INTERNAL_ERROR = -32603
@@ -32,10 +34,10 @@ class _Batch:
 type Batches = dict[object, _Batch]
 
 
-def _key(request_id: object) -> object:
+def _key(request_id: RequestId) -> object:
     """A request id as a dict key: ``1`` and ``"1"`` stay apart, as in a JS
-    ``Map``."""
-    return (type(request_id), request_id)
+    ``Map``, and a peer cannot choose its hash (``peer_key``)."""
+    return (type(request_id), peer_key(request_id))
 
 
 def _mapping(value: object) -> Mapping[str, Any] | None:
@@ -60,9 +62,15 @@ def decode_json_rpc(
                 continue
             message = _decode_message(found, control_messages)
             messages.append(message)
-            if message["_tag"] == "Request" and not message.get("isNotification"):
+            request_id = message.get("id")
+            # A request with an invalid id is answered by a defect, not an exit.
+            if (
+                message["_tag"] == "Request"
+                and not message.get("isNotification")
+                and is_request_id(request_id)
+            ):
                 batch.size += 1
-                batches[_key(message["id"])] = batch
+                batches[_key(request_id)] = batch
         return messages
     found = _mapping(decoded)
     return [] if found is None else [_decode_message(found, control_messages)]
@@ -155,7 +163,10 @@ def _encode_raw(response: Mapping[str, Any], batches: Batches) -> Message | list
     # Only exits complete a batch: chunks and control messages go out at once.
     if response["_tag"] != "Exit":
         return _encode_message(response)
-    key = _key(response["requestId"])
+    request_id = response.get("requestId")
+    if not is_request_id(request_id):
+        return _encode_message(response)
+    key = _key(request_id)
     batch = batches.pop(key, None)
     if batch is None:
         return _encode_message(response)

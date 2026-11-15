@@ -17,6 +17,7 @@ from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence, Set
 from contextvars import ContextVar
 from typing import cast
 
+from pyfect._peer_keys import HashFlood, SpreadGuard
 from pyfect._stack import stack_nearly_full, with_fresh_stack
 
 
@@ -154,9 +155,12 @@ _ABSENT = object()
 
 def dedupe[A](items: Iterable[A], key: Callable[[A], object] = lambda item: item) -> list[A]:
     """``items`` without the ones ``equals`` calls equal to an earlier one
-    (compared through ``key``), in order: Effect's ``Array.dedupe``."""
+    (compared through ``key``), in order: Effect's ``Array.dedupe``. Raises
+    ``HashFlood`` (a ``ValueError``) for items crafted so that many share
+    one hash, which would cost quadratic time."""
     kept: list[A] = []
     seen: set[Hashable] = set()
+    guard = SpreadGuard()
     unkeyed: list[object] = []
     for item in items:
         value = key(item)
@@ -167,6 +171,7 @@ def dedupe[A](items: Iterable[A], key: Callable[[A], object] = lambda item: item
                 continue
             unkeyed.append(value)
         else:
+            guard.add(k)
             if k in seen:
                 continue
             seen.add(k)
@@ -177,8 +182,12 @@ def dedupe[A](items: Iterable[A], key: Callable[[A], object] = lambda item: item
 def frozenset_of(items: Iterable[object]) -> frozenset[object] | None:
     """The set of ``items``, those ``Equal.equals`` calls equal kept once
     (Effect's ``HashSet``); ``None`` when Python's set would merge items
-    Effect keeps apart (``1`` and ``True``)."""
-    kept = dedupe(items)
+    Effect keeps apart (``1`` and ``True``), or for items crafted so that
+    many share one hash (``HashFlood``)."""
+    try:
+        kept = dedupe(items)
+    except HashFlood:
+        return None
     out = frozenset(kept)
     return out if len(out) == len(kept) else None
 
@@ -186,10 +195,16 @@ def frozenset_of(items: Iterable[object]) -> frozenset[object] | None:
 def dict_of(pairs: Iterable[tuple[object, object]]) -> dict[object, object] | None:
     """The mapping of ``pairs``, the last value for keys ``Equal.equals``
     calls equal (Effect's ``HashMap``); ``None`` when Python's dict would
-    merge keys Effect keeps apart (``1`` and ``True``)."""
+    merge keys Effect keeps apart (``1`` and ``True``), or for keys crafted
+    so that many share one hash (``HashFlood``)."""
     entries: dict[Hashable, tuple[object, object]] = {}
+    guard = SpreadGuard()
     for key, value in pairs:
         k = equal_key(key)
+        try:
+            guard.add(k)
+        except HashFlood:
+            return None
         entries[k] = (entries[k][0] if k in entries else key, value)
     out = dict(entries.values())
     return out if len(out) == len(entries) else None

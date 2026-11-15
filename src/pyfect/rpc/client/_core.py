@@ -15,6 +15,7 @@ from pyfect import exit as Exit
 from pyfect._core import Effect, _WithFiber
 from pyfect._fiber import Fiber
 from pyfect._interrupt_reason import interrupt_closed
+from pyfect._peer_keys import PeerKeyDict
 from pyfect.context import Context, Reference
 from pyfect.effect import (
     callback,
@@ -131,7 +132,7 @@ class ClientCore:
         self._send = send
         self._options = options
         self._services = services
-        self._entries: dict[RequestId, _Entry] = {}
+        self._entries = PeerKeyDict[RequestId, _Entry]()
         self._is_shutdown = False
 
     def _next_id(self) -> RequestId:

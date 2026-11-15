@@ -9,6 +9,7 @@ from typing import Any, Literal, Never, Self, cast, final
 
 from pyfect import stream
 from pyfect._core import Effect
+from pyfect._peer_keys import PeerKeyDict
 from pyfect._service_copy import replaced
 from pyfect.ai._mcp.client_wire import (
     cancelled,
@@ -149,7 +150,7 @@ def stdio(
         process = yield from spawner.spawn(command).map_error(
             lambda cause: failure(TransportError("Cannot spawn MCP server", cause))
         )
-        pending: dict[RequestId, Deferred[JsonObject]] = {}
+        pending = PeerKeyDict[RequestId, Deferred[JsonObject]]()
         closing = _Closing()
         lines = Queue[str, Done]()
 
