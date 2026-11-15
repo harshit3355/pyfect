@@ -216,3 +216,51 @@ def test_multicast_on_the_loopback_interface():
     )
     yield from writer.write(OutgoingDatagram("hello"))
     assert (yield from pull_text(receiver)) == ["hello"]
+
+
+def test_a_read_callback_takes_a_bounded_number_of_datagrams() -> None:
+    """(pyfect) As libuv's 32 per callback: a sender that keeps the queue full must not hold
+    the network loop every other socket of the process runs on."""
+    import socket as stdlib_socket
+    import threading
+
+    from pyfect.socket._loop import get_loop
+    from pyfect.socket.datagram._live import _NativeSocket  # pyright: ignore[reportPrivateUsage]
+    from pyfect.socket.datagram._model import BackingEvents
+
+    queued = 500
+    receiver = stdlib_socket.socket(stdlib_socket.AF_INET, stdlib_socket.SOCK_DGRAM)
+    receiver.setsockopt(stdlib_socket.SOL_SOCKET, stdlib_socket.SO_RCVBUF, 4 * 1024 * 1024)
+    receiver.bind(("127.0.0.1", 0))
+    receiver.setblocking(False)
+    with stdlib_socket.socket(stdlib_socket.AF_INET, stdlib_socket.SOCK_DGRAM) as sender:
+        for _ in range(queued):
+            sender.sendto(b"x", receiver.getsockname())
+    reads = [0]
+    seen: list[int] = []
+    done = threading.Event()
+
+    class Counting:
+        def fileno(self) -> int:
+            return receiver.fileno()
+
+        def getsockname(self) -> tuple[str, int]:
+            return receiver.getsockname()
+
+        def recvfrom(self, size: int) -> tuple[bytes, tuple[str, int]]:
+            if reads[0] == 0:
+                get_loop().call_soon(lambda: (seen.append(reads[0]), done.set()))
+            reads[0] += 1
+            return receiver.recvfrom(size)
+
+    def ignore(*_: object) -> None:
+        return None
+
+    events = BackingEvents(ignore, ignore, ignore, ignore)
+    try:
+        _NativeSocket(Counting(), events, {}, None, connected=False)  # pyright: ignore[reportArgumentType]
+        assert done.wait(10)
+    finally:
+        get_loop().call_soon_threadsafe(lambda: get_loop().remove_reader(receiver.fileno()))
+        receiver.close()
+    assert seen[0] <= 64, seen

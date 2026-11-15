@@ -43,6 +43,8 @@
   plain-http page of the same host is not the server's own origin, as browsers see it
   (`OriginPolicy.allows` takes an optional `scheme`). An https origin on a plain request
   still is, for servers behind a proxy that ends TLS.
+- A UDP socket reads at most 32 datagrams per read callback, as libuv does, so a full
+  receive queue no longer holds the network loop the process's other sockets run on.
 
 ## 0.6.5 (2026-11-14)
 
