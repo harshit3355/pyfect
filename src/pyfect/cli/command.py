@@ -37,12 +37,13 @@ from pyfect.cli._command import (
 from pyfect.cli._config import Config
 from pyfect.cli._environment import Environment
 from pyfect.cli._help import flag_of, global_flags_for_path, global_flags_for_tree, help_for_path
-from pyfect.cli._lexer import LexResult, lex
+from pyfect.cli._lexer import LexResult, LongOption, Token, format_token, lex
 from pyfect.cli._parser import (
     consume_global_flags,
     create_flag_registry,
     get_command_path,
     parse_args,
+    selected_command_tokens,
 )
 from pyfect.cli._settings import Action, GlobalFlag, HandlerContext, LogLevel, Setting
 from pyfect.cli.cli_config import CliConfig
@@ -271,6 +272,10 @@ def _show_user_error(error: object, message: str) -> Effect[None]:
     return gen(body)
 
 
+def _is_wizard_flag(token: Token) -> bool:
+    return isinstance(token, LongOption) and token.name == "wizard"
+
+
 class _Runner:
     """One run of a command line: global flags, then the command's parse,
     then the handler with the settings provided."""
@@ -280,7 +285,9 @@ class _Runner:
         self.version = version
         self.render_errors = render_errors
 
-    def _wizard(self, args: Sequence[str], path: tuple[str, ...]) -> Effect[None, Any, Any]:
+    def _wizard(
+        self, tokens: tuple[Token, ...], remainder: tuple[Token, ...], path: tuple[str, ...]
+    ) -> Effect[None, Any, Any]:
         command = self.command
 
         def body():
@@ -290,9 +297,15 @@ class _Runner:
                 command.name, self.version, command.description, colors
             )
             yield from console.log(intro)
+            # The wizard prompts for the selected command's inputs, so the typed ones go.
+            selected = {id(token) for token in selected_command_tokens(remainder, command)}
             prefix = (
                 command.name,
-                *(arg for arg in args if arg != "--wizard" and not arg.startswith("--wizard=")),
+                *(
+                    format_token(token)
+                    for token in tokens
+                    if id(token) not in selected and not _is_wizard_flag(token)
+                ),
             )
             result = yield from wizard_.run(command, command_path=path, prefix=prefix)
             yield from console.log(wizard_.render_completion(result.display_args, colors))
@@ -343,7 +356,7 @@ class _Runner:
                 continue
             parsed_flag = yield from flag.parse(empty).map_error(to_show_help)
             if action is Wizard:
-                return (yield from self._wizard(args, path))
+                return (yield from self._wizard(lexed.tokens, taken.remainder, path))
             return (yield from action.run(parsed_flag[1], context))
         if parsed.errors:
             return (yield from fail(ShowHelp(path, parsed.errors)))

@@ -76,7 +76,8 @@ def upgrade(
         exchange.headers_sent = True
         exchange.upgraded = _SWITCHED
         exchange.close_after = True
-        return conn.write((head,))
+
+        return exchange.write_switch(head, sync(conn.end_writing))
 
     def drained(ok: bool) -> Effect[None, SocketError]:
         if not ok:

@@ -19,6 +19,12 @@
   store's take finalizer to fail an element whose payload can't be decoded at once; and
   `durable_clock.InMemoryThreshold`, the threshold a `sleep` without `in_memory_threshold`
   reads (60 seconds), so an engine whose timers are always durable can provide zero.
+- `FlagDescriptor.repeatable` in `cli.completions`, Effect's `repeatable` descriptor field.
+- `run.InterruptExitCode`, Effect's `Runtime.InterruptExitCode`: an interruption annotated with
+  it ends `run_main` with that code. `default_teardown` gives the largest one when every
+  interruption carries one, and 130 otherwise (#10475).
+- `http_effect.scope_disable_close` takes the request's `Scope`, as Effect's does, as well as
+  its state.
 
 ### Fixed
 
@@ -201,6 +207,70 @@
   SQLite and MySQL (it could come up to a second early), and a delayed offer on SQLite no
   longer waits a second more than its delay. SQLite keeps `visible_at` deadlines and the
   readiness check on one millisecond clock, as in Effect 4.1.4 (#10318).
+- `headers.from_input` joins repeated names in `(name, value)` pairs with `", "`, as Effect
+  4.1.4 does (#10450); it kept only the last value.
+- A server request with no body streams as empty, as in Effect 4.1.4 (#10506). Its `stream`
+  failed with "can not create stream from empty body", which included every bodyless request
+  the live server received.
+- `prompt.integer` and `prompt.number` keep a typed minus sign when a zero follows it, as in
+  Effect (#10558): typing `-0.05` submitted `0.05` and `-07` submitted `7`.
+- The static server matches `If-None-Match` entity tags that contain commas, as Effect 4.1.4
+  does (#10066): the header was split on every comma, so `"v1,part"` never matched (200
+  instead of 304) and `"v1", "part"` could. Both `If-Match` and `If-None-Match` now read the
+  list whole, and a malformed list matches nothing.
+- Shell completions, as in Effect 4.1.4: a variadic argument without a positive minimum is
+  no longer marked required (#10375); repeatable flags (`at_least`, `between`, `at_most`
+  above 1, `key_value_pair`) stay offered after first use in Bash, Zsh, Fish and PowerShell
+  (#10428); subcommand names containing `:` complete in Bash and are escaped for Zsh's
+  `_describe` (#10417).
+- The RPC stdio server exits 0 under `run_main` once stdin closes and its responses drain, as in
+  Effect 4.1.4 (#10475); it ended with a plain interruption, which `default_teardown` reports
+  as 130. A failed write still exits non-zero, and an output already interrupted no longer
+  interrupts the server again.
+- The live server's shutdown no longer waits out `graceful_shutdown_timeout` while WebSocket
+  clients are connected, as in Effect 4.1.4 (#10405): WebSockets get a close with 1001 (Going
+  Away) as soon as shutdown starts, other upgraded connections are ended, and any still open
+  after the wait are destroyed. A connected, responsive client held a 5-second shutdown for
+  the whole 5 seconds and got 1001 only when its handler was interrupted. This holds from the
+  moment the `101` is written, even when shutdown starts before the server's write of it
+  returns.
+- A request scope moved to a streamed body with `scope_transfer_to_stream` closes once both the
+  request (middleware and tracing included) and the body have finished, with the body's exit,
+  as in Effect 4.1.4 (#10366). It closed as soon as the body ended, before the middleware and
+  the server span. A body transferred twice keeps its first exit, and `to_web_handler` now
+  transfers through the same path.
+- `HttpClient.with_scope` owns every request the client sends while it executes, as in Effect
+  4.1.4 (#10363): redirect hops and requests rewritten by middleware stay open until the scope
+  closes on whichever side of `follow_redirects` it is, concurrent runs of one response effect
+  get their own owners, a request interrupted before its response is aborted, and one sent
+  after the scope closed is aborted before the transport starts it. Requests another client
+  sends while this one executes now belong to the scope too.
+- `HttpClientError` reasons redact their URL with the `url_params.CurrentRedactedNames` active
+  when they are made, and the client adds the executing fiber's names to errors a transport
+  fails with from another thread and to errors read from its responses, as in Effect 4.1.4
+  (#10006). A logger or exporter rendering the error later, on another fiber, showed the
+  secret query values. Rendering still adds the rendering fiber's names; equality ignores
+  them.
+- `HttpClientErrorSchema.message` is its cause's message, or its kind when the cause has none,
+  as in Effect 4.1.4 (#10496), so an `RpcClientError` for an HTTP failure says what failed. It
+  was empty.
+- A framed RPC HTTP response drains while its batch is dispatched, as in Effect 4.1.4 (#10424):
+  a batch with more responses than `stream_buffer_size` hung, and a dispatch that failed (a
+  payload decode defect, a reused request id) left the response waiting forever. Such a
+  response now fails with the dispatch's cause and its requests are interrupted.
+- `--wizard` replaces the flags and arguments typed for the selected command with its answers
+  and keeps inherited flags, short clusters included (a numeric alias is written `--4`), as in
+  Effect 4.1.4 (#10529). The typed ones were repeated before the answers. The wizard puts `--`
+  before a leaf command's arguments, so an answer such as `false` is not read as the value of
+  a boolean flag before it; `command.wizard` returns that `--` too.
+- The HTTP client sends no trace headers and makes no span when `TracerEnabled` is off, as in
+  Effect main (#10627). It sent the no-op span's `noop` ids.
+
+### Performance
+
+- `find_my_way` escapes each `%25` in a request path by appending, as in Effect main
+  (#10619): it copied the whole path for every one, so a path of many `%25` took quadratic
+  time (about 500 ms for 50,000 of them, now about 30 ms).
 
 ## 0.6.5 (2026-11-14)
 

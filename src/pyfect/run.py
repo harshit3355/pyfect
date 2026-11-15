@@ -40,14 +40,14 @@ import signal
 import threading
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Any, Never, Protocol, overload
+from typing import Any, Never, Protocol, cast, overload
 
 from pyfect._core import Effect, _Succeed
 from pyfect._effect_args import require_effect
 from pyfect._fiber import Fiber
 from pyfect._root import ambient_run, new_root, start_root
 from pyfect.cause import Cause
-from pyfect.context import Context
+from pyfect.context import Context, Tag
 from pyfect.errors import AsyncFiberError
 from pyfect.exit import Exit, Success
 from pyfect.exit import die as exit_die
@@ -257,13 +257,23 @@ def run_callback(
     return interrupt
 
 
+class InterruptExitCode(Tag[int], key="effect/Runtime/InterruptExitCode"):
+    """The exit code ``default_teardown`` gives an interruption carrying this annotation
+    (Effect's ``Runtime.InterruptExitCode``), for a component that ends a program by
+    interrupting its main fiber on purpose, such as a stdio server after stdin closes.
+    Pass it with ``fiber.interrupt_as(by, Context.make(InterruptExitCode, 0))``: it is read
+    from the ``Cause``, so providing it as a service does nothing."""
+
+
 def default_teardown(ex: Exit[Any, Any]) -> int:
-    """Effect's ``defaultTeardown``: 0 on success, 130 when only
-    interrupted, otherwise the squashed error's ``get_error_exit_code``."""
+    """Effect's ``defaultTeardown``: 0 on success; when only interrupted, the largest
+    ``InterruptExitCode`` if every interruption carries one, else 130; otherwise the
+    squashed error's ``get_error_exit_code``."""
     if isinstance(ex, Success):
         return 0
     if ex.cause.has_interrupts_only:
-        return 130
+        codes = [reason.annotations.get(InterruptExitCode) for reason in ex.cause.reasons]
+        return 130 if any(code is None for code in codes) else max(cast("list[int]", codes))
     error = ex.cause.raisable()
     if isinstance(error, SystemExit):
         return _exit_status(error)
@@ -403,6 +413,7 @@ def unwrap[A](ex: Exit[A, Any]) -> A:
 
 
 __all__ = [
+    "InterruptExitCode",
     "Interruptor",
     "Teardown",
     "await_fiber",

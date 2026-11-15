@@ -6,18 +6,18 @@ from __future__ import annotations
 
 import weakref
 from collections.abc import Callable, Sequence
-from typing import Any, Literal, final
+from typing import Any, Literal
 
 from pyfect._core import Effect, _WithFiber
 from pyfect._effect_resources import _call_user
 from pyfect._fiber import Fiber
 from pyfect._js import to_well_formed
 from pyfect._primitives import uninterruptible_mask
-from pyfect.cause import Cause
+from pyfect.cause import Cause, Fail
 from pyfect.cause import fail as fail_cause
 from pyfect.clock import Clock
 from pyfect.context import Reference
-from pyfect.effect import fail, provide_service, succeed, suspend, sync
+from pyfect.effect import fail, provide_service, succeed, sync
 from pyfect.effect import fail_cause as fail_with_cause
 from pyfect.exit import Failure
 from pyfect.http import headers as _headers
@@ -30,8 +30,8 @@ from pyfect.http.error import HttpClientError, InvalidUrlError, StatusCodeError
 from pyfect.http.request import HttpClientRequest
 from pyfect.http.response import HttpClientResponse, _InterruptibleResponse
 from pyfect.result import Err, Ok
-from pyfect.scope import Scope, add_finalizer
-from pyfect.tracer import DisablePropagation, Span, TracerTimingEnabled
+from pyfect.scope import CloseableScope, Scope
+from pyfect.tracer import DisablePropagation, Span, TracerEnabled, TracerTimingEnabled
 from pyfect.tracer._spans import in_parent_span, use_span
 
 type Phase = Literal["request", "response"]
@@ -77,50 +77,18 @@ class SpanNameGenerator(Reference[Callable[[HttpClientRequest], str]]):
         return lambda request: request.method
 
 
-@final
-class _Scoped:
-    """The controller ``with_scope`` aborts when its scope closes, for the
-    one request it sends (Effect keys it on the request)."""
+class RequestScope(Reference[CloseableScope | None]):
+    """The scope of the enclosing ``with_scope``, which owns every request the transport sends
+    while that client executes (Effect's ``HttpClient`` ``RequestScope``)."""
 
-    __slots__ = ("controller", "requests")
-
-    def __init__(self, request: HttpClientRequest) -> None:
-        self.requests = [request]
-        self.controller = AbortController()
-
-    def controller_for(self, request: HttpClientRequest) -> AbortController | None:
-        return self.controller if any(r is request for r in self.requests) else None
-
-
-class _ScopedAbort(Reference[_Scoped | None]):
     @classmethod
-    def default(cls) -> _Scoped | None:
+    def default(cls) -> CloseableScope | None:
         return None
 
 
-def scoped[A, E, R](
-    sending: Effect[A, E, R], request: HttpClientRequest
-) -> Effect[A, E, R | Scope]:
-    """Send ``request`` (by ``sending``) with a controller aborted when the
-    scope closes."""
-
-    def run() -> Effect[A, E, R | Scope]:
-        tie = _Scoped(request)
-        tied: Effect[A, E, R] = sending.pipe(provide_service(_ScopedAbort, tie))
-        return add_finalizer(lambda _exit: sync(tie.controller.abort)).and_then(tied)
-
-    return suspend(run)
-
-
-def carry_scope(previous: HttpClientRequest, request: HttpClientRequest) -> Effect[None]:
-    """Let ``request``, made from ``previous`` inside the sending ``with_scope``
-    wraps (``with_cookies_ref`` adding a header), keep ``previous``'s abort."""
-
-    def carry(tie: _Scoped | None) -> None:
-        if tie is not None and tie.controller_for(previous) is not None:
-            tie.requests.append(request)
-
-    return _ScopedAbort().map(carry)
+def scoped[A, E, R](sending: Effect[A, E, R]) -> Effect[A, E, R | Scope]:
+    """Run ``sending`` with the current ``Scope`` owning every request it sends."""
+    return Scope().flat_map(lambda scope: sending.pipe(provide_service(RequestScope, scope)))
 
 
 _DEFAULT_PORTS = {"http:": 80, "https:": 443, "ws:": 80, "wss:": 443}
@@ -163,9 +131,17 @@ def _add_header_attributes(
 
 
 def _track(
-    response: HttpClientResponse, controller: AbortController, scoped: bool
+    response: HttpClientResponse,
+    controller: AbortController,
+    scoped: bool,
+    redacted_names: Sequence[_headers.Pattern],
 ) -> HttpClientResponse:
+    # Body readers make errors with the runner's response while callers hold the wrapper, so
+    # both carry the executing fiber's names.
+    response._add_redacted_names(redacted_names)
     tracked = response if scoped else _interruptible(response, controller)
+    if tracked is not response:
+        tracked._add_redacted_names(redacted_names)
     # On the response, not in a table keyed by it: the controller reaches the response
     # again (through the request's span), which would keep such an entry forever.
     tracked._abort_with(controller.abort)
@@ -183,20 +159,37 @@ def _interruptible(response: HttpClientResponse, controller: AbortController) ->
     return _InterruptibleResponse(response, controller.abort, release)
 
 
-def _guarded(
-    sending: Effect[HttpClientResponse, HttpClientError],
-    controller: AbortController,
+def _exchange(
+    send: Send,
+    request: HttpClientRequest,
+    url: _url.Url,
+    fiber: Fiber[Any, Any],
     on_response: Callable[[HttpClientResponse], None],
-    scoped: bool,
 ) -> Effect[HttpClientResponse, HttpClientError]:
+    """Send ``request`` on a controller of its own, aborted when the request is interrupted
+    before its response, and owned by the enclosing ``with_scope``'s scope if any."""
+    scope = fiber.get_ref(RequestScope)
+    controller = AbortController()
+    redacted_names = fiber.get_ref(_url_params.CurrentRedactedNames)
+    sending = _call_user(send, request, url, controller.signal, fiber)
+    if scope is not None:
+        # Registered before dispatch, so a scope already closed aborts the signal before the
+        # transport sees it.
+        sending = scope.add_finalizer(lambda _exit: sync(controller.abort)).and_then(sending)
+
     def on_failure(cause: Cause[HttpClientError]) -> Effect[HttpClientResponse, HttpClientError]:
-        if not scoped and cause.has_interrupts:
+        if cause.has_interrupts:
             controller.abort()
+        # A transport callback outside this fiber may have made the error without its names.
+        for reason in cause.reasons:
+            if isinstance(reason, Fail):
+                reason.error.reason._add_redacted_names(redacted_names)
         return fail_with_cause(cause)
 
     def on_success(response: HttpClientResponse) -> Effect[HttpClientResponse, HttpClientError]:
-        on_response(response)
-        return succeed(_track(response, controller, scoped))
+        tracked = _track(response, controller, scope is not None, redacted_names)
+        on_response(tracked)
+        return succeed(tracked)
 
     return uninterruptible_mask(
         lambda restore: restore(sending).match_cause_effect(
@@ -208,19 +201,17 @@ def _guarded(
 def _send(
     send: Send, request: HttpClientRequest, fiber: Fiber[Any, Any]
 ) -> Effect[HttpClientResponse, HttpClientError]:
-    tie = fiber.get_ref(_ScopedAbort)
-    scoped_controller = None if tie is None else tie.controller_for(request)
-    controller = scoped_controller or AbortController()
     match _url.make(request.url, request.url_params, request.hash):
         case Err(error):
             return fail(HttpClientError(InvalidUrlError(request, error)))
         case Ok(url):
             pass
-    if fiber.get_ref(DisablePropagation) or fiber.get_ref(TracerDisabledWhen)(request):
-        sending = _call_user(send, request, url, controller.signal, fiber)
-        if scoped_controller is not None:
-            return sending.map(lambda response: _track(response, scoped_controller, True))
-        return _guarded(sending, controller, lambda _response: None, False)
+    if (
+        not fiber.get_ref(TracerEnabled)
+        or fiber.get_ref(DisablePropagation)
+        or fiber.get_ref(TracerDisabledWhen)(request)
+    ):
+        return _exchange(send, request, url, fiber, lambda _response: None)
 
     def traced(span: Span) -> Effect[HttpClientResponse, HttpClientError]:
         span.attribute("http.request.method", request.method)
@@ -251,8 +242,7 @@ def _send(
                 error = HttpClientError(StatusCodeError(sent, response))
                 span.end(now, Failure(fail_cause(error)))
 
-        sending = in_parent_span(_call_user(send, sent, url, controller.signal, fiber), span)
-        return _guarded(sending, controller, on_response, scoped_controller is not None)
+        return in_parent_span(_exchange(send, sent, url, fiber, on_response), span)
 
     return use_span(fiber.get_ref(SpanNameGenerator)(request), traced, kind="client")
 

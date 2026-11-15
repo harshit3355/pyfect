@@ -34,7 +34,7 @@ from pyfect.http.error import (
     StatusCodeError,
     TransportError,
 )
-from pyfect.http.headers import Headers
+from pyfect.http.headers import Headers, Pattern
 from pyfect.http.headers import Input as HeadersInput
 from pyfect.http.headers import from_input as headers_from_input
 from pyfect.http.incoming_message import (
@@ -107,9 +107,15 @@ class HttpClientResponse:
         self._upgrade = upgrade
         self._bytes: Effect[bytes, HttpClientError] | None = None
         self._abort_request: Callable[[], None] | None = None
+        self._redacted_names: tuple[Pattern, ...] = ()
 
     def __repr__(self) -> str:
         return f"HttpClientResponse({self.status}, {self.request!r})"
+
+    def _add_redacted_names(self, names: Sequence[Pattern]) -> None:
+        """Set by the client for each execution that returned this response: the reasons body
+        reads fail with redact the URL with these names too."""
+        self._redacted_names = (*self._redacted_names, *names)
 
     def _abort_with(self, abort: Callable[[], None]) -> None:
         """Set by the client that made the response: abort its request."""
@@ -237,6 +243,7 @@ class _InterruptibleResponse(HttpClientResponse):
         self._abort = abort
         self._release = release
         self._abort_request = None
+        self._redacted_names = original._redacted_names
         self.request = original.request
         self.status = original.status
         self.headers = original.headers
@@ -323,6 +330,7 @@ class _LimitedResponse(HttpClientResponse):
         super().__init__(original.request, original.status, original.headers, None)
         self.original = original
         self._max_bytes = max_bytes
+        self._redacted_names = original._redacted_names
 
     @property
     def stream(self) -> Stream[bytes, HttpClientError]:

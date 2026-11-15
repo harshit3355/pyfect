@@ -191,7 +191,7 @@ def test_should_invoke_the_wizard_programmatically_from_a_command_handler(env: S
     yield from input_text("2")
     yield from input_key("enter")
     yield from fiber.join()
-    assert captured == [("greet", "--name", "Alice", "2")]
+    assert captured == [("greet", "--name", "Alice", "--", "2")]
 
 
 class _Name(Config):
@@ -401,6 +401,58 @@ def test_should_start_wizard_mode_at_a_selected_subcommand(env: Services[Any]):
     yield from input_key("enter")
     yield from fiber.join()
     assert captured == ["selected"]
+
+
+@testing.effect
+def test_should_replace_typed_flags_and_arguments_with_wizard_answers(env: Services[Any]):
+    """should replace typed flags and arguments with wizard answers"""
+
+    class Demo(Config):
+        name = Flag.string("name")
+        value = Argument.string("value")
+
+    captured: list[tuple[str, str]] = []
+    app = command.make("demo", Demo, lambda c: fx.sync(lambda: captured.append((c.name, c.value))))
+    fiber = yield from runner(app)(["--name", "typed", "typed", "--wizard"]).fork()
+    yield from input_text("prompted")
+    yield from input_key("enter")
+    yield from input_text("prompted")
+    yield from input_key("enter")
+    yield from input_key("enter")
+    yield from fiber.join()
+    assert captured == [("prompted", "prompted")]
+
+
+@testing.effect
+def test_should_preserve_inherited_clustered_flags_before_a_boolean_looking_wizard_answer(
+    env: Services[Any],
+):
+    """should preserve inherited clustered flags before a boolean-looking wizard answer"""
+
+    class Shared(Config):
+        silent = Flag.boolean("silent").with_alias("s")
+        ipv4 = Flag.boolean("ipv4").with_alias("4")
+
+    class Child(Config):
+        value = Argument.string("value")
+
+    captured: list[tuple[bool, bool, str]] = []
+    root = command.make("root").with_shared_flags(Shared)
+
+    def child_handler(c: Child):
+        def body():
+            shared = yield from root
+            captured.append((shared.silent, shared.ipv4, c.value))
+
+        return fx.gen(body)
+
+    app = root.with_subcommands(command.make("child", Child, child_handler))
+    fiber = yield from runner(app)(["child", "-s4", "typed", "--wizard"]).fork()
+    yield from input_text("false")
+    yield from input_key("enter")
+    yield from input_key("enter")
+    yield from fiber.join()
+    assert captured == [(True, True, "false")]
 
 
 @testing.effect

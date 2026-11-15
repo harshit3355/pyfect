@@ -137,6 +137,11 @@ nested_3_levels = command.make("top").with_subcommands(
 empty_cmd = command.make("noop").with_description("Does nothing")
 
 
+with_colon_subcommand = command.make("tool").with_subcommands(
+    command.make("test:unit").with_description("Run unit tests"), command.make("build")
+)
+
+
 def leaf(name: str, flag: str) -> CommandDescriptor:
     return CommandDescriptor(name, None, (FlagDescriptor(flag, (), None, "Boolean"),))
 
@@ -344,9 +349,10 @@ def _type_into(args: list[str], directory: str, keys: str) -> str:
     return (seen + rest).decode(errors="replace")
 
 
-def _replay_bash_completion(line: str) -> list[str]:
+def _replay_bash_completion(line: str, descriptor: CommandDescriptor | None = None) -> list[str]:
     """Type ``line``, a tab and Enter into interactive Bash in a directory of
-    ``process`` fixtures, and return the arguments ``process`` receives."""
+    ``process`` fixtures, and return the arguments the command receives."""
+    descriptor = descriptor or from_command(with_paths)
     with tempfile.TemporaryDirectory(prefix="pyfect-cli-bash-") as directory:
         root = Path(directory)
         (root / "project files").mkdir()
@@ -355,8 +361,8 @@ def _replay_bash_completion(line: str) -> list[str]:
         (root / "rc.bash").write_text(
             "\n".join(
                 [
-                    Bash.generate("process", from_command(with_paths)),
-                    "process() { printf '<%s>\\n' \"$@\"; }",
+                    Bash.generate(descriptor.name, descriptor),
+                    f"{descriptor.name}() {{ printf '<%s>\\n' \"$@\"; }}",
                     "PS1='$ ' TMOUT=1",
                 ]
             )
@@ -395,6 +401,14 @@ def test_keeps_an_expandable_or_quoted_directory_as_typed():
         "~/report data.txt",
     ]
     assert _replay_bash_completion('process --input "./"rep') == ["--input", "./report"]
+
+
+@pytest.mark.skipif(not _HAS_READLINE, reason="no interactive Bash with readline")
+def test_completes_subcommand_names_containing_a_colon():
+    """completes subcommand names containing a colon"""
+    assert _replay_bash_completion("tool test:u", from_command(with_colon_subcommand)) == [
+        "test:unit"
+    ]
 
 
 def test_inlines_choice_values_for_choice_flags():
@@ -511,6 +525,12 @@ def test_includes_subcommand_descriptions_with_describe():
     assert "_describe" in script
     assert "Start the server" in script
     assert "Stop the server" in script
+
+
+def test_escapes_colons_in_subcommand_names_for_describe():
+    """escapes colons in subcommand names for _describe"""
+    script = Zsh.generate("tool", from_command(with_colon_subcommand))
+    assert "'test\\:unit:Run unit tests'" in script
 
 
 def test_zsh_generates_no_flag_for_boolean_flags():
@@ -1141,3 +1161,70 @@ def test_power_shell_replay_resolves_a_custom_negation_before_a_conflicting_alia
     completions = _replay_power_shell(from_command(command.make("app", App)), "app --skip ")
     assert "--force" in completions
     assert "--validate" not in completions
+
+
+# --- Repeatable flags -------------------------------------------------------------------
+
+
+class _Repeatable(Config):
+    tag = Flag.string("tag").with_alias("t").at_least(1)
+    pair = Flag.string("pair").between(1, 2)
+    label = Flag.string("label").at_most(1)
+    env = Flag.key_value_pair("env").optional()
+    verbose = Flag.boolean("verbose")
+    source = Flag.string("repo").at_least(1).or_else(lambda: Flag.string("file"))
+    target = Flag.string("url").or_else(lambda: Flag.string("host").at_least(1))
+
+
+repeatable_descriptor = from_command(command.make("app", _Repeatable))
+
+
+def test_are_flags_that_accept_more_than_one_occurrence():
+    """Repeatable flags / are flags that accept more than one occurrence"""
+    assert [(flag.name, flag.repeatable) for flag in repeatable_descriptor.flags] == [
+        ("tag", True),
+        ("pair", True),
+        ("label", False),
+        ("env", True),
+        ("verbose", False),
+        ("repo", True),
+        ("file", False),
+        ("url", False),
+        ("host", True),
+    ]
+
+
+def test_stay_offered_after_they_are_used():
+    """Repeatable flags / stay offered after they are used"""
+    zsh = Completions.generate("app", "zsh", repeatable_descriptor)
+    assert "'*--tag:value:'" in zsh
+    assert "'*-t:value:'" in zsh
+    assert "'(--label)--label:value:'" in zsh
+
+    bash = Completions.generate("app", "bash", repeatable_descriptor)
+    assert lines_with(bash, '_filtered_flags+=" --tag -t"') == '_filtered_flags+=" --tag -t"'
+    assert re.match(
+        r'^\[\[ -n "\$_used_\d+" \]\] \|\| ', lines_with(bash, '_filtered_flags+=" --label"')
+    )
+
+    fish = Completions.generate("app", "fish", repeatable_descriptor).split("\n")
+    tag_entries = [line for line in fish if "-l tag" in line or "-a '--tag'" in line]
+    assert len(tag_entries) == 2
+    for entry in tag_entries:
+        assert "__fish_contains_opt" not in entry
+    label_entries = [line for line in fish if "-l label" in line or "-a '--label'" in line]
+    assert len(label_entries) == 2
+    for entry in label_entries:
+        assert "__fish_contains_opt" in entry
+
+    powershell = Completions.generate("app", "powershell", repeatable_descriptor)
+    assert "repeatable = $true;" in lines_with(powershell, "name = 'tag'")
+    assert "repeatable" not in lines_with(powershell, "name = 'label'")
+
+
+@pytest.mark.skipif(shutil.which("pwsh") is None, reason="pwsh is not installed")
+def test_power_shell_replay_offers_a_repeatable_flag_again():
+    """Repeatable flags / PowerShell replay offers a repeatable flag again"""
+    completions = _replay_power_shell(repeatable_descriptor, "app --tag x --label y -")
+    assert "--tag" in completions
+    assert "--label" not in completions

@@ -25,7 +25,12 @@ from pyfect.error_reporter import report_unsafe
 from pyfect.exit import Exit, Failure
 from pyfect.http import _request_state
 from pyfect.http import body as _body
-from pyfect.http._request_state import CurrentRequestState, PreResponseHandler, RequestState
+from pyfect.http._request_state import (
+    CurrentRequestState,
+    PreResponseHandler,
+    RequestScope,
+    RequestState,
+)
 from pyfect.http.middleware._tracer import is_tracer_disabled_unsafe, tracer, uses_native_tracer
 from pyfect.http.server_error import HttpServerError, cause_response
 from pyfect.http.server_request import HttpServerRequest, ServerRequest
@@ -76,8 +81,9 @@ def to_handled[E, R, EH = Never, RH = Never](
     def body(fiber: Fiber[Any, Any]) -> Effect[None, Never, Any]:
         previous = fiber._context
         request = previous.get_unsafe(HttpServerRequest)
-        state = RequestState()
         scope = CloseableScope()
+        request_scope = RequestScope(scope)
+        state = RequestState(request_scope)
         failed: list[Cause[Any]] = []
 
         def on_failure(cause: Cause[Any]) -> Effect[HttpServerResponse, Any, Any]:
@@ -124,9 +130,8 @@ def to_handled[E, R, EH = Never, RH = Never](
             )
 
         def close(exit: Exit[Any, Any]) -> Effect[None]:
-            if state.scope_ejected:
-                return void
-            return scope.close(Failure(failed[0]) if failed else exit)
+            closed_with = Failure(failed[0]) if failed else exit
+            return request_scope.finish(closed_with, state.scope_ejected)
 
         in_request: Effect[object, Any, Any] = _Locally(
             handled, lambda ctx: ctx.add(Scope, scope).add(CurrentRequestState, state)
@@ -137,28 +142,59 @@ def to_handled[E, R, EH = Never, RH = Never](
     return _WithFiber(body).uninterruptible()
 
 
-def scope_disable_close(state: RequestState) -> None:
-    state.scope_ejected = True
+def scope_disable_close(target: RequestState | CloseableScope) -> None:
+    """Keep the request's scope open when the request finishes: the host closes it, with
+    the exit it chooses (Effect's ``scopeDisableClose``). Takes the request's ``Scope``, as
+    Effect's does, or its state. A body transferred with ``scope_transfer_to_stream`` still
+    closes the scope when it exits; without one, the host must close it on every path,
+    failures and interruption included, or the request's resources leak."""
+    if isinstance(target, RequestState):
+        target.scope_ejected = True
+        return
+    fiber = Fiber.get_current()
+    state = None if fiber is None else _request_state.get(fiber._context)
+    request_scope = None if state is None else state.request_scope
+    if state is not None and request_scope is not None and request_scope.scope is target:
+        state.scope_ejected = True
 
 
 def scope_transfer_to_stream(response: HttpServerResponse) -> HttpServerResponse:
-    """A streamed response whose body closes the request's scope when it
-    ends, instead of the handler's end (call while handling the request)."""
+    """A streamed response whose body closes the request's scope with the body's exit (call
+    while handling the request). The scope ``to_handled`` made closes once both the body has
+    exited and the request has finished, middleware and tracing included; any other scope
+    closes as soon as the body exits. A response without a streamed body is returned as is,
+    and its scope keeps its usual close."""
+    return _transfer_to_stream(response)[0]
+
+
+def _transfer_to_stream(
+    response: HttpServerResponse,
+) -> tuple[HttpServerResponse, Callable[[Exit[Any, Any]], Effect[None]] | None]:
+    """``scope_transfer_to_stream``, and what the body calls when it exits (``None`` when
+    nothing was transferred), for a host that may end the body without running it."""
     if not isinstance(response.body, _body.Stream):
-        return response
+        return response, None
     fiber = Fiber.get_current()
     if fiber is None:
-        return response
+        return response, None
     state = _request_state.get(fiber._context)
     found, scope = fiber._context.lookup(Scope)
     if state is None or not found:
-        return response
+        return response, None
     state.scope_ejected = True
     closeable: CloseableScope = scope
-    stream = response.body.stream.on_exit(closeable.close)
-    return response.set_body_keep_headers(
+    request_scope = state.request_scope
+    finish_body: Callable[[Exit[Any, Any]], Effect[None]]
+    if request_scope is not None and request_scope.scope is closeable:
+        request_scope.transferred = True
+        finish_body = request_scope.finish_body
+    else:
+        finish_body = closeable.close
+    stream = response.body.stream.on_exit(finish_body)
+    transferred = response.set_body_keep_headers(
         _body.Stream(stream, response.body.content_type, response.body.content_length)
     )
+    return transferred, finish_body
 
 
 def append_pre_response_handler(

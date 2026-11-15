@@ -33,12 +33,14 @@ Omitted, with the reason:
 """
 
 import contextlib
+import json
 import socket
 import threading
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any, TypedDict
 
+import _ports
 import pytest
 
 pytest.importorskip("httpx")
@@ -51,6 +53,7 @@ from pyfect.http import client as c
 from pyfect.http import request as req
 from pyfect.http import response as res
 from pyfect.http import url as u
+from pyfect.http import url_params as up
 from pyfect.http.client import HttpClient, HttpClientService
 from pyfect.http.error import HttpClientError
 from pyfect.scope import scoped
@@ -492,3 +495,80 @@ def test_form_data_files_read_on_demand():
         yield from program().pipe(fx.provide(httpx_client.layer))
     finally:
         close()
+
+
+@testing.live
+def test_redacts_a_transport_error_url_with_the_redacted_names_of_the_request():
+    """redacts a transport error URL with the redacted names of the request
+
+    A refused connection stands in for Effect's missing socket path."""
+    url = f"http://127.0.0.1:{_ports.refused_tcp_port()}/path?token="
+    message = f"Transport error (GET {url}REDACTED)"
+
+    @fx.fn
+    def failing():
+        error = yield from c.get(f"{url}token-secret").flip()
+        assert error.message == message
+        return error
+
+    error: HttpClientError = (
+        yield from failing()
+        .pipe(fx.provide_service(up.CurrentRedactedNames, ("token",)))
+        .pipe(fx.provide(httpx_client.layer))
+    )
+    assert error.reason.tag == "TransportError"
+    assert error.message == message
+    assert "token-secret" not in json.dumps(error.to_json())
+
+
+@contextmanager
+def _partial_body_server() -> Generator[tuple[str, Callable[[], None]]]:
+    """Answers with part of a 100-byte body and keeps the connection open; the function drops
+    it."""
+    listener = socket.create_server(("127.0.0.1", 0))
+    accepted: list[socket.socket] = []
+
+    def serve() -> None:
+        with contextlib.suppress(OSError):
+            conn, _ = listener.accept()
+            accepted.append(conn)
+            conn.recv(65536)
+            conn.sendall(b"HTTP/1.1 200 OK\r\ncontent-length: 100\r\n\r\npartial")
+
+    threading.Thread(target=serve, daemon=True).start()
+
+    def drop() -> None:
+        for conn in accepted:
+            conn.close()
+
+    try:
+        yield f"http://127.0.0.1:{listener.getsockname()[1]}/?token=", drop
+    finally:
+        listener.close()
+        drop()
+
+
+@testing.live
+def test_redacts_a_response_body_error_url_with_the_redacted_names_of_the_request():
+    """redacts a response body error URL with the redacted names of the request ($name)
+
+    One client here (httpx) for Effect's node:http and undici."""
+    with _partial_body_server() as (url, drop):
+        message = f"Decode error (200 GET {url}REDACTED)"
+
+        @fx.fn
+        def failing():
+            response = yield from c.get(f"{url}token-secret")
+            drop()
+            error = yield from response.text.flip()
+            assert error.message == message
+            return error
+
+        error: HttpClientError = (
+            yield from failing()
+            .pipe(fx.provide_service(up.CurrentRedactedNames, ("token",)))
+            .pipe(fx.provide(httpx_client.layer))
+        )
+    assert error.reason.tag == "DecodeError"
+    assert error.message == message
+    assert "token-secret" not in json.dumps(error.to_json())

@@ -107,7 +107,7 @@ def _bare_flags(
     not_dash = 'not string match -q -- "-*" (commandline -ct)'
     base = f"{condition}; and {not_dash}" if condition else not_dash
     for flag in descriptor.flags:
-        bare = f"-n '{base}; and {_contains_opt(flag)}'"
+        bare = f"-n '{base}'" if flag.repeatable else f"-n '{base}; and {_contains_opt(flag)}'"
         description = f"-d '{_escape(flag.description)}'" if flag.description else ""
         lines.append(_line(executable, bare, f"-f -a '--{flag.name}'", description))
         negation = negated_name(flag)
@@ -126,9 +126,14 @@ def _completions(
         description = f"-d '{_escape(sub.description)}'" if sub.description else ""
         lines.append(_line(executable, condition_arg, f"-f -a '{_escape(sub.name)}'", description))
     for flag in descriptor.flags:
-        dedup = _value_flag_dedup(flag) if takes_separate_value(flag) else _contains_opt(flag)
-        flag_condition = f"{condition}; and {dedup}" if condition else dedup
-        flag_condition_arg = f"-n '{flag_condition}'"
+        if flag.repeatable:
+            dedup = ""
+        elif takes_separate_value(flag):
+            dedup = _value_flag_dedup(flag)
+        else:
+            dedup = _contains_opt(flag)
+        flag_condition = "; and ".join(part for part in (condition, dedup) if part)
+        flag_condition_arg = f"-n '{flag_condition}'" if flag_condition else ""
         lines.append(_line(executable, flag_condition_arg, *_flag_args(flag)))
         negation = negated_name(flag)
         if negation is not None:

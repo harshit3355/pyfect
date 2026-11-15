@@ -77,7 +77,7 @@ def _flag_specs(flag: FlagDescriptor) -> list[str]:
     optional = flag.optional_value and flag.type != "Boolean"
     suffix = "=-" if optional else ""
     action = f":{_value_action(flag.type)}" if optional else _value_action(flag.type)
-    exclusion = f"({' '.join(long_forms(flag))})"
+    exclusion = "*" if flag.repeatable else f"({' '.join(long_forms(flag))})"
     specs = [f"'{exclusion}--{flag.name}{suffix}{desc}{action}'"]
     for alias in flag.aliases:
         prefix = "-" if len(alias) == 1 else "--"
@@ -107,7 +107,7 @@ def _with_subcommands(descriptor: CommandDescriptor, path: list[str], lines: lis
     lines.append("  commands=(")
     for sub in descriptor.subcommands:
         desc = _escape(sub.description) if sub.description else ""
-        lines.append(f"    '{sub.name}:{desc}'")
+        lines.append(f"    '{_escape(sub.name)}:{desc}'")
     lines.append("  )")
     lines.append("")
     lines.append("  local -a specs")

@@ -29,7 +29,11 @@ from pyfect import effect, layer, scope, stream
 from pyfect._core import _WithFiber
 from pyfect.cause import Cause
 from pyfect.context import Context, Reference
+from pyfect.deferred import Deferred
 from pyfect.exit import Exit, Failure
+from pyfect.exit import fail as fail_exit
+from pyfect.exit import succeed as succeed_exit
+from pyfect.http import body as http_body
 from pyfect.http import http_effect, server_response
 from pyfect.http.abort import AbortController
 from pyfect.http.server_request import HttpServerRequest
@@ -43,7 +47,14 @@ from pyfect.http.web_handler import (
     to_web_handler_with,
 )
 from pyfect.scope import Scope
-from pyfect.tracer import CurrentTracer, ParentSpan, Tracer, TracerEnabled, native_tracer
+from pyfect.tracer import (
+    CurrentTracer,
+    NativeSpan,
+    ParentSpan,
+    Tracer,
+    TracerEnabled,
+    native_tracer,
+)
 
 
 class Value420(Reference[int]):
@@ -574,3 +585,168 @@ def test_preserves_custom_content_type_header() -> None:
     handler = to_web_handler(from_web_handler(web_handler))
     web = _aio(lambda: handler(_request()))
     assert web.get("Content-Type") == "text/html; charset=utf-8"
+
+
+# --- the request scope and a transferred body (Effect #10366) ---------------------------
+
+
+@pytest.mark.parametrize("response_kind", ["plain", "failure", "stream"])
+def test_a_disabled_untransferred_request_scope_stays_open_until_the_host_closes_it(
+    response_kind: str,
+) -> None:
+    """a disabled, untransferred request scope stays open until the host closes it: %s
+
+    ``to_handled`` reports a failure and succeeds, so the handled exit is not compared."""
+    exits: list[Exit[Any, Any]] = []
+    scopes: list[scope.CloseableScope] = []
+    responses: list[HttpServerResponse] = []
+
+    @fx.fn
+    def app():
+        request_scope = yield from Scope()
+        scopes.append(request_scope)
+        http_effect.scope_disable_close(request_scope)
+        yield from scope.add_finalizer(lambda exit: effect.sync(lambda: exits.append(exit)))
+        if response_kind == "failure":
+            return (yield from effect.fail(ValueError("handler failed")))
+        if response_kind == "stream":
+            return server_response.stream(stream.make("body").encode_text())
+        return server_response.text("body")
+
+    def keep(_request: object, response: HttpServerResponse) -> fx.Effect[None]:
+        return effect.sync(lambda: responses.append(response))
+
+    _in_request(http_effect.to_handled(app(), keep))
+    assert exits == []
+    [response] = responses
+    assert response.status == (500 if response_kind == "failure" else 200)
+    if response_kind == "stream":
+        assert isinstance(response.body, http_body.Stream)
+        text = fx.run_blocking(response.body.stream.decode_text().run_string().or_die())
+        assert text == "body"
+        assert exits == []
+    host_exit = fail_exit(ValueError("host background work failed"))
+    fx.run_blocking(scopes[0].close(host_exit))
+    assert exits == [host_exit]
+    fx.run_blocking(scopes[0].close(succeed_exit(None)))
+    assert exits == [host_exit]
+
+
+def test_a_streamed_body_that_exits_during_the_request_closes_the_scope_after_it_ends() -> None:
+    """a streamed body that exits during the request closes the request scope after the request ends"""  # noqa: E501
+    events: list[str] = []
+    scope_exits: list[Exit[Any, Any]] = []
+
+    class _EndRecording(NativeSpan):
+        def end(self, end_time: int, exit: Exit[object, object], /) -> None:
+            events.append("span ended")
+            super().end(end_time, exit)
+
+    tracer = Tracer.make(_EndRecording)
+
+    @fx.fn
+    def app():
+        def closed(exit: Exit[Any, Any]) -> fx.Effect[None]:
+            def record() -> None:
+                events.append("scope closed")
+                scope_exits.append(exit)
+
+            return effect.sync(record)
+
+        yield from scope.add_finalizer(closed)
+        return server_response.stream(stream.make("body").encode_text())
+
+    controller = AbortController()
+    # A pre-aborted signal interrupts the body while the response is still being handled.
+    controller.abort()
+    handler = to_web_handler(app())
+    _aio(lambda: handler(_request(signal=controller.signal), Context.make(CurrentTracer, tracer)))
+    assert events == ["span ended", "scope closed"]
+    assert isinstance(scope_exits[0], Failure)
+    assert scope_exits[0].cause.has_interrupts
+
+
+def test_a_streamed_body_that_exits_before_middleware_finishes_closes_the_scope_after_it() -> None:
+    """a streamed body that exits before middleware finishes closes the request scope after the middleware"""  # noqa: E501
+    events: list[str] = []
+    released = Deferred[None]()
+
+    @fx.fn
+    def app():
+        yield from scope.add_finalizer(lambda _: effect.sync(lambda: events.append("scope closed")))
+        return server_response.stream(stream.make("body").encode_text())
+
+    def middleware(inner: fx.Effect[HttpServerResponse, Any, Any]) -> Any:
+        return inner.tap(
+            lambda _: released.wait().and_then(
+                effect.sync(lambda: events.append("middleware finished"))
+            )
+        )
+
+    handler = to_web_handler(app(), middleware)
+
+    async def main() -> str:
+        response = await handler(_request())
+        text = await response.text()
+        released.done_unsafe(succeed_exit(None))
+        await _wait_for(lambda: len(events) == 2)
+        return text
+
+    assert _aio(main) == "body"
+    assert events == ["middleware finished", "scope closed"]
+
+
+def test_a_streamed_body_closes_the_request_scope_after_the_handler_disables_closing() -> None:
+    """a streamed body closes the request scope after the handler disables closing"""
+    finalized: list[bool] = []
+
+    @fx.fn
+    def app():
+        http_effect.scope_disable_close((yield from Scope()))
+        yield from scope.add_finalizer(lambda _: effect.sync(lambda: finalized.append(True)))
+        return server_response.stream(stream.make("body").encode_text())
+
+    handler = to_web_handler(app())
+
+    async def main() -> str:
+        return await (await handler(_request())).text()
+
+    assert _aio(main) == "body"
+    assert finalized == [True]
+
+
+def test_a_transferred_body_keeps_its_first_exit_when_a_later_transfer_succeeds() -> None:
+    """a transferred body keeps its first exit when a later transfer succeeds before the request ends"""  # noqa: E501
+    released = Deferred[None]()
+    failure = ValueError("body failed")
+    scope_exits: list[Exit[Any, Any]] = []
+
+    @fx.fn
+    def app():
+        yield from scope.add_finalizer(lambda exit: effect.sync(lambda: scope_exits.append(exit)))
+        # A helper transfers a failing body, an outer layer recovers it, and the web handler
+        # transfers the recovered response again.
+        transferred = http_effect.scope_transfer_to_stream(
+            server_response.stream(stream.fail(failure))
+        )
+        assert isinstance(transferred.body, http_body.Stream)
+        failing = transferred.body.stream
+        return server_response.stream(
+            failing.catch_cause(lambda _: stream.make("fallback").encode_text())
+        )
+
+    def middleware(inner: fx.Effect[HttpServerResponse, Any, Any]) -> Any:
+        return inner.tap(lambda _: released.wait())
+
+    handler = to_web_handler(app(), middleware)
+
+    async def main() -> str:
+        text = await (await handler(_request())).text()
+        released.done_unsafe(succeed_exit(None))
+        await _wait_for(lambda: bool(scope_exits))
+        return text
+
+    assert _aio(main) == "fallback"
+    [exit] = scope_exits
+    assert isinstance(exit, Failure)
+    assert exit.cause.squash() is failure

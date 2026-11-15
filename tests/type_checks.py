@@ -10386,6 +10386,17 @@ def section4_pins() -> None:
     assert_type(tar.FarDate(1), tar.FarDate)
 
 
+class _S4Unknown(Exception):
+    pass
+
+
+def rpc_handlers_fail_with_middleware_errors() -> None:
+    # Effect #10418: a handler may fail with its RPC's middleware errors, and no others.
+    handlers = _S4Users.handlers()
+    handlers.handle(_S4Users.get)(lambda _: fx.fail(ValueError("denied")))
+    handlers.handle(_S4Users.get)(lambda _: fx.fail(_S4Unknown()))  # pyright: ignore[reportArgumentType, reportCallIssue]
+
+
 def section4_value_pins(queue: fx.Queue[int], failed: fx.Cause[str]) -> None:
     assert_type(queue.flush(), fx.Effect[None])
     assert_type(queue.flush_unsafe(), None)

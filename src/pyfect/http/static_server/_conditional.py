@@ -18,29 +18,32 @@ def _strip_weak(value: str) -> str:
     return trimmed[2:] if _WEAK.match(trimmed) else trimmed
 
 
-# If-Match compares strongly (RFC 9110 §13.1.1), so weak tags never match. Tags may hold
-# commas, so the list is checked whole rather than split; a malformed list matches nothing.
+# Tags may hold commas, so a list is read whole rather than split, and a malformed list
+# holds no tags. Every list header is read through ``_entity_tags``.
 _ENTITY_TAG_LIST = re.compile(r'[\s,]*(?:(?:W/)?"[^"]*"\s*(?:,[\s,]*|\Z))*\Z')
 _ENTITY_TAG = re.compile(r'(?:W/)?"[^"]*"')
 
 
+def _entity_tags(header: str) -> list[str]:
+    return _ENTITY_TAG.findall(header) if _ENTITY_TAG_LIST.match(header) else []
+
+
+# If-Match compares strongly (RFC 9110 §13.1.1), so weak tags never match.
 def _matches_if_match(if_match: str, etag: str | None) -> bool:
     if if_match.strip() == "*":
         return True
-    if etag is None or not etag.startswith('"') or not _ENTITY_TAG_LIST.match(if_match):
+    if etag is None or not etag.startswith('"'):
         return False
-    return etag in _ENTITY_TAG.findall(if_match)
+    return etag in _entity_tags(if_match)
 
 
 def _matches_if_none_match(if_none_match: str, etag: str | None) -> bool:
-    normalized = None if etag is None else _strip_weak(etag)
-    for candidate in if_none_match.split(","):
-        value = candidate.strip()
-        if value == "":
-            continue
-        if value == "*" or (normalized is not None and _strip_weak(value) == normalized):
-            return True
-    return False
+    if if_none_match.strip() == "*":
+        return True
+    if etag is None:
+        return False
+    normalized = _strip_weak(etag)
+    return any(_strip_weak(tag) == normalized for tag in _entity_tags(if_none_match))
 
 
 def _modified_since(since: str, last_modified: str | None) -> bool | None:

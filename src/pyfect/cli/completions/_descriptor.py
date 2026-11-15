@@ -6,10 +6,19 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from pyfect.cli._command import Command
-from pyfect.cli.param import ARGUMENT, FLAG, Param, Single
+from pyfect.cli.param import (
+    ARGUMENT,
+    FLAG,
+    Mapped,
+    Optional,
+    Param,
+    Single,
+    Transformed,
+    Variadic,
+)
 from pyfect.cli.primitive import PathType
 
 
@@ -36,6 +45,9 @@ class FlagDescriptor:
     type: FlagType
     optional_value: bool = False
     negation: str | Literal[False] | None = None
+    repeatable: bool = False
+    """Whether the flag can be given more than once, so completion keeps offering it after
+    it is used."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -85,6 +97,38 @@ def _argument_type(single: Single[Any]) -> ArgumentType:
     return "String" if kind == "Boolean" else kind
 
 
+def _repeatable_singles(
+    param: Param[Any], repeatable: bool | None = None
+) -> list[tuple[Single[Any], bool]]:
+    """Each single flag with whether it can be repeated. The outermost variadic decides, and
+    each ``or_else`` alternative is resolved on its own."""
+    if isinstance(param, Single):
+        return [(param, repeatable is True)]
+    if isinstance(param, Variadic):
+        variadic = cast("Variadic[Any]", param)
+        outermost = repeatable if repeatable is not None else not _at_most_once(variadic)
+        return _repeatable_singles(variadic.param, outermost)
+    if isinstance(param, (Mapped, Optional, Transformed)):
+        inner: Param[Any] = cast(
+            "Mapped[Any, Any] | Optional[Any] | Transformed[Any, Any]", param
+        ).param
+        alternatives = (
+            cast("Transformed[Any, Any]", param).alternatives
+            if isinstance(param, Transformed)
+            else ()
+        )
+        return [
+            pair
+            for tree in (inner, *(alternative() for alternative in alternatives))
+            for pair in _repeatable_singles(tree, repeatable)
+        ]
+    raise TypeError(f"completions do not know the param {type(param).__name__}")
+
+
+def _at_most_once(param: Variadic[Any]) -> bool:
+    return param.max is not None and param.max <= 1
+
+
 def from_command(
     command: Command[Any, Any, Any, Any], inherited: Sequence[Param[Any]] = ()
 ) -> CommandDescriptor:
@@ -95,7 +139,7 @@ def from_command(
     flags: list[FlagDescriptor] = []
     seen: set[str] = set()
     for index, flag in enumerate((*own, *inherited)):
-        for single in flag.singles():
+        for single, repeatable in _repeatable_singles(flag):
             if single.kind != FLAG or single.hidden:
                 continue
             if index >= len(own) and single.name in seen:
@@ -109,6 +153,7 @@ def from_command(
                     type=_value_type(single),
                     optional_value=single.optional_value is not None,
                     negation=single.negation,
+                    repeatable=repeatable,
                 )
             )
     arguments: list[ArgumentDescriptor] = []
@@ -121,7 +166,8 @@ def from_command(
                 ArgumentDescriptor(
                     name=single.name,
                     description=single.description,
-                    required=not metadata.is_optional,
+                    required=not metadata.is_optional
+                    and (not metadata.is_variadic or (metadata.variadic_min or 0) > 0),
                     variadic=metadata.is_variadic,
                     type=_argument_type(single),
                 )

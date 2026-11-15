@@ -98,6 +98,23 @@ def test_cors_vary(name: str, vary: str | None, expected: str) -> None:
     assert web.get("vary") == expected
 
 
+@pytest.mark.parametrize("method", ["GET", "OPTIONS"])
+def test_does_not_call_the_origin_predicate_without_an_origin_header(method: str) -> None:
+    """does not call the origin predicate without an Origin header (%s)"""
+    asked: list[str] = []
+
+    def allowed(origin: str) -> bool:
+        asked.append(origin)
+        return origin.endswith(".example")
+
+    handler = to_web_handler(cors(allowed_origins=allowed)(effect.succeed(server_response.empty())))
+    web = _serve(handler, WebRequest("http://localhost/", method=method))
+    assert 200 <= web.status < 300
+    assert web.get("access-control-allow-origin") is None
+    assert web.get("vary") == "Origin"
+    assert asked == []
+
+
 def test_preserves_both_vary_dimensions_for_preflight_requests() -> None:
     """preserves both Vary dimensions for preflight requests"""
     handler = to_web_handler(

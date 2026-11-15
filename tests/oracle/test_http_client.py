@@ -29,6 +29,8 @@ The ``withRateLimiter`` and ``withCircuitBreaker`` blocks are in
 ``test_http_client_resilience.py``.
 """
 
+import json
+import threading
 from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any, TypedDict
@@ -38,10 +40,13 @@ import pytest
 import pyfect as fx
 from pyfect import clock, testing
 from pyfect import schema as S
+from pyfect import scope as scope_
 from pyfect import stream as stream_
+from pyfect.deferred import Deferred
 from pyfect.duration import millis
 from pyfect.errors import TimeoutException
 from pyfect.exit import Failure
+from pyfect.exit import succeed as succeed_exit
 from pyfect.http import client as c
 from pyfect.http import headers as h
 from pyfect.http import request as req
@@ -49,10 +54,17 @@ from pyfect.http import response as res
 from pyfect.http import url as u
 from pyfect.http import url_params as up
 from pyfect.http.abort import AbortSignal
-from pyfect.http.error import EncodeError, HttpClientError, StatusCodeError, TransportError
+from pyfect.http.error import (
+    DecodeError,
+    EncodeError,
+    HttpClientError,
+    HttpClientErrorSchema,
+    StatusCodeError,
+    TransportError,
+)
 from pyfect.redacted import Redacted
 from pyfect.schedule import spaced
-from pyfect.tracer import NativeSpan, SpanRequest, Tracer
+from pyfect.tracer import NativeSpan, SpanRequest, Tracer, TracerEnabled
 
 type Handler = Callable[[req.HttpClientRequest], res.HttpClientResponse]
 
@@ -336,6 +348,15 @@ def test_sends_trace_headers():
 
 
 @testing.effect
+def test_omits_trace_headers_when_tracing_is_disabled():
+    """omits trace headers when tracing is disabled"""
+    sent, client = _capturing_client()
+    yield from client.get("http://test/").pipe(fx.provide_service(TracerEnabled, False))
+    assert sent[0].headers.get("b3") is None
+    assert sent[0].headers.get("traceparent") is None
+
+
+@testing.effect
 def test_propagation_disabled():
     """omits trace headers when propagation is disabled and keeps the client span"""
     sent, client = _capturing_client()
@@ -394,6 +415,150 @@ def test_error_current_redacted_names():
 
     text = yield from fx.sync(message).pipe(fx.provide_service(up.CurrentRedactedNames, ("token",)))
     assert text == "Transport error (GET http://test/path?token=REDACTED&sig=sig-visible)"
+
+
+# HttpClientErrorSchema
+
+
+@pytest.mark.parametrize("cause", [None, {}, {"message": ""}], ids=["absent", "empty", "blank"])
+def test_error_schema_falls_back_to_the_kind_when_the_cause_message_is_missing_or_empty(
+    cause: object,
+) -> None:
+    """falls back to the kind when the cause message is missing or empty"""
+    error = HttpClientErrorSchema(kind="TransportError", cause=cause)
+    assert error.message == "TransportError"
+
+
+def test_error_schema_preserves_the_encoded_fields_without_adding_a_message_field() -> None:
+    """preserves the encoded fields without adding a message field"""
+    error = HttpClientErrorSchema(kind="TransportError", cause={"message": "connection refused"})
+    assert error.message == "connection refused"
+    encoded = S.encode_sync(HttpClientErrorSchema)(error)
+    assert encoded == {
+        "_tag": "HttpError",
+        "kind": "TransportError",
+        "cause": {"message": "connection refused"},
+    }
+    assert S.decode_sync(HttpClientErrorSchema)(encoded).message == "connection refused"
+
+
+def _failing_off_fiber() -> c.HttpClientService[HttpClientError]:
+    """A client whose transport fails from another thread, outside the request fiber, as
+    native transports do (Effect's ``setTimeout`` callback)."""
+
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, _signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        def register(
+            resume: Callable[[fx.Effect[res.HttpClientResponse, HttpClientError]], None],
+        ) -> None:
+            def fail_later() -> None:
+                resume(fx.fail(HttpClientError(TransportError(request))))
+
+            threading.Thread(target=fail_later).start()
+
+        return fx.callback(register)
+
+    return c.make(send)
+
+
+def _failing_on_fiber() -> c.HttpClientService[HttpClientError]:
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, _signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        return fx.fail(HttpClientError(TransportError(request)))
+
+    return c.make(send)
+
+
+def _with_names[A, E](eff: fx.Effect[A, E, Any], *names: str) -> fx.Effect[A, E, Any]:
+    return eff.pipe(fx.provide_service(up.CurrentRedactedNames, names))
+
+
+def _untraced[A, E](eff: fx.Effect[A, E, Any]) -> A:
+    return fx.run_blocking(eff.pipe(fx.provide_service(c.TracerPropagationEnabled, False)).or_die())
+
+
+@testing.effect
+def test_redacts_query_params_using_the_names_active_when_the_error_is_created():
+    """redacts query params using the redacted names active when the error is created"""
+    request = req.get("http://test/path?token=token-secret")
+    error = yield from _with_names(
+        fx.sync(lambda: HttpClientError(TransportError(request))), "token"
+    )
+    assert error.message == "Transport error (GET http://test/path?token=REDACTED)"
+    assert "token-secret" not in json.dumps(error.to_json())
+
+
+def test_keeps_the_redaction_of_an_earlier_execution_when_the_request_is_reused():
+    """keeps the redaction of an earlier execution when the request is reused"""
+    client = _failing_off_fiber()
+    request = req.get("http://test/path?token=token-secret")
+    message = "Transport error (GET http://test/path?token=REDACTED)"
+    error = _untraced(_with_names(client.execute(request).flip(), "token"))
+    assert error.message == message
+    _untraced(client.execute(request).flip())
+    assert error.message == message
+    assert "token-secret" not in json.dumps(error.to_json())
+
+
+def test_adds_the_redacted_names_of_the_fiber_that_renders_the_error():
+    """adds the redacted names of the fiber that renders the error"""
+    client = _failing_off_fiber()
+    url = "http://test/path?token=token-secret&key=key-secret"
+    error = fx.run_blocking(_with_names(client.get(url).flip(), "token").or_die())
+    message, rendered = fx.run_blocking(
+        _with_names(fx.sync(lambda: (error.message, json.dumps(error.to_json()))), "key")
+    )
+    assert message == "Transport error (GET http://test/path?token=REDACTED&key=REDACTED)"
+    assert "token-secret" not in rendered
+    assert "key-secret" not in rendered
+
+
+def test_compares_errors_equal_when_only_the_redacted_names_of_their_executions_differ():
+    """compares errors equal when only the redacted names of their executions differ"""
+    client = _failing_on_fiber()
+    request = req.get("http://test/path")
+    a = _untraced(_with_names(client.execute(request).flip(), "foo"))
+    b = _untraced(_with_names(client.execute(request).flip(), "bar"))
+    assert a.message == b.message
+    assert a == b
+    assert hash(a) == hash(b)
+
+
+def test_compares_errors_equal_when_the_rendering_fiber_redacts_them_the_same():
+    """compares errors equal when the names of the fiber that renders them redact them the same"""
+    client = _failing_on_fiber()
+    request = req.get("http://test/path?token=token-secret")
+    a = _untraced(_with_names(client.execute(request).flip(), "token"))
+    b = _untraced(_with_names(client.execute(request).flip()))
+
+    def check() -> None:
+        assert a.message == b.message
+        assert a == b
+        assert hash(a) == hash(b)
+
+    fx.run_blocking(_with_names(fx.sync(check), "token"))
+
+
+@testing.effect
+def test_keeps_the_redaction_of_an_earlier_execution_when_the_runner_returns_the_same_response():
+    """keeps the redaction of an earlier execution when the runner returns the same response"""
+    request = req.get("http://test/path?token=token-secret&key=key-secret")
+    response = res.make(request, "not-json")
+
+    def send(
+        _request: req.HttpClientRequest, _url: fx.Url, _signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        return fx.succeed(response)
+
+    client = c.make(send)
+    first = yield from _with_names(client.execute(request), "token")
+    yield from _with_names(client.execute(request), "key")
+    error = yield from first.json.flip()
+    assert isinstance(error.reason, DecodeError)
+    assert "token-secret" not in error.message
+    assert "token-secret" not in json.dumps(error.to_json())
 
 
 # followRedirects
@@ -723,3 +888,87 @@ def test_cookies_without_set_cookie() -> None:
     """reads cookies when Headers has no getSetCookie"""
     response = res.make(req.get("http://localhost"), headers={"content-type": "text/plain"})
     assert response.cookies.is_empty()
+
+
+# --- withScope owns what the client executes (Effect #10363) ----------------------------
+
+
+@testing.effect
+def test_keeps_a_redirect_scoped_when_with_scope_is_applied_outside_follow_redirects():
+    """keeps a redirect scoped when withScope is applied outside followRedirects"""
+    final = Deferred[AbortSignal]()
+
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        if request.url.endswith("/start"):
+            return fx.succeed(res.make(request, None, status=302, headers={"location": "/final"}))
+        return final.succeed(signal).and_then(fx.never)
+
+    client = c.make(send).follow_redirects().with_scope()
+    request_scope = yield from scope_.make()
+    yield from client.get("https://origin.test/start").pipe(scope_.provide(request_scope)).fork()
+    signal = yield from final.wait()
+    assert not signal.aborted
+    yield from request_scope.close(succeed_exit(None))
+    assert signal.aborted
+
+
+@testing.effect
+def test_keeps_separate_with_scope_owners_for_concurrent_runs_of_one_response_effect():
+    """keeps separate withScope owners for concurrent runs of one response effect"""
+    signals: dict[int, AbortSignal] = {}
+    dispatched = Deferred[None]()
+    both_arrived = Deferred[None]()
+    arrived = [0]
+
+    def send(
+        _request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        signals[fiber.id] = signal
+        ready = dispatched.succeed(None).as_void() if len(signals) == 2 else fx.void
+        return ready.and_then(fx.never)
+
+    def hold(
+        sending: fx.Effect[res.HttpClientResponse, HttpClientError],
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        def arrive() -> int:
+            arrived[0] += 1
+            return arrived[0]
+
+        # Hold both runs between with_scope and dispatch until both have entered.
+        entered = fx.sync(arrive).flat_map(
+            lambda n: both_arrived.succeed(None).as_void() if n == 2 else fx.void
+        )
+        return entered.and_then(both_arrived.wait()).and_then(sending)
+
+    client = c.make(send).pipe(c.transform_response(hold)).with_scope()
+    effect_ = client.get("https://origin.test/slow")
+    scope_a = yield from scope_.make()
+    scope_b = yield from scope_.make()
+    fiber_a = yield from effect_.pipe(scope_.provide(scope_a)).fork()
+    fiber_b = yield from effect_.pipe(scope_.provide(scope_b)).fork()
+    yield from dispatched.wait()
+    yield from scope_a.close(succeed_exit(None))
+    assert signals[fiber_a.id].aborted
+    assert not signals[fiber_b.id].aborted
+
+
+@testing.effect
+def test_aborts_a_with_scope_request_interrupted_before_its_response():
+    """aborts a withScope request interrupted before its response"""
+    started = Deferred[AbortSignal]()
+
+    def send(
+        _request: req.HttpClientRequest, _url: fx.Url, signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        return started.succeed(signal).and_then(fx.never)
+
+    client = c.make(send).with_scope()
+    request_scope = yield from scope_.make()
+    fiber = (
+        yield from client.get("https://origin.test/slow").pipe(scope_.provide(request_scope)).fork()
+    )
+    signal = yield from started.wait()
+    yield from fiber.interrupt()
+    assert signal.aborted

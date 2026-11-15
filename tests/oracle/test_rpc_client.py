@@ -36,18 +36,21 @@ from pyfect.clock import Clock, ClockService
 from pyfect.context import Reference
 from pyfect.deferred import Deferred
 from pyfect.duration import Duration
+from pyfect.errors import Done
 from pyfect.http import client as http_client
 from pyfect.http import response as http_response
 from pyfect.http import router, uvicorn_server
 from pyfect.http.client import HttpClient
+from pyfect.http.error import HttpClientError, HttpClientErrorSchema, TransportError
 from pyfect.latch import Latch
 from pyfect.option import Some
 from pyfect.queue import Queue
-from pyfect.rpc import RpcClientDefect, RpcClientError, RpcGroup, make, rpc_schema
+from pyfect.rpc import RpcClientDefect, RpcClientError, RpcGroup, RpcMiddleware, make, rpc_schema
 from pyfect.rpc import client as rpc_client
 from pyfect.rpc import serialization as rs
 from pyfect.rpc import server as rpc_server
 from pyfect.rpc.client import ClientOptions, ClientProtocol, ClientProtocolService
+from pyfect.rpc.group import RpcGroupWith
 from pyfect.rpc.message import Ack, Request, ResponseChunk
 from pyfect.schema import transformation as T
 from pyfect.scope import CloseableScope, Scope
@@ -393,6 +396,31 @@ def test_fails_request_on_empty_http_response(serialization: Any, body: str) -> 
         assert isinstance(error, RpcClientError)
         assert isinstance(error.reason, RpcClientDefect)
         assert error.reason.message == "Received empty HTTP response from RPC server"
+
+    _run(program)
+
+
+def test_includes_the_http_failure_in_the_error_message() -> None:
+    """RpcClient / includes the HTTP failure in the error message"""
+
+    def send(request: Any, *_: object) -> Effect[Any, HttpClientError]:
+        reason = TransportError(request, description="connect ECONNREFUSED")
+        return effect.fail(HttpClientError(reason))
+
+    protocol = (
+        rpc_client.layer_protocol_http("http://localhost/rpc/")
+        .pipe(layer.provide_merge(rs.layer_json))
+        .pipe(layer.provide_merge(layer.succeed(HttpClient, http_client.make(send))))
+    )
+
+    def program():
+        client = yield from rpc_client.make(TestGroup, layer=protocol)
+        error = yield from client.ping().flip()
+        assert isinstance(error, RpcClientError)
+        assert isinstance(error.reason, HttpClientErrorSchema)
+        assert error.message == (
+            "HttpError: Transport: connect ECONNREFUSED (POST http://localhost/rpc/)"
+        )
 
     _run(program)
 
@@ -1448,3 +1476,68 @@ def test_sends_a_discarded_call_to_a_worker_as_a_request_and_waits_for_its_exit(
     handler = yield from reply.wait()
     yield from handler({"_tag": "Exit", "requestId": 1, "exit": {"_tag": "Success", "value": None}})
     yield from call.join()
+
+
+# --- middleware errors (Effect #10418) ---------------------------------------------------
+
+
+class Unauthorized(S.TaggedError):
+    pass
+
+
+class Auth(RpcMiddleware[Never, Unauthorized, Never], key="RpcClientTest/Auth"):
+    error = Unauthorized
+
+
+class AuthGroup(RpcGroupWith[Auth]):
+    # None of these RPCs declare Unauthorized; it comes from the middleware.
+    get = make("Get", success=S.String)
+    events = make("Events", success=S.String, stream=True)
+    events_queue = make("EventsQueue", success=S.String, stream=True)
+
+
+def _append_to(values: list[str]) -> Callable[[str], Effect[None]]:
+    return lambda value: effect.sync(lambda: values.append(value))
+
+
+def test_handlers_fail_with_middleware_errors_over_the_wire() -> None:
+    """RpcClient / handlers fail with middleware errors over the wire"""
+
+    def events_queue(_: object) -> Effect[Queue[str, Unauthorized | Done], Unauthorized, Scope]:
+        def body():
+            queue = yield from Queue[str, Unauthorized | Done].unbounded()
+            yield from queue.offer("a")
+            yield from queue.fail(Unauthorized())
+            return queue
+
+        return effect.gen(body)
+
+    handlers = AuthGroup.to_layer(
+        AuthGroup.handlers()
+        .handle(AuthGroup.get)(lambda _: effect.fail(Unauthorized()))
+        .handle(AuthGroup.events)(lambda _: stream.make("a").concat(stream.fail(Unauthorized())))
+        .handle(AuthGroup.events_queue)(events_queue)
+    )
+    server = (
+        rpc_server.layer_http(AuthGroup, path="/rpc", protocol="http")
+        .pipe(layer.provide(handlers))
+        .pipe(layer.provide(layer.succeed(Auth, lambda handler, _options: handler)))
+        .pipe(layer.provide(rs.layer_json))
+    )
+
+    def program():
+        http = yield from router.in_memory_client(server)
+        protocol = (
+            rpc_client.layer_protocol_http("http://test/rpc")
+            .pipe(layer.provide_merge(rs.layer_json))
+            .pipe(layer.provide_merge(layer.succeed(HttpClient, http)))
+        )
+        client = yield from rpc_client.make(AuthGroup, layer=protocol)
+        assert isinstance((yield from client.get().flip()), Unauthorized)
+        for events in (client.events(), client.events_queue()):
+            received: list[str] = []
+            error = yield from events.tap(_append_to(received)).run_drain().flip()
+            assert received == ["a"]
+            assert isinstance(error, Unauthorized)
+
+    _run(program)

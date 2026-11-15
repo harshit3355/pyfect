@@ -156,14 +156,19 @@ _EARLIER = "Sat, 05 Nov 1994 10:00:00 GMT"
 @pytest.mark.parametrize(
     ("headers", "status"),
     [
-        ({"If-Match": '"stale"', "If-None-Match": '"v1"', "Range": "bytes=2-5"}, 412),
-        ({"If-Match": 'W/"v1"'}, 412),
-        ({"If-Match": 'w/"v1"'}, 412),
-        ({"If-Match": '"other", "v1"', "If-None-Match": '"v1"'}, 304),
-        ({"If-Unmodified-Since": _EARLIER, "If-None-Match": '"v1"', "Range": "bytes=2-5"}, 412),
+        ({"If-Match": '"stale"', "If-None-Match": '"v1,part"', "Range": "bytes=2-5"}, 412),
+        ({"If-Match": 'W/"v1,part"'}, 412),
+        ({"If-Match": 'w/"v1,part"'}, 412),
+        ({"If-Match": '"other", "v1,part"', "If-None-Match": '"v1,part"'}, 304),
+        (
+            {"If-Unmodified-Since": _EARLIER, "If-None-Match": '"v1,part"', "Range": "bytes=2-5"},
+            412,
+        ),
+        ({"If-None-Match": '"stale", W/"v1,part"'}, 304),
+        ({"If-None-Match": '"v1", "part"'}, 200),
         ({"If-Unmodified-Since": LAST_MODIFIED}, 200),
         ({"If-Unmodified-Since": "invalid"}, 200),
-        ({"If-Match": '"v1"', "If-Unmodified-Since": _EARLIER}, 200),
+        ({"If-Match": '"v1,part"', "If-Unmodified-Since": _EARLIER}, 200),
     ],
 )
 def test_evaluates_preconditions_before_cache_validators_and_ranges(
@@ -172,7 +177,7 @@ def test_evaluates_preconditions_before_cache_validators_and_ranges(
     """HttpStaticServer conditional requests evaluates preconditions before cache validators and ranges"""  # noqa: E501
 
     async def main() -> tuple[int, bytes, dict[str, str]]:
-        app_layer = services(StatFileSystem(10), text_platform(LAST_MODIFIED, '"v1"'))
+        app_layer = services(StatFileSystem(10), text_platform(LAST_MODIFIED, '"v1,part"'))
         app = await fx.run_async(static.make(root="/root").pipe(fx.provide(app_layer)))
         response = await to_web_handler(app)(
             WebRequest("http://localhost/file.txt", headers=headers)

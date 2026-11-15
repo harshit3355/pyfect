@@ -179,11 +179,22 @@ class _NumberPrompt[N: (int, float)]:
         )
 
 
+def _int_input(typed: str, parsed: int) -> str:
+    # Python's ints have no -0, so a zero keeps the minus sign the user typed.
+    return "-0" if parsed == 0 and typed.lstrip().startswith("-") else str(parsed)
+
+
+def _float_input(parsed: float) -> str:
+    # ``js_number(-0.0)`` is "0", as in JavaScript, which would drop a minus sign just typed.
+    return "-0" if parsed == 0 and math.copysign(1.0, parsed) < 0 else js_number(parsed)
+
+
 def _typed_int(text: str, state: _State) -> Effect[Action[_State, int]]:
     if not state.value and text == "-":
         return _frame(state, "-")
-    parsed = parse_int(state.value + text)
-    return succeed(Beep()) if parsed is None else _frame(state, str(parsed))
+    typed = state.value + text
+    parsed = parse_int(typed)
+    return succeed(Beep()) if parsed is None else _frame(state, _int_input(typed, parsed))
 
 
 def _typed_float(text: str, state: _State) -> Effect[Action[_State, float]]:
@@ -195,10 +206,10 @@ def _typed_float(text: str, state: _State) -> Effect[Action[_State, float]]:
     if parsed is None:
         return succeed(Beep())
     if text == ".":
-        return _frame(state, f"{js_number(parsed)}.")
+        return _frame(state, f"{_float_input(parsed)}.")
     if "." in state.value and re.fullmatch(r"[0-9]", text):
         return _frame(state, state.value + text)
-    return _frame(state, js_number(parsed))
+    return _frame(state, _float_input(parsed))
 
 
 def integer(

@@ -82,6 +82,7 @@ def _flag_entry(flag: FlagDescriptor) -> str:
         f"takesValue = {_bool(flag.type != 'Boolean')}; "
         + ("" if negation is None else f"negation = {_quote(f'--{negation}')}; ")
         + ("optionalValue = $true; " if flag.optional_value else "")
+        + ("repeatable = $true; " if flag.repeatable else "")
         + f"{_value_fields(flag.type)}; "
         + f"description = {_optional(flag.description)} }}"
     )

@@ -26,12 +26,12 @@ from pyfect._layer_core import MemoMap, require_layer
 from pyfect.context import Context
 from pyfect.effect import fail, succeed, try_async, void
 from pyfect.exit import Exit, Success
-from pyfect.http import _request_state
+from pyfect.exit import interrupt as interrupt_exit
 from pyfect.http import body as _body
 from pyfect.http._foreign_path import has_dot_segment
 from pyfect.http._url_text import split_url
 from pyfect.http.abort import AbortController, AbortSignal
-from pyfect.http.http_effect import HttpMiddleware, to_handled
+from pyfect.http.http_effect import HttpMiddleware, _transfer_to_stream, to_handled
 from pyfect.http.server_error import (
     CLIENT_ABORT_ANNOTATION,
     HttpServerError,
@@ -160,21 +160,21 @@ def request_to_web(
 
 
 class _StreamBody:
-    """A streamed body, read once in asyncio. When ``scope`` is given it
-    closes when the read stops, or when ``signal`` fires (read or not)."""
+    """A streamed body, read once in asyncio, which stops when ``signal`` fires. A body the
+    signal stops before it is read ends with an interruption through ``abandon``."""
 
-    __slots__ = ("_closing", "_context", "_scope", "_started", "_stream")
+    __slots__ = ("_abandon", "_closing", "_context", "_started", "_stream")
 
     def __init__(
         self,
         stream: Stream[bytes, Any, Any],
         context: Context[Any],
-        scope: CloseableScope | None,
+        abandon: Callable[[Exit[Any, Any]], Effect[None]] | None,
         signal: AbortSignal | None,
     ) -> None:
         self._stream = stream
         self._context = context
-        self._scope = scope
+        self._abandon = abandon
         self._started: AsyncIterator[bytes] | None = None
         self._closing: list[asyncio.Task[None]] = []
         if signal is not None:
@@ -184,8 +184,8 @@ class _StreamBody:
         started = self._started
         if started is not None:
             self._closing.append(asyncio.ensure_future(_aclose(started)))
-        elif self._scope is not None:
-            run_fork(self._scope.close(Success(None)))
+        elif self._abandon is not None:
+            run_fork(self._abandon(interrupt_exit()))
 
     def __aiter__(self) -> AsyncIterator[bytes]:
         if self._started is not None:
@@ -217,6 +217,24 @@ def response_to_web(
     """``response`` as a ``WebResponse`` (Effect's
     ``HttpServerResponse.toWeb``): a streamed body runs with ``context``
     when read, and stops when ``signal`` fires; ``scope`` closes with it."""
+    if scope is None or not isinstance(response.body, _body.Stream):
+        return _to_web(response, without_body, context, signal, None)
+    closing = response.body.stream.on_exit(scope.close)
+    streamed = response.set_body_keep_headers(
+        _body.Stream(closing, response.body.content_type, response.body.content_length)
+    )
+    return _to_web(streamed, without_body, context, signal, scope.close)
+
+
+def _to_web(
+    response: HttpServerResponse,
+    without_body: bool,
+    context: Context[Any] | None,
+    signal: AbortSignal | None,
+    abandon: Callable[[Exit[Any, Any]], Effect[None]] | None,
+) -> WebResponse:
+    """``response_to_web``; ``abandon`` is what the streamed body calls with an
+    interruption when the signal stops it before it is read."""
     raw = response.body.body if isinstance(response.body, _body.Raw) else None
     if (
         isinstance(raw, WebResponse)
@@ -233,8 +251,7 @@ def response_to_web(
         case None | bytes():
             body = wire.body
         case stream:
-            closing = stream if scope is None else stream.on_exit(scope.close)
-            body = _StreamBody(closing, context or Context.empty(), scope, signal)
+            body = _StreamBody(stream, context or Context.empty(), abandon, signal)
     return WebResponse(body, status=wire.status, status_text=wire.status_text, headers=wire.headers)
 
 
@@ -274,18 +291,12 @@ def _handle(
     ) -> Effect[None]:
         without_body = server_request.method == "HEAD"
         fiber = Fiber.get_current()
-        scope: CloseableScope | None = None
-        if fiber is not None and not omits_body(response, without_body):
-            state = _request_state.get(fiber._context)
-            found, current = fiber._context.lookup(Scope)
-            if state is not None and found and isinstance(response.body, _body.Stream):
-                # The body closes the request's scope, even if it is never read.
-                state.scope_ejected = True
-                scope = current
+        abandon = None
+        if not omits_body(response, without_body):
+            # The body closes the request's scope, even if an abort stops it unread.
+            response, abandon = _transfer_to_stream(response)
         context = static if fiber is None else fiber._context
-        web = response_to_web(
-            response, without_body=without_body, context=context, signal=signal, scope=scope
-        )
+        web = _to_web(response, without_body, context, signal, abandon)
         if not result.done():
             result.set_result(web)
         return void

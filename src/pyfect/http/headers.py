@@ -25,6 +25,7 @@ from pyfect.duration import Duration, from_input_unsafe, nanos, seconds, zero
 from pyfect.duration import Input as DurationInput
 from pyfect.duration import millis as millis_duration
 from pyfect.errors import TaggedError
+from pyfect.http import _header_lines
 from pyfect.redacted import Redacted
 from pyfect.result import Err, Ok, Result
 
@@ -118,6 +119,10 @@ EMPTY: Headers = Headers()
 
 
 def from_input(input: Input | None = None) -> Headers:
+    """Headers from a mapping or ``(name, value)`` pairs. Names are lowercased; list values
+    in a mapping and repeated names in pairs are joined with ``", "``, and ``None`` values
+    are left out. A comma-joined ``set-cookie`` is not safe to forward as one header: read a
+    client response's ``cookies`` instead."""
     if input is None:
         return EMPTY
     if isinstance(input, Headers):
@@ -131,7 +136,7 @@ def from_input(input: Input | None = None) -> Headers:
             elif value is not None:
                 out[key.lower()] = ", ".join(value)
         return Headers._unsafe(out)  # pyright: ignore[reportPrivateUsage]
-    return Headers._unsafe({k.lower(): v for k, v in input})  # pyright: ignore[reportPrivateUsage]
+    return Headers._unsafe(_header_lines.joined((name.lower(), value) for name, value in input))  # pyright: ignore[reportPrivateUsage]
 
 
 def is_redacted_name(name: str, patterns: Sequence[Pattern]) -> bool:

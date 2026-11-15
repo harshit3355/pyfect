@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+import socket
 import time
 from collections.abc import Callable
 from typing import Any, Never
@@ -54,6 +55,7 @@ from pyfect.http.client import HttpClient
 from pyfect.http.incoming_message import MaxBodySize
 from pyfect.http.server_request import HttpServerRequest, ServerRequest
 from pyfect.http.server_response import HttpServerResponse
+from pyfect.net.net_address import InetAddressV4
 from pyfect.scope import Scope, scoped
 
 from ._live_http import (
@@ -1025,3 +1027,61 @@ def test_a_body_stream_failing_after_the_head_is_a_defect_beside_the_response() 
     assert stream_error.defect == "boom"
     assert isinstance(sent_response, Die)
     assert isinstance(sent_response.defect, HttpServerResponse)
+
+
+def test_layer_test_binds_to_ipv4_loopback() -> None:
+    """layerTest binds to IPv4 loopback"""
+
+    @fx.fn
+    def program():
+        return (yield from server.HttpServer()).address
+
+    address = run_live(program())
+    assert isinstance(address, InetAddressV4)
+    assert str(address.address) == "127.0.0.1"
+
+
+def test_interrupts_an_interruptible_handler_after_the_graceful_shutdown_timeout() -> None:
+    """interrupts an interruptible served handler once the graceful shutdown timeout elapses"""
+    from pyfect.deferred import Deferred
+
+    started: Deferred[None] = Deferred()
+    interrupted: list[bool] = []
+    app = (
+        started.succeed(None)
+        .and_then(effect.never)
+        .on_interrupt(effect.sync(lambda: interrupted.append(True)))
+        .as_(server_response.text("done"))
+        .interruptible()
+    )
+
+    @fx.fn
+    def program():
+        at = yield from _serve(app)
+        yield from with_socket(at, lambda conn: conn.sendall(b"GET / HTTP/1.1\r\nhost: x\r\n\r\n"))
+        yield from started.wait()
+
+    run_live(program(), graceful_shutdown_timeout="100 millis")
+    assert interrupted == [True]
+
+
+def test_closes_an_upgrade_answered_with_a_response_when_more_bytes_arrive_after_it() -> None:
+    """closes an upgrade answered with a response when more bytes arrive after it"""
+    app = router.add("GET", "/other", effect.succeed(server_response.empty()))
+
+    def half_open(conn: Any) -> bytes:
+        conn.sendall(_upgrade_request("/attach"))
+        received = conn.recv(65536)
+        conn.sendall(b"early")
+        conn.shutdown(socket.SHUT_WR)
+        while chunk := conn.recv(65536):
+            received += chunk
+        return received
+
+    @fx.fn
+    def program():
+        at = yield from port
+        return (yield from with_socket(at, half_open))
+
+    received = run_live(_routed(app, program()))
+    assert received.startswith(b"HTTP/1.1 404 ")

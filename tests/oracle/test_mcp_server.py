@@ -48,6 +48,7 @@ from pyfect.http import request as R
 from pyfect.http.client import HttpClientService
 from pyfect.http.response import HttpClientResponse
 from pyfect.queue import Queue
+from pyfect.run import default_teardown
 
 from ._mcp import CLIENT_INFO, in_memory_http, stdio_harness
 from ._mcp_http import http_harness, initialize_session, read_message, server_layer, sse_reader
@@ -1242,6 +1243,15 @@ def test_a_session_stream_nobody_reads_holds_up_no_other_stream_of_the_session()
     message = yield from stream.take().timeout("1 second")
     assert message["method"] == "notifications/tools/list_changed"
     yield from never_answered.succeed(None)
+
+
+@testing.effect
+def test_should_exit_successfully_when_stdin_closes_after_initialization():
+    """McpServer / stdio / should exit successfully when stdin closes after initialization"""
+    harness = yield from stdio_harness(P.v2025_06_18)
+    yield from harness.initialize()
+    yield from harness.close
+    assert default_teardown((yield from harness.fiber.await_exit())) == 0
 
 
 @testing.effect

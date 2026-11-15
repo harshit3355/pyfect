@@ -398,7 +398,6 @@ class HttpClientService[E, R = Never]:
         ``follow_redirects`` applied after it, on every hop. Expiry reads the
         ``Clock``."""
         from pyfect.clock import current_time_millis
-        from pyfect.http.client._make import carry_scope
         from pyfect.http.cookies import merge_into_array, to_request_cookie_header
 
         pre = self._preprocess
@@ -409,8 +408,7 @@ class HttpClientService[E, R = Never]:
                 header = to_request_cookie_header(jar, request.url, now)
                 if header is None:
                     return succeed(request)
-                with_cookies = request.set_header("cookie", header)
-                return carry_scope(request, with_cookies).as_(with_cookies)
+                return succeed(request.set_header("cookie", header))
 
             return ref.get().zip_with(current_time_millis(), with_header).flatten()
 
@@ -428,11 +426,19 @@ class HttpClientService[E, R = Never]:
         return HttpClientService(store, pre)
 
     def with_scope(self) -> HttpClientService[E, R | Scope]:
-        """Tie each request to the current ``Scope``: closing it aborts the
-        request and its response body, which stay readable until then."""
+        """Attach every request the client sends to the current ``Scope``, which aborts them
+        when it closes (Effect's ``withScope``). Ownership follows the execution, not the
+        request: every redirect hop, retry and request rewritten by middleware, whichever side
+        of ``follow_redirects``, ``with_cookies_ref`` or ``retry_transient`` this is on.
+        Running one response effect concurrently under different scopes gives each run its
+        own owner. A request sent after the scope closed is aborted before the transport
+        starts it, and one interrupted before its response is aborted at once; a response's
+        body stays readable until the scope closes. Requests middleware sends with another
+        client while this one executes are attached too; the innermost ``with_scope`` owns
+        them."""
         from pyfect.http.client._make import scoped
 
-        return self.transform(scoped)
+        return self._on_response(scoped)
 
     def follow_redirects(self, max_redirects: int = 10) -> HttpClientService[E, R]:
         """Follow 3xx responses with a ``Location``, up to ``max_redirects``

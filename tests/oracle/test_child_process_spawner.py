@@ -1644,3 +1644,33 @@ def test_scope_release_returns_when_stdout_is_unread_and_backpressured(
         yield from fx.sleep("100 millis")
 
     assert (yield from _timed(fx.scoped(run()))) < 2
+
+
+@testing.live
+def test_scope_release_closes_stdin_for_a_child_that_drains_it_on_the_kill_signal(
+    live_services: Services[Platform], tmp: str
+):
+    """scope release closes stdin for a child that drains it on the kill signal
+
+    Effect times the release; here the child records that it saw end of input, and it can
+    only do so if the release closed its stdin."""
+    marker = os.path.join(tmp, "eof")
+    child = (
+        "import signal, sys, time\n"
+        "def on_term(*_):\n"
+        "    sys.stdin.read()\n"
+        f"    open({marker!r}, 'w').write('eof')\n"
+        "    sys.exit(0)\n"
+        "signal.signal(signal.SIGTERM, on_term)\n"
+        "print('READY', flush=True)\n"
+        "time.sleep(30)\n"
+    )
+
+    @fx.fn
+    def run():
+        handle = yield from make(sys.executable, ["-c", child], stdin=stream.never)
+        yield from handle.stdout.run_head()
+
+    yield from fx.scoped(run())
+    with open(marker) as written:
+        assert written.read() == "eof"

@@ -26,6 +26,8 @@ import re
 from datetime import UTC, datetime
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 
 from pyfect import schema as S
 from pyfect.duration import infinity, seconds
@@ -44,6 +46,19 @@ def _ok[A](result: Result[A, h.HeaderParseError]) -> A:
             return value
         case Err(error):
             raise AssertionError(error)
+
+
+def test_from_input_joins_repeated_names_in_iterable_input() -> None:
+    """fromInput joins repeated names in iterable input"""
+    headers = h.from_input([("Accept", "text/html"), ("accept", "application/json")])
+    assert dict(headers) == {"accept": "text/html, application/json"}
+
+
+@given(st.lists(st.tuples(st.sampled_from(["a", "A", "b", "B"]), st.text(max_size=3))))
+def test_from_input_keeps_every_value_of_iterable_input(pairs: list[tuple[str, str]]) -> None:
+    headers = h.from_input(pairs)
+    for name in {k.lower() for k, _ in pairs}:
+        assert headers[name] == ", ".join(v for k, v in pairs if k.lower() == name)
 
 
 def test_remove() -> None:

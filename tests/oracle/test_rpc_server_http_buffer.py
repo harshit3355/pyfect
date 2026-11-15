@@ -7,13 +7,15 @@ from __future__ import annotations
 # pyright: reportUnknownLambdaType=false, reportUnknownMemberType=false
 # pyright: reportUnknownVariableType=false, reportUnknownArgumentType=false
 import json
-from typing import Any
+from typing import Any, TypedDict, cast
+
+import pytest
 
 import pyfect as fx
 from pyfect import effect, layer, stream, testing
 from pyfect import schema as S
 from pyfect.deferred import Deferred
-from pyfect.exit import Success
+from pyfect.exit import Failure, Success
 from pyfect.http import request as R
 from pyfect.http import router, server_request
 from pyfect.http.server_request import HttpServerRequest
@@ -142,3 +144,150 @@ def test_should_continue_sending_to_other_clients_when_a_backpressured_http_clie
     yield from protocol.end(second_id)
     body = yield from to_client_response(response).text
     assert [json.loads(line) for line in body.strip().split("\n")] == [pong, pong]
+
+
+# --- a framed batch dispatched while its response drains (Effect #10424) ------------------
+
+
+def _unknown(request_id: int) -> str:
+    return f'{{"_tag":"Request","id":{request_id},"tag":"unknown","payload":{{}},"headers":[]}}\n'
+
+
+def _framed_server(group: type[RpcGroup], handlers: Any) -> Any:
+    return (
+        rpc_server.layer_http(group, path="/rpc", protocol="http", stream_buffer_size=1)
+        .pipe(layer.provide(handlers))
+        .pipe(layer.provide(rs.layer_ndjson))
+    )
+
+
+def _post_text(body: str) -> Any:
+    return R.post("http://test/rpc").body_text(body, "application/x-ndjson")
+
+
+def _start_server(client: Any) -> fx.Effect[None, Any]:
+    """Effect's first request, which starts the server's message loop. Here the loop is a fiber
+    the layer forked, which runs once the test yields."""
+    return client.execute(_post_text("")).flat_map(lambda r: r.text).and_then(effect.yield_now())
+
+
+class Ping(RpcGroup):
+    ping = make("ping")
+
+
+@testing.effect
+def test_drains_framed_http_responses_while_dispatching_a_batch_larger_than_the_buffer():
+    """RpcServer / drains framed HTTP responses while dispatching a batch larger than the buffer"""
+    server = _framed_server(
+        Ping, Ping.to_layer(Ping.handlers().handle(Ping.ping)(lambda _: effect.void))
+    )
+    client = yield from router.in_memory_client(server)
+    yield from _start_server(client)
+    response = yield from client.execute(_post_text(_unknown(1) + _unknown(2)))
+    body = yield from response.text
+    assert [json.loads(line)["requestId"] for line in body.strip().split("\n")] == [1, 2]
+
+
+@pytest.mark.parametrize("buffer", [1, 2, 3])
+@pytest.mark.parametrize("size", [1, 4, 9])
+def test_a_framed_http_batch_of_any_size_is_answered_in_full(buffer: int, size: int) -> None:
+    """Whatever the batch and the buffer, dispatching never waits on the response it fills:
+    every request is answered, in order."""
+    server = (
+        rpc_server.layer_http(Ping, path="/rpc", protocol="http", stream_buffer_size=buffer)
+        .pipe(
+            layer.provide(Ping.to_layer(Ping.handlers().handle(Ping.ping)(lambda _: effect.void)))
+        )
+        .pipe(layer.provide(rs.layer_ndjson))
+    )
+
+    @testing.effect
+    def body():
+        client = yield from router.in_memory_client(server)
+        yield from _start_server(client)
+        batch = "".join(_unknown(i) for i in range(1, size + 1))
+        text = yield from client.execute(_post_text(batch)).flat_map(lambda r: r.text)
+        ids = [json.loads(line)["requestId"] for line in text.strip().split("\n")]
+        assert ids == list(range(1, size + 1))
+
+    body()
+
+
+class _NoFields(TypedDict):
+    pass
+
+
+class _BoomFields(TypedDict):
+    value: str
+
+
+class Wait(RpcGroup):
+    wait = make("wait", payload=S.Struct(_NoFields))
+
+
+@testing.effect
+def test_terminates_a_framed_http_request_that_reuses_an_active_request_id():
+    """RpcServer / terminates a framed HTTP request that reuses an active request id"""
+    finalized = Deferred[Any]()
+    handlers = Wait.to_layer(
+        Wait.handlers().handle(Wait.wait)(
+            lambda _: effect.never.on_exit(lambda exit: finalized.succeed(exit).as_void())
+        )
+    )
+    client = yield from router.in_memory_client(_framed_server(Wait, handlers))
+    yield from _start_server(client)
+    wait = '{"_tag":"Request","id":100,"tag":"wait","payload":{},"headers":[]}\n'
+    # Effect checks for a failed status or an incomplete body; the in-memory client fails either.
+    sent = client.execute(_post_text(_unknown(1) + _unknown(2) + wait + wait))
+    outcome = yield from sent.flat_map(lambda r: r.text).exit()
+    assert isinstance(outcome, Failure)
+    exit = yield from finalized.wait()
+    assert isinstance(exit, Failure)
+    assert exit.cause.has_interrupts
+
+
+class _DecodeDefect(Exception):
+    pass
+
+
+def _dying_default(defect: Exception) -> Any:
+    """A missing key decoded by dying with ``defect``."""
+    return S.with_decoding_default_key(effect.die(defect))
+
+
+@testing.effect
+def test_fails_a_framed_http_request_with_its_dispatch_defect():
+    """RpcServer / fails a framed HTTP request with its dispatch defect"""
+    defect = _DecodeDefect("decode defect")
+
+    class Boom(RpcGroup):
+        boom = make(
+            "boom",
+            # The default dies, so its type says nothing; the struct is typed by hand.
+            payload=cast(
+                "S.Codec[_BoomFields, Any]",
+                S.Struct(_BoomFields, value=S.String.pipe(_dying_default(defect))),
+            ),
+        )
+
+    handlers = Boom.to_layer(Boom.handlers().handle(Boom.boom)(lambda _: effect.void))
+    client = yield from router.in_memory_client(_framed_server(Boom, handlers))
+    yield from _start_server(client)
+    boom = '{"_tag":"Request","id":100,"tag":"boom","payload":{},"headers":[]}\n'
+    # The in-memory client dies with what a web handler answers with a 500.
+    alone = yield from client.execute(_post_text(boom)).exit()
+    assert isinstance(alone, Failure)
+    assert alone.cause.squash() is defect
+    streamed = yield from client.execute(_post_text(_unknown(1) + _unknown(2) + _unknown(3) + boom))
+    read = yield from streamed.text.exit()
+    assert isinstance(read, Failure)
+    assert defect in _chain(read.cause.squash())
+
+
+def _chain(error: object) -> list[object]:
+    """``error`` and its causes."""
+    found: list[object] = []
+    while error is not None and error not in found:
+        found.append(error)
+        error = getattr(error, "cause", None) or getattr(error, "__cause__", None)
+    return found

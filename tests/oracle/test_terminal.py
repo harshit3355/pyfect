@@ -18,7 +18,7 @@ import signal
 import sys
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -54,6 +54,53 @@ def test_does_not_install_a_readline_interface_until_the_terminal_is_used():
     with _pipe(b"untouched") as fd:
         _terminal(fd)
         assert os.read(fd, 100) == b"untouched"
+
+
+class _Counted:
+    """Stands in for ``sys.stdin`` / ``sys.stdout`` and counts every use (Effect counts reads
+    of ``process.stdin`` / ``process.stdout``)."""
+
+    def __init__(self, target: Any) -> None:
+        self._target = target
+        self.uses = 0
+
+    def __getattr__(self, name: str) -> Any:
+        self.uses += 1
+        return getattr(self._target, name)
+
+
+@contextmanager
+def _counted_stdio() -> Generator[tuple[_Counted, _Counted]]:
+    stdin, stdout = _Counted(sys.stdin), _Counted(io.StringIO())
+    saved = sys.stdin, sys.stdout
+    sys.stdin, sys.stdout = cast("Any", stdin), cast("Any", stdout)
+    try:
+        yield stdin, stdout
+    finally:
+        sys.stdin, sys.stdout = saved
+
+
+def test_does_not_access_stdio_when_building_or_disposing_an_unused_layer():
+    """does not access stdio when building or disposing an unused layer"""
+    with _counted_stdio() as (stdin, stdout):
+        fx.run_blocking(fx.scoped(Terminal().as_void()).pipe(fx.provide(terminal.layer)))
+    assert (stdin.uses, stdout.uses) == (0, 0)
+
+
+def test_does_not_access_stdin_for_output_only_operations():
+    """does not access stdin for output-only operations"""
+
+    @fx.fn
+    def output():
+        service = yield from Terminal()
+        yield from service.display("")
+        yield from service.columns
+        yield from service.rows
+        yield from fx.scoped(service.size)
+
+    with _counted_stdio() as (stdin, _stdout):
+        fx.run_blocking(output().pipe(fx.provide(terminal.layer)).or_die())
+    assert stdin.uses == 0
 
 
 @testing.live

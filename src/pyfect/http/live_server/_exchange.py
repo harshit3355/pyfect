@@ -20,6 +20,7 @@ from typing import Any
 
 from pyfect._core import Effect
 from pyfect._digits import parse_digits
+from pyfect._effect_args import require_effect
 from pyfect.cause import Cause
 from pyfect.cause import die as die_cause
 from pyfect.effect import fail_cause, succeed, suspend, void
@@ -114,6 +115,7 @@ class Exchange:
         "close_after",
         "conn",
         "finished",
+        "go_away",
         "head",
         "headers_sent",
         "keep_alive_seconds",
@@ -139,6 +141,9 @@ class Exchange:
         self.close_after = not head.keep_alive or head.upgrade is not None
         self.keep_alive_seconds = keep_alive_seconds
         self.upgraded: HttpServerResponse | None = None
+        self.go_away: Effect[None] | None = None
+        """Once the switch is sent, how shutdown asks the upgraded connection to end: a
+        WebSocket close with 1001 (Going Away), or the end of the server's side."""
         self.aborted = False
         """The client went first (Node's server then writes nothing more)."""
 
@@ -150,6 +155,18 @@ class Exchange:
             return void
 
         return self.conn.write(chunks).catch_all(lost)
+
+    def write_switch(self, head: bytes, go_away: Effect[None]) -> Effect[None, SocketError]:
+        """Write the ``101`` head; ``go_away`` is how shutdown ends the upgraded connection.
+        It is set on the loop as the head is handed to the transport, since the client can
+        see the head, and shutdown begin, before this write returns."""
+        require_effect(go_away, "go_away")
+
+        def switching() -> tuple[bytes, ...]:
+            self.go_away = go_away
+            return (head,)
+
+        return self.conn.write_with(switching)
 
     def write_continue(self) -> Effect[None]:
         """Ask the client for the body it holds back, once."""

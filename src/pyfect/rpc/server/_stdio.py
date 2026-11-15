@@ -9,8 +9,11 @@ from __future__ import annotations
 from typing import Any, Never, cast
 
 from pyfect._core import Effect
-from pyfect.effect import current_fiber, gen, succeed
+from pyfect._fiber import Fiber
+from pyfect.context import Context
+from pyfect.effect import current_fiber, gen, succeed, void
 from pyfect.errors import Done
+from pyfect.exit import Exit, Failure, Success
 from pyfect.layer import Layer
 from pyfect.layer import effect as layer_effect
 from pyfect.logger import log_error
@@ -25,6 +28,7 @@ from pyfect.rpc.server._protocol import (
     WriteRequest,
     with_run,
 )
+from pyfect.run import InterruptExitCode
 from pyfect.schedule import spaced
 from pyfect.scope import Scope, fork_scoped
 from pyfect.stdio import Stdio
@@ -70,7 +74,7 @@ def make_protocol_stdio() -> Effect[ServerProtocolService, Never, Stdio | RpcSer
                     from_queue(output)
                     .run(stdio.stdout())
                     .retry(spaced(_RETRY_EVERY))
-                    .ensuring(fiber.interrupt().fork_daemon(start_immediately=True).as_void())
+                    .on_exit(lambda exit: _end_server(fiber, exit))
                 )
 
                 def send(_client: int, response: Message) -> Effect[None]:
@@ -92,6 +96,16 @@ def make_protocol_stdio() -> Effect[ServerProtocolService, Never, Stdio | RpcSer
         return (yield from with_run(parts))
 
     return make
+
+
+def _end_server(server: Fiber[Any, Any], output: Exit[Any, Any]) -> Effect[None]:
+    """Ends the server once its output stops: with exit code 0 once the output has drained,
+    with a plain interruption (130) after a failed write, and not at all when the output was
+    interrupted, as the server is ending already."""
+    if isinstance(output, Failure) and output.cause.has_interrupts_only:
+        return void
+    done = Context.make(InterruptExitCode, 0) if isinstance(output, Success) else None
+    return server.interrupt_as(None, done).fork_daemon(start_immediately=True).as_void()
 
 
 layer_protocol_stdio: Layer[ServerProtocol, Never, Stdio | RpcSerialization] = layer_effect(

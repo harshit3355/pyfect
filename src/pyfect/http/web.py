@@ -14,9 +14,8 @@ from typing import Any, cast, final
 
 from pyfect import _json_text
 from pyfect._js import text_encode
-from pyfect.http import _header_lines
 from pyfect.http.abort import AbortSignal
-from pyfect.http.headers import Headers
+from pyfect.http.headers import Headers, from_input
 
 type WebBody = bytes | AsyncIterable[bytes] | None
 type HeaderLines = Mapping[str, str] | Iterable[tuple[str, str]]
@@ -126,7 +125,7 @@ class WebRequest(_Message):
 
     @property
     def headers(self) -> Headers:
-        return Headers(_header_lines.joined(self.header_lines))
+        return from_input(self.header_lines)
 
 
 @final

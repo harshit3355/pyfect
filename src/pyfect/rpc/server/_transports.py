@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, Never, cast
 
 from pyfect._core import Effect
+from pyfect.cause import Cause
 from pyfect.effect import fail, gen, succeed, suspend, sync
 from pyfect.errors import Done
 from pyfect.http.origin import origin_allowed
@@ -341,57 +342,45 @@ class _HttpHandler:
             request_ids: list[RequestId] = []
             client = _HttpClient(self._writer(queue, parser), queue.end().as_void())
 
+            write = self._writes[0]
+            terminate = _terminator(queue, request_ids, lambda m: write(client_id, m))
+
             def leave(_: object) -> Effect[None]:
                 self._clients.pop(client_id, None)
                 self._disconnects.offer_unsafe(client_id)
-                if queue.is_done_unsafe():
-                    return _VOID
-                write = self._writes[0]
-
-                @gen
-                def interrupt_all():
-                    yield from queue.shutdown()
-                    for request_id in request_ids:
-                        yield from write(client_id, {"_tag": "Interrupt", "requestId": request_id})
-
-                return interrupt_all
+                return terminate(None)
 
             yield from scope.add_finalizer(leave)
             self._clients[client_id] = client
             headers = _request_headers(request)
-            try:
-                decoded = [cast("Message", m) for m in parser.decode(data)]
-            except Exception as cause:
-                decoded = []
-                yield from client.write(response_defect_encoded(self._encode_defect(cause)))
-            write = self._writes[0]
 
-            @gen
-            def write_all():
-                for message in decoded:
-                    request_id = message.get("id")
-                    if message.get("_tag") == "Request" and is_request_id(request_id):
-                        request_ids.append(request_id)
-                    yield from write(client_id, _with_headers(message, headers))
-                yield from write(client_id, {"_tag": "Eof"})
-
-            # Written on a fiber of its own, while the responses are read: a body
-            # answering more requests at once than the queue holds still goes on.
-            yield from fork_scoped(
-                write_all.on_error(lambda _: queue.end().as_void()), start_immediately=True
+            dispatch = self._dispatch(
+                decode=parser.decode,
+                data=data,
+                client=client,
+                request_ids=request_ids,
+                write=lambda m: write(client_id, m),
+                headers=headers,
             )
+
             content_type = serialization.content_type
             if not framed:
+                yield from dispatch
                 collected: Effect[list[Any], Never] = queue.collect()
                 responses: list[Any] = yield from collected.interruptible()
                 encoded = parser.encode(responses) if responses else None
                 return text("" if encoded is None else _as_text(encoded), content_type=content_type)
+            # Dispatch concurrently, so the bounded queue can drain; a failed dispatch fails the
+            # response.
+            yield from dispatch.on_error(terminate).fork_in(scope, start_immediately=True)
             take_all: Effect[list[Any], Never] = queue.take_all().catch_all(
                 lambda _: succeed(list[Any]())
             )
             initial: list[Any] = yield from take_all.interruptible()
             chunks = [encode_text(c) for c in initial]
             if queue.is_done_unsafe():
+                # A failed dispatch may have ended the queue after the initial chunk was taken.
+                yield from queue.await_done()
                 joined = b"".join(chunks)
                 if binary:
                     return bytes_response(joined, content_type=content_type)
@@ -402,6 +391,34 @@ class _HttpHandler:
             return stream_response(body, content_type=content_type)
 
         return run
+
+    def _dispatch(
+        self,
+        *,
+        decode: Callable[[Any], Any],
+        data: Any,
+        client: _HttpClient,
+        request_ids: list[RequestId],
+        write: Callable[[Message], Effect[None]],
+        headers: Any,
+    ) -> Effect[None]:
+        """Hand the request body's messages to the server, then its end."""
+
+        @gen
+        def dispatch():
+            try:
+                decoded = [cast("Message", m) for m in decode(data)]
+            except Exception as cause:
+                decoded = []
+                yield from client.write(response_defect_encoded(self._encode_defect(cause)))
+            for message in decoded:
+                request_id = message.get("id")
+                if message.get("_tag") == "Request" and is_request_id(request_id):
+                    request_ids.append(request_id)
+                yield from write(_with_headers(message, headers))
+            yield from write({"_tag": "Eof"})
+
+        return dispatch
 
     def _writer(self, queue: Queue[Any, Done], parser: Parser) -> Callable[[Message], Effect[None]]:
         if not self._serialization.includes_framing:
@@ -424,6 +441,30 @@ class _HttpHandler:
             return suspend(body)
 
         return framed
+
+
+def _terminator(
+    queue: Queue[Any, Done],
+    request_ids: list[RequestId],
+    write: Callable[[Message], Effect[None]],
+) -> Callable[[Cause[Any] | None], Effect[None]]:
+    """What ends an unfinished HTTP response, failing it with the cause when given, and
+    interrupts its requests."""
+
+    def terminate(cause: Cause[Any] | None) -> Effect[None]:
+        @gen
+        def ending():
+            if queue.is_done_unsafe():
+                return
+            if cause is not None:
+                queue.fail_cause_unsafe(cause)
+            queue.shutdown_unsafe()
+            for request_id in request_ids:
+                yield from write({"_tag": "Interrupt", "requestId": request_id})
+
+        return ending
+
+    return terminate
 
 
 def _as_text(frame: Frame) -> str:
