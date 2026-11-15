@@ -55,6 +55,9 @@
 - Process workers: the worker's channel to its parent is no longer inheritable in the worker,
   so a program the worker starts with `additional_fds` (which spawns without `close_fds`) does
   not get it.
+- PostgreSQL migrator: a client-key passphrase in `ssl` (libpq's `sslpassword`) reaches
+  `pg_dump` through a service file only the user reads (removed after the dump), no longer on
+  its command line, which other local accounts can read, or in a failed spawn's error.
 
 ## 0.6.5 (2026-11-14)
 

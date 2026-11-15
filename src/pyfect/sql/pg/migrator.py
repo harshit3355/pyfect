@@ -10,22 +10,25 @@ that fails is logged, as for every driver.
 
 from __future__ import annotations
 
+import contextlib
 import math
 import os
 import re
+import tempfile
 from typing import Never
 
 from psycopg.conninfo import make_conninfo
 
 from pyfect._all import all as all_effects
 from pyfect._core import Effect
-from pyfect.effect import fail, gen
+from pyfect.effect import fail, gen, sync, try_
 from pyfect.file_system import FileSystem
 from pyfect.layer import Layer
 from pyfect.layer import effect_discard as layer_effect_discard
 from pyfect.path import Path
 from pyfect.process import ChildProcessSpawner
 from pyfect.process import make as make_command
+from pyfect.scope import acquire_use_release
 from pyfect.sql.client import SqlClient
 from pyfect.sql.error import SqlError
 from pyfect.sql.migrator import (
@@ -54,20 +57,59 @@ def _clean(dump: str) -> str:
     return _BLANK_LINES.sub("\n\n", dump).strip()
 
 
+_SECRET_PARAMS = ("sslpassword",)
+"""libpq parameters kept off ``pg_dump``'s command line, which any local
+account can read; libpq reads them from a private service file instead (it
+has no environment variable for them)."""
+
+_SERVICE = "pyfect_pg_dump"
+
+
 def _conninfo(resolved: ResolvedConfig) -> str:
-    params = dict(resolved.params)
+    """The connection for ``pg_dump``'s ``--dbname``, without its secrets
+    (``_secrets``), which the service named here carries."""
+    params = {k: v for k, v in resolved.params.items() if k not in _SECRET_PARAMS}
     params.pop("client_encoding", None)
     if resolved.connect_timeout.is_finite():
         params["connect_timeout"] = str(max(1, math.ceil(resolved.connect_timeout.to_seconds())))
+    if _secrets(resolved):
+        params["service"] = _SERVICE
     return make_conninfo(**params)
 
 
+def _secrets(resolved: ResolvedConfig) -> dict[str, str]:
+    return {k: v for k, v in resolved.params.items() if k in _SECRET_PARAMS}
+
+
+def _write_service_file(secrets: dict[str, str]) -> str:
+    """A service file only this user reads (``mkstemp`` makes it 0600)."""
+    for name, value in secrets.items():
+        if "\n" in value or "\r" in value:
+            raise ValueError(f"The libpq parameter {name} must not hold a line break")
+    fd, path = tempfile.mkstemp(prefix="pyfect-pg-dump-", suffix=".conf")
+    with os.fdopen(fd, "w") as file:
+        file.write(f"[{_SERVICE}]\n")
+        file.writelines(f"{name}={value}\n" for name, value in secrets.items())
+    return path
+
+
+def _remove(path: str | None) -> Effect[None]:
+    def remove() -> None:
+        if path is not None:
+            with contextlib.suppress(FileNotFoundError):
+                os.remove(path)
+
+    return sync(remove)
+
+
 def _pg_dump(
-    conninfo: str, password: str | None, args: list[str]
+    conninfo: str, password: str | None, args: list[str], service_file: str | None = None
 ) -> Effect[str, Exception, ChildProcessSpawner]:
     env: dict[str, str | None] = {"PATH": os.environ.get("PATH")}
     if password is not None:
         env["PGPASSWORD"] = password
+    if service_file is not None:
+        env["PGSERVICEFILE"] = service_file
     command = make_command(
         "pg_dump",
         [*args, "--no-owner", "--no-privileges", "--no-password", f"--dbname={conninfo}"],
@@ -83,12 +125,22 @@ def _dump_all(table: str) -> Effect[str, Exception, PgClient | ChildProcessSpawn
         resolved = yield from resolve(client.config)
         password = yield from resolve_password(resolved.password)
         conninfo = _conninfo(resolved)
-        schema, migrations = yield from all_effects(
-            _pg_dump(conninfo, password, ["--schema-only"]),
-            _pg_dump(conninfo, password, ["--column-inserts", "--data-only", f"--table={table}"]),
-            concurrency=2,
+        secrets = _secrets(resolved)
+
+        def dumps(service_file: str | None) -> Effect[str, Exception, ChildProcessSpawner]:
+            data = ["--column-inserts", "--data-only", f"--table={table}"]
+            return all_effects(
+                _pg_dump(conninfo, password, ["--schema-only"], service_file),
+                _pg_dump(conninfo, password, data, service_file),
+                concurrency=2,
+            ).map(lambda parts: parts[0] + "\n\n" + parts[1])
+
+        if not secrets:
+            return (yield from dumps(None))
+        acquire: Effect[str | None, Exception] = try_(
+            lambda: _write_service_file(secrets), lambda error: error
         )
-        return schema + "\n\n" + migrations
+        return (yield from acquire_use_release(acquire, dumps, lambda path, _: _remove(path)))
 
     return gen(body)
 
