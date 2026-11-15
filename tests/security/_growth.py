@@ -42,15 +42,28 @@ type Make = Callable[[int], Work]
 
 def cpu(work: Work, runs: int = RUNS) -> float:
     """The least thread CPU time of ``runs`` runs of ``work``."""
-    best = float("inf")
+    return _least((work,), runs)[0]
+
+
+def cpu_pair(first: Work, second: Work, runs: int = RUNS) -> tuple[float, float]:
+    """The least thread CPU time of each of two pieces of work, run in turn, so a stretch in
+    which the machine runs slower (a lower clock speed, a busy neighbour sharing its cache)
+    falls on both instead of inflating their ratio."""
+    a, b = _least((first, second), runs)
+    return a, b
+
+
+def _least(works: tuple[Work, ...], runs: int) -> list[float]:
+    best = [float("inf")] * len(works)
     enabled = gc.isenabled()
     gc.collect(YOUNG)
     gc.disable()
     try:
         for _ in range(runs):
-            start = time.thread_time()
-            work()
-            best = min(best, time.thread_time() - start)
+            for index, work in enumerate(works):
+                start = time.thread_time()
+                work()
+                best[index] = min(best[index], time.thread_time() - start)
     finally:
         if enabled:
             gc.enable()
