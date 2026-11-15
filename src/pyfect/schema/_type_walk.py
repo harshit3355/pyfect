@@ -43,8 +43,9 @@ def _guard(node: ast.AST) -> Callable[[object], bool]:
 
 
 def index_keys(value: Mapping[object, object], index: ast.IndexSignature) -> list[Hashable]:
-    """The keys of ``value`` that ``index`` covers, in ``value``'s order."""
-    return [key for key in value if index.selects(key)]
+    """The keys of the decoded ``value`` that ``index`` covers, in ``value``'s order: those
+    its key's decoded side accepts, as a Record with a transformed key holds them."""
+    return [key for key in value if index.selects_decoded(key)]
 
 
 def class_name(node: ast.Class) -> str:

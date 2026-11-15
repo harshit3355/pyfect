@@ -255,6 +255,31 @@ def test_decodes_utf_8_bytes() -> Any:
 
 
 @testing.effect
+def test_distinguishes_contradictory_and_unsupported_encoding_declarations() -> Any:
+    """distinguishes contradictory and unsupported encoding declarations"""
+    cases = [
+        ("", "UTF-16", "Syntax"),
+        ("", "utf-32le", "Syntax"),
+        ("", "ISO-10646-UCS-2", "Syntax"),
+        (BOM, "ISO-8859-1", "Syntax"),
+        (BOM, "US-ASCII", "Syntax"),
+        (BOM, "UTF8", "Unsupported"),
+        (BOM, "unicode-1-1-utf-8", "Unsupported"),
+        (BOM, "unknown", "Unsupported"),
+    ]
+    for prefix, encoding, kind in cases:
+        document = prefix + f'<?xml version="1.0" encoding="{encoding}"?><a/>'
+        for chunks in byte_splits(document.encode()):
+            assert (yield from failure(decode_bytes(chunks))) == (kind, 1, 1), chunks
+    events = yield from decode_string([BOM + '<?xml version="1.0" encoding="UTF-16"?><a/>'])
+    assert [type(event).__name__ for event in events] == [
+        "Declaration",
+        "StartElement",
+        "EndElement",
+    ]
+
+
+@testing.effect
 def test_rejects_utf_16_byte_order_marks_as_unsupported_across_chunk_boundaries() -> Any:
     """rejects UTF-16 byte order marks as unsupported across chunk boundaries"""
     for value in (
@@ -286,6 +311,31 @@ def test_rejects_non_ascii_bytes_under_a_us_ascii_declaration(chunked: bool) -> 
     value = '<?xml version="1.0" encoding="US-ASCII"?><a>é</a>'.encode()
     for chunks in byte_splits(value) if chunked else [[value]]:
         assert (yield from decode_bytes(chunks).flip()).kind == "Syntax"
+
+
+@testing.effect
+def test_reports_start_element_positions_when_enabled() -> Any:
+    """reports start element positions when enabled"""
+    # Positions match XmlError: the start tag's "<", one-based UTF-16 columns, LF,
+    # CR and CRLF line endings, and a leading BOM excluded
+    document = BOM + "<a>\r\n <b x='1'/>\r😀<c>\n\t<d/></c></a>"
+    expected: list[Event] = [
+        StartElement("a", {}, 1, 1),
+        text("\n "),
+        StartElement("b", {"x": "1"}, 2, 2),
+        end("b"),
+        text("\n😀"),
+        StartElement("c", {}, 3, 3),
+        text("\n\t"),
+        StartElement("d", {}, 4, 2),
+        end("d"),
+        end("c"),
+        end("a"),
+    ]
+    for chunks in splits(document):
+        assert (yield from decode_string(chunks, positions=True)) == expected, chunks
+    for chunks in byte_splits(document.encode()):
+        assert (yield from decode_bytes(chunks, positions=True)) == expected, chunks
 
 
 @testing.effect

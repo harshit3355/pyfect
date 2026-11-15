@@ -49,14 +49,20 @@ def from_json_schema_document(
     on_enter: Callable[[JsonSchema], JsonSchema] | None = None,
     patterns: PatternMode = "error",
     include_annotation_key: Callable[[str], bool] | None = None,
+    close_objects: bool = False,
 ) -> ImportedSchema:
     """The schema ``document`` describes. ``on_enter`` replaces each schema
     object before it is read; ``patterns`` says what a ``pattern`` or
     ``patternProperties`` does: ``"error"`` rejects it, ``"ignore"`` skips it,
     ``"apply"`` enforces it (for trusted documents only, as a regular
     expression may run for an unbounded time). ``include_annotation_key``
-    selects other keys to keep as annotations."""
-    options = Options(on_enter, patterns, include_annotation_key)
+    selects other keys to keep as annotations.
+
+    ``close_objects`` (experimental) closes an object with declared properties
+    when every object schema it combines omits ``additionalProperties``, after
+    ``allOf`` is merged, so inherited properties stay valid. Decoding then
+    strips other keys, or rejects them with ``on_excess_property="error"``."""
+    options = Options(on_enter, patterns, include_annotation_key, close_objects)
     schema, definitions = js_ordered((document.schema, document.definitions))
     return _import((schema,), definitions, lambda _: ("schema",), options)[0]
 
@@ -68,11 +74,12 @@ def from_json_schema_multi_document(
     on_enter: Callable[[JsonSchema], JsonSchema] | None = None,
     patterns: PatternMode = "error",
     include_annotation_key: Callable[[str], bool] | None = None,
+    close_objects: bool = False,
 ) -> tuple[ImportedSchema, *tuple[ImportedSchema, ...]]:
     """The schemas of ``document``'s roots, sharing their definitions; only
     definitions a root reaches are read. Options as
     ``from_json_schema_document``."""
-    options = Options(on_enter, patterns, include_annotation_key)
+    options = Options(on_enter, patterns, include_annotation_key, close_objects)
     schemas, definitions = js_ordered((document.schemas, document.definitions))
     out = _import(schemas, definitions, lambda i: ("schemas", i), options)
     return cast("tuple[ImportedSchema, *tuple[ImportedSchema, ...]]", out)

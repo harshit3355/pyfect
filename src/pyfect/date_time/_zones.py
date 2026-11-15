@@ -75,18 +75,30 @@ def make_zoned(
 
 
 def zone_named(zone_id: str) -> ZoneInfo | None:
-    """The zone ``zone_id`` names (any casing), under the canonical id
-    ``Intl`` gives it in Node (ICU's, ``_icu_zones.ICU_VERSION``):
-    ``Asia/Kolkata`` is ``Asia/Calcutta``, ``EST`` is ``America/Panama``.
-    An offset id (``+0530``) is the fixed zone ``+05:30``. ``None`` for an
-    id ICU doesn't know."""
+    """The zone ``zone_id`` names, keeping the id as given (an alias such as
+    ``Europe/Kyiv`` or ``Asia/Kolkata`` included), as Effect 4.1.4 does. Only
+    the casing comes from the canonical id ``Intl`` gives it in Node (ICU's,
+    ``_icu_zones.ICU_VERSION``), and only when the two differ in case alone
+    (``europe/london`` is ``Europe/London``). Zones compare equal and hash
+    alike when ICU resolves them to the same id (``Europe/Kyiv`` and
+    ``Europe/Kiev``). An offset id (``+0530``) is the fixed zone ``+05:30``.
+    ``None`` for an id ICU doesn't know."""
     offset = _OFFSET_ID.fullmatch(zone_id)
     if offset is not None:
         sign, hours, minutes = offset.group(1), int(offset.group(2)), int(offset.group(3) or 0)
         total = (hours * 60 + minutes) * (-1 if sign in "-\u2212" else 1)
         return _offset_zone(total)
     canonical = _canonical_ids().get(zone_id.lower())
-    return None if canonical is None else _zone(canonical)
+    if canonical is None:
+        return None
+    if canonical.lower() == zone_id.lower():
+        return _zone(canonical)
+    return _alias_zone(zone_id, canonical)
+
+
+def resolved_zone_id(zone: ZoneInfo) -> str:
+    """The id ICU resolves ``zone``'s to (Effect's ``resolvedId``), which equality uses."""
+    return zone.resolved_id if isinstance(zone, _AliasZone) else zone.key
 
 
 # An offset time zone as ECMA-402 reads one (``±HH``, ``±HHMM``, ``±HH:MM``).
@@ -114,6 +126,32 @@ class _IcuZone(ZoneInfo):
         return zone_named, (self.key,)
 
 
+class _AliasZone(_IcuZone):
+    """A zone named by an alias of ICU's canonical id: it keeps the alias as its ``key``
+    and equals (and hashes as) the canonical zone, as Effect's ``Equal`` and ``Hash``
+    use the resolved id."""
+
+    resolved_id: str
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, ZoneInfo):
+            return NotImplemented
+        return self.resolved_id == resolved_zone_id(other)
+
+    def __hash__(self) -> int:
+        return hash(_zone(self.resolved_id))
+
+
+@cache
+def _alias_zone(key: str, canonical: str) -> ZoneInfo | None:
+    data = _zone_data(canonical)
+    if data is None:
+        return None
+    zone = _AliasZone.from_file(io.BytesIO(data), key=key)
+    zone.resolved_id = canonical
+    return zone
+
+
 @cache
 def _canonical_ids() -> dict[str, str]:
     return {zone_id.lower(): canonical for zone_id, canonical in CANONICAL.items()}
@@ -129,16 +167,22 @@ def _aliases() -> dict[str, list[str]]:
 
 @cache
 def _zone(canonical: str) -> ZoneInfo | None:
+    if canonical not in TZIF:
+        with contextlib.suppress(ZoneInfoNotFoundError, ValueError):
+            return ZoneInfo(canonical)
+    data = _zone_data(canonical)
+    return None if data is None else _IcuZone.from_file(io.BytesIO(data), key=canonical)
+
+
+def _zone_data(canonical: str) -> bytes | None:
+    """The TZif bytes of ICU's zone ``canonical``: its own data for a zone tz dropped,
+    else the file of the zone ICU reads it from or of any of its ids."""
     if canonical in TZIF:
-        return _IcuZone.from_file(
-            io.BytesIO(base64.b64decode(TZIF[canonical], validate=True)), key=canonical
-        )
-    with contextlib.suppress(ZoneInfoNotFoundError, ValueError):
-        return ZoneInfo(canonical)
-    for source in (DATA.get(canonical, canonical), *_aliases()[canonical]):
+        return base64.b64decode(TZIF[canonical], validate=True)
+    for source in (canonical, DATA.get(canonical, canonical), *_aliases()[canonical]):
         data = _zone_file(source)
         if data is not None:
-            return _IcuZone.from_file(io.BytesIO(data), key=canonical)
+            return data
     return None
 
 
@@ -192,11 +236,13 @@ _LOCALTIME = "/etc/localtime"
 
 def zone_local() -> tzinfo:
     """The system's zone: ``$TZ``, else ``/etc/localtime`` (named when it
-    links into a zoneinfo tree), else the current fixed offset."""
+    links into a zoneinfo tree, under ICU's resolved id), else the current fixed
+    offset."""
     for key in (os.environ.get("TZ", "").removeprefix(":"), _localtime_key()):
         zone = zone_named(key) if key else None
         if zone is not None:
-            return zone
+            # Effect's local zone is named by Intl's resolved id, not the one TZ gives.
+            return _zone(resolved_zone_id(zone)) or zone
     try:
         with open(_LOCALTIME, "rb") as file:
             return ZoneInfo.from_file(file)

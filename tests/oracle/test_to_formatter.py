@@ -329,6 +329,22 @@ def test_record_key_checks_select_keys():
     assert format({"a": Some(1), "b": Some(2)}) == '{ "a": some(1) }'
 
 
+def test_record_with_a_transformed_key_selects_keys_by_the_decoded_key():
+    """Record / Record with a transformed key should select keys by the decoded key"""
+    format = S.to_formatter(S.Record(_upper_case_key(), S.Option(S.Number)))
+    assert format({"A": Some(1)}) == '{ "A": some(1) }'
+
+
+def _upper_case_key() -> S.Codec[str, str]:
+    """Effect's ``UpperCase``: lowercase keys encoded, uppercase decoded."""
+    return S.String.check(S.is_pattern(re.compile("^[a-z]+$"))).pipe(
+        S.decode_to(
+            S.String.check(S.is_pattern(re.compile("^[A-Z]+$"))),
+            T.Transformation(G.transform(str.upper), G.transform(str.lower)),
+        )
+    )
+
+
 def test_class():
     """Class"""
 

@@ -286,6 +286,7 @@ for _target in (
     date_time.zone_from_string,
     duration.parse_iso_nanos,
     base64.decode_string,
+    base64.decode_lenient,
     base64_url.decode_string,
     hex.decode,
     hex.decode_string,
@@ -482,6 +483,18 @@ def _xml_collected_text(n: int) -> Work:
 )
 def _xml_markup_window(n: int) -> Work:
     return run_channel(["<r>" + "<a/>" * n + "</r>"], xml.decode_string(max_token_size=64))
+
+
+@case(xml.decode_string, "xml.decode_string: positions of many tags on one line")
+def _xml_positions_one_line(n: int) -> Work:
+    return run_channel(["<r>" + "<a/>" * n + "</r>"], xml.decode_string(positions=True))
+
+
+@case(xml.decode, "xml.decode: positions of many tags over many lines, in small chunks")
+def _xml_positions_lines(n: int) -> Work:
+    document = ("<r>" + "<a/>\r\n" * n + "</r>").encode()
+    chunks = [document[i : i + 16] for i in range(0, len(document), 16)]
+    return run_channel(chunks, xml.decode(positions=True))
 
 
 def _xml_events(n: int) -> tuple[xml.Event, ...]:

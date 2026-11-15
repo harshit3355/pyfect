@@ -28,13 +28,16 @@ applies concurrency to constructor defaults" (field defaults are plain
 values, not effects); the inherited-property titles ("decodes inherited
 struct properties", "decodes inherited string, number, and symbol fields",
 "distinguishes an inherited undefined property from a missing property",
-"selects union members using inherited discriminants", "decodes inherited
-Object.prototype properties", "requires __proto__ to be an own property",
+"selects union members using inherited discriminants", "requires __proto__ to
+be an own property",
 "keeps dynamic record properties own-only while finite record keys are
 declared": a Python ``Mapping`` has no prototype chain); "distinguishes
 missing tuple elements from undefined" (Python has no ``undefined``);
 "preserves missing optional template literals" is in
 ``test_schema_template_literal.py``.
+
+An instance's attributes are its keys (``ObjectKeys``), so the ``Object.prototype`` titles
+are ported with the members of ``object`` as the inherited names.
 """
 
 from collections.abc import Callable, Generator, Iterator, Mapping
@@ -54,6 +57,8 @@ from pyfect.result import Ok
 from pyfect.schema import getter as G
 from pyfect.schema import transformation as T
 from pyfect.schema.issue import AnyOf, Composite, InvalidValue, Issue, Pointer
+
+from ._schema_binary import Opt, struct
 
 
 def test_make_should_throw_an_error_when_the_input_is_invalid():
@@ -1036,3 +1041,55 @@ def test_should_preserve_mixed_causes_in_union_candidates_instead_of_trying_late
         assert isinstance(exit, Failure)
         assert any(isinstance(r, Die) for r in exit.cause.reasons)
         assert isinstance(exit.cause.find_error(), Ok)
+
+
+class _Plain:
+    """A plain instance: the members of ``object`` (Effect's ``Object.prototype``) are inherited."""
+
+
+def _object_member_fields() -> Any:
+    return struct(
+        __class__=Opt(S.String),
+        __str__=Opt(S.NullOr(S.String)),
+        __doc__=S.String.pipe(S.with_decoding_default_key(fx.succeed("default"))),
+    )
+
+
+def test_requires_object_prototype_field_names_to_be_own_properties():
+    """requires Object.prototype field names to be own properties"""
+    schema = _object_member_fields()
+    decode = S.decode_unknown_sync(schema)
+    assert decode(_Plain()) == {"__doc__": "default"}
+
+    inherits = type("Inherits", (), {"__str__": "inherited", "__doc__": "inherited"})
+    assert decode(inherits()) == {"__doc__": "default"}
+    encoding_input = {"__class__": "own", "__doc__": "default"}
+    assert S.encode_unknown_sync(schema)(encoding_input) == encoding_input
+    assert S.is_(schema)(_Plain()) is False
+    assert S.is_(schema)({"__doc__": "default"}) is True
+    own = _Plain()
+    vars(own).update({"__class__": "own", "__str__": "own", "__doc__": "own"})
+    assert decode(own) == {"__class__": "own", "__str__": "own", "__doc__": "own"}
+
+
+def test_reports_a_missing_required_object_prototype_field():
+    """reports a missing required Object.prototype field"""
+    with pytest.raises(S.SchemaError) as raised:
+        S.decode_unknown_sync(struct(__str__=S.String))(_Plain())
+    assert str(raised.value) == 'Missing key\n  at ["__str__"]'
+
+
+def test_other_inherited_attributes_are_still_read():
+    """An attribute ``object`` doesn't have is read wherever it comes from, as ``name in input``."""
+
+    class Base:
+        kind = "base"
+
+        @property
+        def size(self) -> int:
+            return 3
+
+    assert S.decode_unknown_sync(struct(kind=S.String, size=S.Number))(Base()) == {
+        "kind": "base",
+        "size": 3,
+    }

@@ -11,8 +11,10 @@ from typing import Any, cast
 
 import pytest
 
+from pyfect import exit as Exit
 from pyfect import json_schema as JS
 from pyfect import schema as S
+from pyfect.json_schema._model import _SUBSCHEMA_KINDS  # pyright: ignore[reportPrivateUsage]
 from pyfect.schema import ast
 from pyfect.schema import representation as R
 from pyfect.schema._schema import Bottom
@@ -1027,6 +1029,46 @@ def test_from_json_schema_document_type_object_properties_additional_properties(
     )
 
 
+def test_from_json_schema_document_type_object_imports_additional_properties_that_accept_the_declared_property_s_values() -> (
+    None
+):
+    "fromJsonSchemaDocument / type: object / imports additionalProperties that accept the declared property's values"
+    # Reduced from OpenRouter's ImageGenerationServerToolConfig.
+    schema = to_schema_from_json_schema_document(
+        from_schema(
+            {
+                "type": "object",
+                "properties": {"model": {"type": "string"}},
+                "additionalProperties": {"anyOf": [{"type": "string"}, {"type": "number"}]},
+            }
+        )
+    )
+    decoding = SchemaAsserts(schema).decoding()
+    for input in [{"model": "image-model", "seed": 1}, {"extra": "value"}]:
+        decoding.succeed(input)
+    assert Exit.is_failure(decoding.run({"model": 1}))
+    assert Exit.is_failure(decoding.run({"model": "image-model", "extra": True}))
+
+
+@pytest.mark.parametrize("additional_properties", [None, True, {}], ids=["omitted", "true", "{}"])
+def test_from_json_schema_document_type_object_closes_implicit_additional_properties_after_intersections(
+    additional_properties: Any,
+) -> None:
+    "fromJsonSchemaDocument / type: object / closes implicit additional properties after intersections"
+    second: Any = {"type": "object", "properties": {"b": {"type": "number"}}}
+    if additional_properties is not None:
+        second["additionalProperties"] = additional_properties
+    schema = to_schema_from_json_schema_document(
+        from_schema(
+            {"allOf": [{"type": "object", "properties": {"a": {"type": "string"}}}, second]}
+        ),
+        {"close_objects": True},
+    )
+    input = {"a": "a", "b": 1, "extra": True}
+    expected = {"a": "a", "b": 1} if additional_properties is None else input
+    SchemaAsserts(schema).decoding().succeed(input, expected)
+
+
 def test_from_json_schema_document_type_object_explains_why_typed_additional_properties_cannot_exclude_patterned_keys() -> (
     None
 ):
@@ -1338,6 +1380,164 @@ def test_from_json_schema_document_imports_built_in_json_schema_annotations() ->
             )
         },
     )
+
+
+@pytest.mark.parametrize("mode", ["anyOf", "oneOf"])
+def test_from_json_schema_document_keeps_parent_and_branch_examples_separate(mode: str) -> None:
+    "fromJsonSchemaDocument / keeps parent and branch examples separate with %s"
+    union_options = ', { mode: "oneOf" }' if mode == "oneOf" else ""
+    assert_from_json_schema(
+        {
+            "schema": {
+                "type": "string",
+                mode: [
+                    {"const": "Router", "examples": ["Router"]},
+                    {"const": "GPT", "examples": ["GPT"]},
+                ],
+                "examples": ["GPT"],
+            }
+        },
+        {
+            "codes": make_code(
+                f'Schema.Union([Schema.Literal("Router").annotate({{ "examples": ["Router"] }}), Schema.Literal("GPT").annotate({{ "examples": ["GPT"] }})]{union_options}).annotate({{ "examples": ["GPT"] }})',
+                '"Router" | "GPT"',
+            )
+        },
+    )
+
+
+def test_from_json_schema_document_keeps_examples_on_an_enum_intersected_with_a_nullable_reference_to_itself() -> (
+    None
+):
+    "fromJsonSchemaDocument / keeps examples on an enum intersected with a nullable reference to itself"
+    assert_from_json_schema(
+        {
+            "schema": {
+                "allOf": [
+                    {"$ref": "#/$defs/Tokenizer"},
+                    {"anyOf": [{"$ref": "#/$defs/Tokenizer"}, {"type": "null"}]},
+                ],
+                "$defs": {
+                    "Tokenizer": {"type": "string", "enum": ["Router", "GPT"], "examples": ["GPT"]}
+                },
+            }
+        },
+        {
+            "codes": make_code(
+                'Schema.Literals(["Router", "GPT"]).annotate({ "examples": ["GPT"] })',
+                '"Router" | "GPT"',
+            )
+        },
+    )
+
+
+@pytest.mark.parametrize("examples", [None, ["a"]])
+def test_from_json_schema_document_preserves_one_of_when_intersecting_a_nullable_enum_reference(
+    examples: Any,
+) -> None:
+    "fromJsonSchemaDocument / preserves oneOf when intersecting a nullable enum reference with examples %j"
+    definition: Any = {"enum": ["a", "b"]}
+    if examples is not None:
+        definition["examples"] = examples
+    annotation = "" if examples is None else '.annotate({ "examples": ["a"] })'
+    assert_from_json_schema(
+        {
+            "schema": {
+                "allOf": [
+                    {"oneOf": [{"const": "a"}, {"const": "b"}]},
+                    {"anyOf": [{"$ref": "#/$defs/U"}, {"type": "null"}]},
+                ],
+                "$defs": {"U": definition},
+            }
+        },
+        {
+            "codes": make_code(
+                f'Schema.Union([Schema.Literal("a"), Schema.Literal("b")], {{ mode: "oneOf" }}){annotation}',
+                '"a" | "b"',
+            )
+        },
+    )
+
+
+@pytest.mark.parametrize("keyword", ["$ref", "$dynamicRef"])
+def test_from_json_schema_document_omits_content_schema_containing_a_nested_reference(
+    keyword: str,
+) -> None:
+    "fromJsonSchemaDocument / omits contentSchema containing a nested %s"
+    schema = to_schema_from_json_schema_document(
+        from_schema(
+            {
+                "type": "string",
+                "contentEncoding": "base64",
+                "contentMediaType": "application/json",
+                "contentSchema": {
+                    "type": "object",
+                    "properties": {
+                        "values": {
+                            "type": "array",
+                            "items": {"anyOf": [{keyword: "#/$defs/Payload"}]},
+                        }
+                    },
+                },
+                "$defs": {"Payload": {"type": "number"}},
+            }
+        )
+    )
+    assert_code(
+        schema,
+        {
+            "codes": make_code(
+                'Schema.String.annotate({ "contentEncoding": "base64", "contentMediaType": "application/json" })',
+                "string",
+            )
+        },
+    )
+    exported = S.to_json_schema_document(schema)
+    assert (exported.dialect, exported.schema, exported.definitions) == (
+        "draft-2020-12",
+        {"type": "string", "contentEncoding": "base64", "contentMediaType": "application/json"},
+        {},
+    )
+
+
+@pytest.mark.parametrize("keyword", sorted(_SUBSCHEMA_KINDS))
+def test_content_schema_references_are_found_at_every_subschema_position(keyword: str) -> None:
+    """Not in Effect: a reference held by any subschema keyword drops the
+    contentSchema annotation (the walk reads ``subschema_kind``)."""
+    reference = {"$ref": "#/$defs/Payload"}
+    held = {"schema": reference, "array": [reference], "map": {"name": reference}}
+    content_schema = {keyword: held[_SUBSCHEMA_KINDS[keyword]]}
+    schema = to_schema_from_json_schema_document(
+        from_schema({"type": "string", "contentSchema": content_schema})
+    )
+    assert "contentSchema" not in S.to_json_schema_document(schema).schema
+
+
+def test_from_json_schema_document_preserves_reference_like_data_inside_content_schema() -> None:
+    "fromJsonSchemaDocument / preserves reference-like data inside contentSchema"
+    data = {"$ref": "#/$defs/Payload", "$dynamicRef": "#node"}
+    content_schema = {
+        "type": "object",
+        "properties": {
+            "$ref": {"type": "string"},
+            "value": {"const": data, "enum": [data], "default": data, "examples": [data]},
+        },
+        "examples": [data],
+    }
+    schema = to_schema_from_json_schema_document(
+        from_schema(
+            {
+                "type": "string",
+                "contentMediaType": "application/json",
+                "contentSchema": content_schema,
+            }
+        )
+    )
+    assert S.to_json_schema_document(schema).schema == {
+        "type": "string",
+        "contentMediaType": "application/json",
+        "contentSchema": content_schema,
+    }
 
 
 def test_from_json_schema_document_ref_rejects_local_references_inside_nested_resources() -> None:
@@ -2351,10 +2551,75 @@ def test_from_json_schema_document_all_of_prunes_disjoint_lanes_before_intersect
     )
 
 
-def test_from_json_schema_document_all_of_rejects_intersections_requiring_a_cartesian_product() -> (
-    None
-):
-    "fromJsonSchemaDocument / allOf / rejects intersections requiring a Cartesian product"
+@pytest.mark.parametrize("mode", ["anyOf", "oneOf"])
+@pytest.mark.parametrize("base_first", [True, False], ids=["base first", "extension first"])
+def test_from_json_schema_document_all_of_intersects_overlapping_unions_of_referenced_discriminated_objects(
+    mode: str, base_first: bool
+) -> None:
+    "fromJsonSchemaDocument / allOf / intersects overlapping unions of referenced discriminated objects"
+    # Reduced from the base and extension of OpenRouter's OpenResponsesResult.output items.
+    base = {mode: [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]}
+    extension = {
+        mode: [{"$ref": "#/$defs/ExtendedA"}, {"$ref": "#/$defs/C"}, {"$ref": "#/$defs/B"}]
+    }
+    schema = to_schema_from_json_schema_document(
+        from_schema(
+            {
+                "$defs": {
+                    "A": {
+                        "type": "object",
+                        "properties": {"type": {"const": "a"}, "value": {"type": "string"}},
+                        "required": ["type", "value"],
+                    },
+                    "ExtendedA": {
+                        "type": "object",
+                        "properties": {"type": {"const": "a"}, "extra": {"type": "number"}},
+                        "required": ["type", "extra"],
+                    },
+                    "B": {
+                        "type": "object",
+                        "properties": {"type": {"const": "b"}, "child": {"$ref": "#/$defs/B"}},
+                        "required": ["type"],
+                    },
+                    "C": {
+                        "type": "object",
+                        "properties": {"type": {"const": "c"}},
+                        "required": ["type"],
+                    },
+                },
+                "allOf": [base, extension] if base_first else [extension, base],
+            }
+        )
+    )
+    decoding = SchemaAsserts(schema).decoding()
+    for input in [
+        {"type": "a", "value": "value", "extra": 1},
+        {"type": "b", "child": {"type": "b"}},
+    ]:
+        decoding.succeed(input)
+    for input in [{"type": "c"}, {"type": "a", "value": "value"}, {"type": "a", "extra": 1}, {}]:
+        assert Exit.is_failure(decoding.run(input))
+
+
+@pytest.mark.parametrize("partition_first", [True, False], ids=["partition first", "enums first"])
+def test_from_json_schema_document_all_of_intersects_type_partitions_with_heterogeneous_finite_enums(
+    partition_first: bool,
+) -> None:
+    "fromJsonSchemaDocument / allOf / intersects type partitions with heterogeneous finite enums"
+    partition = {"anyOf": [{"type": "string"}, {"type": "number"}]}
+    enums = {"anyOf": [{"enum": ["a", 1]}, {"enum": ["b", 2]}]}
+    all_of = [partition, enums] if partition_first else [enums, partition]
+    schema = to_schema_from_json_schema_document(from_schema({"allOf": all_of}))
+    decoding = SchemaAsserts(schema).decoding()
+    for input in ["a", "b", 1, 2]:
+        decoding.succeed(input)
+    for input in ["other", 3, None]:
+        assert Exit.is_failure(decoding.run(input))
+
+
+# Named after the Effect 4.1.2 title; the docstring has the one Effect renamed it to.
+def test_rejects_intersections_requiring_a_cartesian_product() -> None:
+    "fromJsonSchemaDocument / allOf / rejects union intersections without a proven disjoint partition"
     throws(
         lambda: to_schema_from_json_schema_document(
             from_schema(
@@ -2378,6 +2643,192 @@ def test_from_json_schema_document_all_of_rejects_intersections_requiring_a_cart
         ),
         'Cannot intersect these "anyOf" or "oneOf" alternatives without expanding their branches.\n  at ["schema"]["allOf"][1]',
     )
+
+
+@pytest.mark.parametrize("mode", ["anyOf", "oneOf"])
+@pytest.mark.parametrize("tagged_first", [True, False], ids=["tagged first", "fields first"])
+def test_from_json_schema_document_all_of_intersects_flat_tagged_alternatives(
+    mode: str, tagged_first: bool
+) -> None:
+    "fromJsonSchemaDocument / allOf / intersects flat tagged %s alternatives"
+    tagged = {
+        mode: [
+            {"type": "object", "properties": {"tag": {"const": tag}}, "required": ["tag"]}
+            for tag in ["a", "b"]
+        ]
+    }
+    fields = {
+        mode: [
+            {"type": "object", "properties": {key: {"type": "string"}}, "required": [key]}
+            for key in ["x", "y"]
+        ]
+    }
+    all_of = [tagged, fields] if tagged_first else [fields, tagged]
+    schema = to_schema_from_json_schema_document(from_schema({"allOf": all_of}))
+    decoding = SchemaAsserts(schema).decoding()
+    for tag in ["a", "b"]:
+        for key in ["x", "y"]:
+            decoding.succeed({"tag": tag, key: "value"})
+    for input in [{"tag": "c", "x": "value"}, {"tag": "a"}, {"tag": "a", "x": 1}]:
+        assert Exit.is_failure(decoding.run(input))
+    assert Exit.is_success(decoding.run({"tag": "a", "x": "x", "y": "y"})) == (mode == "anyOf")
+
+
+def test_from_json_schema_document_all_of_preserves_mutually_recursive_references_intersected_with_themselves() -> (
+    None
+):
+    "fromJsonSchemaDocument / allOf / preserves mutually recursive references intersected with themselves"
+    schema = to_schema_from_json_schema_document(
+        from_schema(
+            {
+                "$ref": "#/$defs/Node",
+                "$defs": {
+                    "Node": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"},
+                            "children": {
+                                "allOf": [
+                                    {"$ref": "#/$defs/Children"},
+                                    {"$ref": "#/$defs/Children"},
+                                ]
+                            },
+                        },
+                        "required": ["value"],
+                    },
+                    "Children": {
+                        "type": "array",
+                        "items": {"allOf": [{"$ref": "#/$defs/Node"}, {"$ref": "#/$defs/Node"}]},
+                    },
+                },
+            }
+        )
+    )
+    decoding = SchemaAsserts(schema).decoding()
+    decoding.succeed(
+        {"value": "parent", "children": [{"value": "child", "children": []}]},
+        {"value": "parent", "children": ({"value": "child", "children": ()},)},
+    )
+    assert Exit.is_failure(decoding.run({"value": "parent", "children": [{"value": 1}]}))
+    assert Exit.is_failure(decoding.run({"value": "parent", "children": [{}]}))
+
+
+@pytest.mark.parametrize(
+    "definition",
+    [
+        {"allOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/A"}]},
+        {
+            "anyOf": [
+                {"allOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/A"}]},
+                {"type": "string"},
+            ]
+        },
+    ],
+    ids=["directly", "through a union"],
+)
+def test_from_json_schema_document_all_of_rejects_circular_aliases_repeated_in_an_intersection(
+    definition: Any,
+) -> None:
+    "fromJsonSchemaDocument / allOf / rejects circular aliases repeated in an intersection $name"
+    with pytest.raises(Exception, match='Definition "A" is a circular alias'):
+        to_schema_from_json_schema_document(
+            from_schema({"$ref": "#/$defs/A", "$defs": {"A": definition}})
+        )
+
+
+def test_from_json_schema_document_all_of_rejects_alias_cycles_through_unions_in_a_same_reference_intersection() -> (
+    None
+):
+    "fromJsonSchemaDocument / allOf / rejects alias cycles through unions in a same-reference intersection"
+    with pytest.raises(Exception, match='Definition "A" is a circular alias'):
+        to_schema_from_json_schema_document(
+            from_schema(
+                {
+                    "$defs": {"A": {"anyOf": [{"$ref": "#/$defs/A"}, {"type": "string"}]}},
+                    "allOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/A"}],
+                }
+            )
+        )
+
+
+@pytest.mark.parametrize(
+    ("schema", "message"),
+    [
+        (
+            {
+                "allOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}],
+                "$defs": {
+                    "A": {"type": "object", "properties": {"next": {"$ref": "#/$defs/A"}}},
+                    "B": {"type": "object", "properties": {"next": {"$ref": "#/$defs/B"}}},
+                },
+            },
+            r"^Cannot normalize this recursive intersection\.",
+        ),
+        (
+            {
+                "allOf": [{"$ref": "#/$defs/A"}, {"type": "string"}],
+                "$defs": {
+                    "A": {"$ref": "#/$defs/B", "description": "alias", "examples": ["x"]},
+                    "B": {"anyOf": [{"$ref": "#/$defs/A"}, {"type": "null"}]},
+                },
+            },
+            r"^Cannot normalize this recursive intersection\.",
+        ),
+        (
+            {
+                "$ref": "#/$defs/A",
+                "$defs": {
+                    "A": {
+                        "type": "object",
+                        "properties": {
+                            "next": {
+                                "allOf": [
+                                    {"$ref": "#/$defs/A"},
+                                    {"type": "object", "properties": {"extra": {"type": "string"}}},
+                                ]
+                            }
+                        },
+                    }
+                },
+            },
+            r'^Cannot resolve recursive definition "A" during normalization\.',
+        ),
+    ],
+    ids=[
+        "distinct references",
+        "annotated aliases with an inline constraint",
+        "a constraint needing an unfinished definition",
+    ],
+)
+def test_from_json_schema_document_all_of_rejects_unsupported_recursive_intersections(
+    schema: Any, message: str
+) -> None:
+    "fromJsonSchemaDocument / allOf / rejects unsupported recursive intersections: $name"
+    with pytest.raises(Exception, match=message):
+        to_schema_from_json_schema_document(from_schema(schema))
+
+
+def test_from_json_schema_document_all_of_allows_independent_uses_of_the_same_reference_intersection() -> (
+    None
+):
+    "fromJsonSchemaDocument / allOf / allows independent uses of the same reference intersection"
+    intersection = {"allOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]}
+    schema = to_schema_from_json_schema_document(
+        from_schema(
+            {
+                "type": "object",
+                "properties": {"first": intersection, "second": intersection},
+                "$defs": {
+                    "A": {"type": "number", "minimum": 0},
+                    "B": {"type": "number", "maximum": 10},
+                },
+            }
+        )
+    )
+    decoding = SchemaAsserts(schema).decoding()
+    decoding.succeed({"first": 1, "second": 2})
+    assert Exit.is_failure(decoding.run({"first": -1, "second": 2}))
+    assert Exit.is_failure(decoding.run({"first": 1, "second": 11}))
 
 
 @pytest.mark.parametrize(

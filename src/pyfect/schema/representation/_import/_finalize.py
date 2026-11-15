@@ -109,6 +109,8 @@ class Finalizer:
             )
             for p in node.property_signatures
         )
+        if self._closes(node):
+            index = None
         record = (
             None
             if index is None
@@ -119,3 +121,12 @@ class Finalizer:
         if not properties:
             return record
         return ast.struct_with_rest(ast.Objects(properties), [record])
+
+    def _closes(self, node: N.Objects) -> bool:
+        """``close_objects`` closes an object with declared properties when no
+        object it was intersected from says what other keys may hold."""
+        return (
+            self.translator.options.close_objects
+            and any(scope.has_properties for scope in node.scopes)
+            and all(scope.implicit_additional_properties for scope in node.scopes)
+        )

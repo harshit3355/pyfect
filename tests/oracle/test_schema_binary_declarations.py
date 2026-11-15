@@ -489,6 +489,13 @@ def test_preserves_the_schema_parser_issue_and_schema_schema_error_surfaces():
     assert Issue.is_issue(error.issue)
 
 
+def test_reports_the_issue_and_path_for_binary_failures() -> None:
+    """reports the issue and path for binary failures"""
+    data = bytearray(encode(S.Tuple(S.Boolean), (True,)))
+    data[-1] = 2
+    assert message_of(lambda: decode(S.Tuple(S.Boolean), bytes(data))) == "Expected bool\n  at [0]"
+
+
 def test_reports_a_missing_fixed_tuple_slot_as_missing_key() -> None:
     """reports a missing fixed tuple slot as MissingKey"""
     data = encode(S.Tuple(), ())
