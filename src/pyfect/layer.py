@@ -25,6 +25,7 @@ Layer methods add to a layer (``build``, ``tap``, ``catch_all``, ...);
 
 from __future__ import annotations
 
+import difflib
 from collections.abc import Callable, Mapping
 from typing import Any, Literal, Never, Protocol, cast, overload
 
@@ -201,7 +202,12 @@ class _Mock:
             raise AttributeError(name)
         if name in self._members:
             return self._members[name]
-        return _Unimplemented(UnimplementedError(f'{self._key}: Unimplemented method "{name}"'))
+        message = f'{self._key}: Unimplemented method "{name}"'
+        # pyright checks no member name given to mock, so a misspelt one shows up here.
+        close = difflib.get_close_matches(name, self._members, n=1)
+        if close:
+            message += f'; layer.mock was given "{close[0]}": a typo?'
+        return _Unimplemented(UnimplementedError(message))
 
 
 class _Unimplemented(Effect[Never]):
