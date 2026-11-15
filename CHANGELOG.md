@@ -78,8 +78,11 @@
 - `key_value_store.layer_file_system` escapes upper-case ASCII letters and a trailing `.` in
   file names (`user:Alice` is `user%3A%41lice`), so keys that differ only in letter case or
   by a trailing `.` no longer share one file on macOS or Windows file systems. Keys without
-  either keep their file names; an entry whose key has an upper-case letter was written under
-  the old name, which `get` no longer reads (`keys` still lists it): set it again to move it.
+  either keep their file names. Upgrading: when the store opens it renames, once, each file
+  0.6.5 named for a key with an upper-case letter or a trailing `.`, so every entry reads back
+  as it did (`get`, `has`, `keys`, `size`, `remove` agree). Each file goes to the key its name
+  spells, as 0.6.5's `keys` listed it; of a 0.6.5 file and a newer-named one for the same key,
+  the more recently written stays.
 - SQL `PersistedQueue` on MySQL: `offer` fails with a `PersistedQueueError` for an id or queue
   name longer than its column (1020 bytes of UTF-8), and a duplicate is skipped with
   `ON DUPLICATE KEY UPDATE` instead of `INSERT IGNORE`. `INSERT IGNORE` cut such an id to the
