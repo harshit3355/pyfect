@@ -17,14 +17,22 @@ values (``2`` equals ``2.00``). The scale is any integer from
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from typing import Literal
 
-from pyfect._digits import digits_value, signed_digits_value, to_int
+from pyfect._digits import is_digits, signed_digits_value, to_int
 from pyfect._js import int_text, js_number
 
 _MAX_SAFE = 2**53 - 1
+_MAX_SAFE_DIGITS = len(str(_MAX_SAFE))
+_EXPONENT = re.compile("[eE]")
+MAX_DIGITS = 30_000
+"""The most significant digits ``from_string`` (and so ``S.BigDecimal`` and
+``S.BigDecimalFromString``) reads by default: converting and printing a longer
+run costs superlinear time. Arithmetic aligns at most 20,000 digits of scale and a
+fraction has at most 10,000, so every value arithmetic produces reads back."""
 _DEFAULT_PRECISION = 100
 _MAX_COMPARISON_SCALE_ALIGNMENT = 100
 _MAX_SCALE = 10_000
@@ -449,31 +457,54 @@ def from_number_unsafe(n: float) -> BigDecimal:
     return out
 
 
-def from_string(text: str) -> BigDecimal | None:
+def from_string(text: str, *, max_digits: int = MAX_DIGITS) -> BigDecimal | None:
     """``[+-]digits[.digits][e[+-]digits]`` (``""`` is zero); ``None`` for
-    anything else, a scale past 10,000 or a normalized scale below -10,000."""
+    anything else, more than ``max_digits`` significant digits, a scale past
+    10,000 or a normalized scale below -10,000."""
     if text == "":
         return _ZERO
-    base, exp = text, 0
-    separator = next((i for i, c in enumerate(text) if c in "eE"), -1)
-    if separator != -1:
-        base, parsed = text[:separator], signed_digits_value(text[separator + 1 :])
-        if base == "" or parsed is None or not -_MAX_SAFE <= parsed <= _MAX_SAFE:
-            return None
-        exp = parsed
-    lead, dot, fraction = base.partition(".")
-    if fraction and digits_value(fraction) is None:
+    split = _split_exponent(text)
+    coefficient = None if split is None else _coefficient(split[0], max_digits)
+    if split is None or coefficient is None:
         return None
-    digits = lead + fraction if dot else base
-    value = signed_digits_value(digits)
-    if value is None:
-        return None
-    scale = len(fraction) - exp
+    value, fraction, digits = coefficient
+    scale = len(fraction) - split[1]
     # The normalized scale keeps ``format``'s output parseable.
     normalized_scale = scale if value == 0 else scale - (len(digits) - len(digits.rstrip("0")))
     if scale > _MAX_SCALE or normalized_scale < -_MAX_SCALE:
         return None
     return BigDecimal(value, scale)
+
+
+def _coefficient(base: str, max_digits: int) -> tuple[int, str, str] | None:
+    """``[+-]digits[.digits]`` as its value, its fraction digits and all its digits;
+    ``None`` for anything else or more than ``max_digits`` significant digits."""
+    lead, dot, fraction = base.partition(".")
+    digits = lead + fraction if dot else base
+    sign = digits[:1] if digits[:1] in ("+", "-") else ""
+    unsigned = digits[len(sign) :]
+    if (fraction and not is_digits(fraction)) or not is_digits(unsigned):
+        return None
+    if len(lead.lstrip("+-").lstrip("0")) + len(fraction) > max_digits:
+        return None
+    # Leading zeros cost time to convert and change nothing
+    value = signed_digits_value(sign + (unsigned.lstrip("0") or "0"))
+    return None if value is None else (value, fraction, digits)
+
+
+def _split_exponent(text: str) -> tuple[str, int] | None:
+    """``text`` before its exponent, and the exponent (0 without one); ``None`` for an
+    exponent that is not a safe integer, which is refused before it is converted."""
+    separator = _EXPONENT.search(text)
+    if separator is None:
+        return text, 0
+    base, exponent = text[: separator.start()], text[separator.end() :]
+    if len(exponent.lstrip("+-").lstrip("0")) > _MAX_SAFE_DIGITS:
+        return None
+    parsed = signed_digits_value(exponent)
+    if base == "" or parsed is None or not -_MAX_SAFE <= parsed <= _MAX_SAFE:
+        return None
+    return base, parsed
 
 
 def from_string_unsafe(text: str) -> BigDecimal:
@@ -501,6 +532,7 @@ def multiply_all(values: Iterable[BigDecimal]) -> BigDecimal:
 
 
 __all__ = [
+    "MAX_DIGITS",
     "BigDecimal",
     "RoundingMode",
     "from_big_int",

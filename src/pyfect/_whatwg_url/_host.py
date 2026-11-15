@@ -3,6 +3,7 @@ addresses and opaque hosts, each given back serialized."""
 
 from __future__ import annotations
 
+from pyfect._js import text_encode
 from pyfect._whatwg_url import _idna, _percent
 
 _FORBIDDEN_HOST = frozenset("\x00\t\n\r #/:<>?@[\\]^|")
@@ -37,10 +38,18 @@ def parse(text: str, opaque: bool) -> str | None:  # noqa: PLR0911
     return ascii_domain
 
 
+_MAX_IDNA_BYTES = 16384
+"""The most UTF-8 bytes of a non-ASCII domain Node's ``URL`` converts; a longer one is no
+host there, and here it never reaches IDNA."""
+
+
 def _domain_to_ascii(domain: str) -> str | None:
     """An ASCII domain is only lowercased; any other goes through IDNA."""
-    result = domain.lower() if domain.isascii() else _idna.to_ascii(domain)
-    return result or None
+    if domain.isascii():
+        return domain.lower() or None
+    if len(domain) > _MAX_IDNA_BYTES or len(text_encode(domain)) > _MAX_IDNA_BYTES:
+        return None
+    return _idna.to_ascii(domain) or None
 
 
 def _ipv4_number(part: str) -> int | None:

@@ -8,7 +8,8 @@ from pyfect._whatwg_url import _nfc
 from pyfect._whatwg_url import _unicode as uni
 
 _BASE, _TMIN, _TMAX, _SKEW, _DAMP = 36, 1, 26, 38, 700
-_MAX_INT = 0x7FFFFFFF  # RFC 3492's overflow bound, as Node's decoder checks it
+_MAX_INT = 0x7FFFFFFF  # RFC 3492's overflow bound, as Node checks it
+_DIGITS = "abcdefghijklmnopqrstuvwxyz0123456789"
 
 
 def _adapt(delta: int, points: int, first: bool) -> int:
@@ -73,37 +74,75 @@ def punycode_decode(text: str) -> str | None:  # noqa: PLR0911
     return "".join(output)
 
 
-def punycode_encode(text: str) -> str:
-    """RFC 3492 encoding (without the ``xn--`` prefix)."""
-    points = [ord(ch) for ch in text]
+class _Counts:
+    """A Fenwick tree over a label's positions: how many marked positions come before an
+    index, in ``O(log n)``."""
+
+    __slots__ = ("_tree",)
+
+    def __init__(self, size: int) -> None:
+        self._tree = [0] * (size + 1)
+
+    def mark(self, index: int) -> None:
+        index += 1
+        while index < len(self._tree):
+            self._tree[index] += 1
+            index += index & -index
+
+    def before(self, index: int) -> int:
+        total = 0
+        while index > 0:
+            total += self._tree[index]
+            index -= index & -index
+        return total
+
+
+def punycode_encode(text: str) -> str | None:
+    """RFC 3492 encoding (without the ``xn--`` prefix); ``None`` on overflow, as Node's
+    encoder refuses it. The RFC walks the whole label once per distinct code point, which
+    is quadratic in a label a peer chose; here the code points below the one being encoded
+    are counted with ``_Counts``, in ``O(n log n)``."""
     output = [ch for ch in text if ord(ch) < 0x80]
     basic = handled = len(output)
     if basic:
         output.append("-")
+    smaller = _Counts(len(text))
+    positions: dict[int, list[int]] = {}
+    for index, ch in enumerate(text):
+        if ord(ch) < 0x80:
+            smaller.mark(index)
+        else:
+            positions.setdefault(ord(ch), []).append(index)
     n, delta, bias = 0x80, 0, 72
-    while handled < len(points):
-        m = min(p for p in points if p >= n)
+    for m in sorted(positions):
+        if m - n > (_MAX_INT - delta) // (handled + 1):
+            return None
         delta += (m - n) * (handled + 1)
-        n = m
-        for p in points:
-            if p < n:
-                delta += 1
-            elif p == n:
-                q, k = delta, _BASE
-                while True:
-                    t = _threshold(k, bias)
-                    if q < t:
-                        break
-                    digit = t + (q - t) % (_BASE - t)
-                    output.append("abcdefghijklmnopqrstuvwxyz0123456789"[digit])
-                    q = (q - t) // (_BASE - t)
-                    k += _BASE
-                output.append("abcdefghijklmnopqrstuvwxyz0123456789"[q])
-                bias = _adapt(delta, handled + 1, handled == basic)
-                delta = 0
-                handled += 1
+        previous = 0
+        for index in positions[m]:
+            delta += smaller.before(index) - smaller.before(previous)
+            if delta > _MAX_INT:
+                return None
+            q, k = delta, _BASE
+            while True:
+                t = _threshold(k, bias)
+                if q < t:
+                    break
+                output.append(_DIGITS[t + (q - t) % (_BASE - t)])
+                q = (q - t) // (_BASE - t)
+                k += _BASE
+            output.append(_DIGITS[q])
+            bias = _adapt(delta, handled + 1, handled == basic)
+            delta = 0
+            handled += 1
+            previous = index + 1
+        delta += smaller.before(len(text)) - smaller.before(previous)
+        if delta > _MAX_INT:
+            return None
+        for index in positions[m]:
+            smaller.mark(index)
         delta += 1
-        n += 1
+        n = m + 1
     return "".join(output)
 
 
@@ -121,7 +160,23 @@ def _map(domain: str) -> str | None:
 
 
 def _joiners_ok(label: str) -> bool:
-    """RFC 5892's CONTEXTJ rules for U+200C and U+200D."""
+    """RFC 5892's CONTEXTJ rules for U+200C and U+200D. The joining types around each
+    joiner come from one pass each way, so a label of many joiners stays linear."""
+    if "‌" not in label and "‍" not in label:
+        return True
+    types = [uni.joining_type(c) for c in label]
+    before: list[str | None] = []
+    last: str | None = None
+    for t in types:
+        before.append(last)
+        if t != "T":
+            last = t
+    after: list[str | None] = [None] * len(label)
+    last = None
+    for i in range(len(label) - 1, -1, -1):
+        after[i] = last
+        if types[i] != "T":
+            last = types[i]
     for i, ch in enumerate(label):
         if ch not in "‌‍":
             continue
@@ -129,11 +184,7 @@ def _joiners_ok(label: str) -> bool:
             continue
         if ch == "‍":
             return False
-        before = (uni.joining_type(c) for c in reversed(label[:i]))
-        after = (uni.joining_type(c) for c in label[i + 1 :])
-        if next((t for t in before if t != "T"), None) not in ("L", "D"):
-            return False
-        if next((t for t in after if t != "T"), None) not in ("R", "D"):
+        if before[i] not in ("L", "D") or after[i] not in ("R", "D"):
             return False
     return True
 
@@ -189,6 +240,13 @@ def to_ascii(domain: str) -> str | None:
         return None
     if _is_bidi_domain(labels) and not all(_bidi_ok(label) for label in labels if label):
         return None
-    return ".".join(
-        label if label.isascii() else "xn--" + punycode_encode(label) for label in labels
-    )
+    encoded: list[str] = []
+    for label in labels:
+        if label.isascii():
+            encoded.append(label)
+            continue
+        punycode = punycode_encode(label)
+        if punycode is None:
+            return None
+        encoded.append("xn--" + punycode)
+    return ".".join(encoded)

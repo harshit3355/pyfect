@@ -2,9 +2,15 @@
 
 from __future__ import annotations
 
+from collections import ChainMap
+from collections.abc import Mapping, MutableMapping
+from types import MappingProxyType
+from typing import NamedTuple, cast
+
 from pyfect.encoding._archive import NEED_INPUT, ByteQueue, NeedInput
 from pyfect.encoding.tar._header import (
     BLOCK,
+    PAX_HEADER_KEYS,
     PERMISSION_BITS,
     RawHeader,
     apply_pax,
@@ -21,6 +27,14 @@ from pyfect.encoding.tar._header import (
 from pyfect.encoding.tar._model import Header, TarError
 
 _MAX_META_SIZE = 1024 * 1024  # PAX and GNU long name data
+
+
+class _GlobalRecords(NamedTuple):
+    fields: dict[str, str]
+    custom: Mapping[str, str]
+    sparse: bool
+
+
 _ZERO_BLOCK = bytes(BLOCK)
 
 
@@ -47,6 +61,9 @@ class Decoder:
         self._pax: dict[str, str] | None = None
         # Records of the PAX global headers read so far
         self._global: dict[str, str] | None = None
+        # ``_global`` split into header field records and the custom records every entry
+        # shares, so that an entry costs its own records, not all the global ones
+        self._global_split: _GlobalRecords | None = None
         self._long_name = ""
         self._long_link = ""
 
@@ -179,14 +196,37 @@ class Decoder:
                 self._global.pop(key, None)
         if not self._global:
             self._global = None
+        self._global_split = None
+
+    def _split_global(self, records: dict[str, str]) -> _GlobalRecords:
+        if self._global_split is None:
+            fields = {key: value for key, value in records.items() if key in PAX_HEADER_KEYS}
+            custom = {key: value for key, value in records.items() if key not in fields}
+            sparse = any(key.startswith("GNU.sparse.") for key in custom)
+            self._global_split = _GlobalRecords(fields, MappingProxyType(custom), sparse)
+        return self._global_split
+
+    def _apply_records(self, raw: RawHeader) -> Mapping[str, str]:
+        """Applies the global and the entry's own PAX records to ``raw``, the entry's own
+        overriding global ones, and returns the custom records."""
+        own = self._pax
+        if self._global is None:
+            return {} if own is None else apply_pax(raw, own)
+        fields, custom, sparse = self._split_global(self._global)
+        if sparse:
+            raise unsupported("GNU sparse files are not supported")
+        if own is None:
+            apply_pax(raw, fields)
+            return custom
+        apply_pax(raw, {key: value for key, value in fields.items() if key not in own})
+        rest = apply_pax(raw, own)
+        if not rest:
+            return custom
+        # ``ChainMap`` writes only to its first mapping; ``custom`` is only read
+        return MappingProxyType(ChainMap(rest, cast("MutableMapping[str, str]", custom)))
 
     def _to_header(self, raw: RawHeader) -> Header:
-        # The records of the entry's own extended header override global ones
-        if self._global is None:
-            records = self._pax
-        else:
-            records = self._global if self._pax is None else {**self._global, **self._pax}
-        rest = {} if records is None else apply_pax(raw, records)
+        rest = self._apply_records(raw)
         # Empty GNU long names are ignored, as in Go
         if self._long_name != "":
             raw.path = self._long_name

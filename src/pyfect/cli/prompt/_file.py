@@ -10,6 +10,7 @@ from typing import Literal, Never
 
 from pyfect._concurrency import for_each
 from pyfect.cli import _ansi as ansi
+from pyfect.cli._terminal_text import escape_control
 from pyfect.cli.prompt._core import (
     Action,
     Beep,
@@ -168,7 +169,7 @@ def _render_files(state: _State, theme: Theme, opts: _Options, plain: bool) -> s
             prefix = pointer + paging
         else:
             prefix = paging + " " * len(theme.pointer)
-        name = files[index]
+        name = escape_control(files[index])
         if not plain and selected:
             name = ansi.annotate(theme.colors, name, ansi.underlined, theme.primary_color)
         lines.append(prefix + name)
@@ -214,7 +215,7 @@ class _FilePrompt:
     def _frame(self, state: _State, figures: Theme) -> Effect[str, Never, PromptEnvironment]:
         def body():
             target = yield from self._resolved(state)
-            line = separate_symbol(figures.pointer_small, target)
+            line = separate_symbol(figures.pointer_small, escape_control(target))
             target_line = ansi.annotate(figures.colors, line, figures.muted_color)
             if state.confirm:
                 leading, trailing = active_symbols(figures)
@@ -239,7 +240,8 @@ class _FilePrompt:
                     return (yield from self._frame(action.state, figures))
                 case Submit():
                     output = self._filter_prompt(state, *submitted_symbols(figures), figures)
-                    value = ansi.annotate(figures.colors, action.value, figures.submitted_color)
+                    shown = escape_control(action.value)
+                    value = ansi.annotate(figures.colors, shown, figures.submitted_color)
                     return output + " " + value + "\n"
 
         return gen(body)

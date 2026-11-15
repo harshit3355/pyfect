@@ -24,12 +24,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Never, cast
 
-from pyfect._digits import to_int
 from pyfect._js import LINE_END, SPACE, js_number, trim, trim_end, trim_start
 from pyfect._nesting import parse_nested
 from pyfect._stack import with_fresh_stack
 
 type _Record = dict[str, object]
+
+MAX_INTEGER_DIGITS = 1000
+"""The most significant digits of an integer ``parse`` reads (decimal, hexadecimal or
+octal); a longer one raises ``ValueError``, as converting it costs superlinear time."""
 
 _IS_SPACE = re.compile(f"[{SPACE}]")
 _ANCHOR_NAME_END = re.compile(f"[{SPACE},\\[\\]{{}}]")
@@ -242,14 +245,24 @@ def _parse_scalar(text: str) -> object:  # noqa: PLR0911 - one return per scalar
     normalized = value.replace("_", "")
     sign = -1 if normalized.startswith("-") else 1
     if _HEX.fullmatch(normalized):
-        return sign * int(normalized.lstrip("+-")[2:], 16)
+        return _radix_int(sign, normalized.lstrip("+-")[2:], 16)
     if _OCTAL.fullmatch(normalized):
-        return sign * int(normalized.lstrip("+-")[2:], 8)
+        return _radix_int(sign, normalized.lstrip("+-")[2:], 8)
     if _INT.fullmatch(normalized):
-        return to_int(normalized)
+        return _radix_int(sign, normalized.lstrip("+-"), 10)
     if _FLOAT.fullmatch(normalized):
         return float(normalized)
     return value
+
+
+def _radix_int(sign: int, digits: str, radix: int) -> int:
+    """The integer ``digits`` in ``radix``; ``ValueError`` past ``MAX_INTEGER_DIGITS``
+    significant digits, as an int that long costs superlinear time to convert and to
+    print, and a key is printed while parsing."""
+    significant = digits.lstrip("0")
+    if len(significant) > MAX_INTEGER_DIGITS:
+        raise ValueError(f"YAML integer has more than {MAX_INTEGER_DIGITS} digits")
+    return sign * int(significant or "0", radix)
 
 
 def _key_text(value: object) -> str:
@@ -328,11 +341,17 @@ class _FlowParser:
     def __init__(
         self, text: str, anchors: dict[str, object], next_line: Callable[[int], str | None]
     ) -> None:
+        # The line being read: lines already read are dropped (``_dropped`` counts their
+        # characters), so a collection over many lines is not copied once per line.
         self._input = text
+        self._dropped = 0
         self._anchors = anchors
         self._next_line = next_line
         self._index = 0
         self._depth = 0
+        # The pieces of the token ``_read_until`` is reading, from lines already dropped
+        self._token: list[str] | None = None
+        self._token_start = 0
 
     def parse(self) -> object:
         value = self._value()
@@ -427,10 +446,13 @@ class _FlowParser:
         return self._input[start : self._index]
 
     def _read_until(self, stop: re.Pattern[str]) -> str:
-        start = self._index
+        pieces: list[str] = []
+        self._token, self._token_start = pieces, self._index
         while not stop.match(self._peek()) and self._index < len(self._input):
             self._index += 1
-        return self._input[start : self._index]
+        self._token = None
+        pieces.append(self._input[self._token_start : self._index])
+        return "".join(pieces)
 
     def _skip_whitespace(self) -> None:
         while _is_space(self._peek()):
@@ -446,11 +468,16 @@ class _FlowParser:
         if self._index == len(self._input) and self._depth > 0:
             line = self._next_line(self._depth)
             if line is not None:
-                self._input += f"\n{line}"
+                if self._token is not None:
+                    self._token.append(self._input[self._token_start :])
+                    self._token_start = 0
+                self._dropped += len(self._input)
+                self._input = f"\n{line}"
+                self._index = 0
         return self._input[self._index : self._index + 1]
 
     def _fail(self, message: str) -> Never:
-        raise ValueError(f"{message} at flow offset {self._index}")
+        raise ValueError(f"{message} at flow offset {self._dropped + self._index}")
 
 
 class _Parser:
@@ -791,4 +818,4 @@ def parse(text: str) -> object:
     return parse_nested(_Parser(lines).parse)
 
 
-__all__ = ["parse"]
+__all__ = ["MAX_INTEGER_DIGITS", "parse"]

@@ -132,6 +132,32 @@
   `ON DUPLICATE KEY UPDATE` instead of `INSERT IGNORE`. `INSERT IGNORE` cut such an id to the
   column, so a second id sharing its first 1020 bytes was dropped while `offer` reported it
   stored. The other stores keep or refuse long ids already.
+- Parsers and decoders take time linear in their input where some inputs cost quadratic time:
+  URL hosts with non-ASCII labels (Punycode encoding and the joiner checks of IDNA), XML
+  decoding (text split by CDATA sections or comments, chunks holding non-ASCII characters,
+  markup in a chunk past `max_token_size`) and XML encoding of many events, TOML table headers
+  of many dotted keys, YAML flow collections over many lines, `json_patch.apply` with many
+  operations on one container, tar archives with global PAX records before many entries, and
+  the `flags` of a JSON `RegExp`. The tar decoder's `Header.pax` is now a read-only mapping.
+- A URL host whose non-ASCII domain is over 16 KiB of UTF-8 is invalid, as in Node's `URL`.
+- Streamed AI responses fold their deltas in linear time: text and reasoning deltas into a
+  prompt (`Prompt.from_response_parts`), OpenAI code interpreter code, and OpenRouter tool
+  call arguments, which were parsed again after every delta.
+- `big_decimal.from_string` (and `S.BigDecimalFromString`) reads at most
+  `big_decimal.MAX_DIGITS` (30,000) significant digits by default, set with `max_digits`, and
+  refuses an exponent past the safe integers before converting it.
+- `yaml.parse` refuses an integer of more than `yaml.MAX_INTEGER_DIGITS` (1000) significant
+  digits, and JSON parsing refuses one of more than `encoding.MAX_JSON_INTEGER_DIGITS` (4300)
+  digits, with the parser's usual error (`ValueError`, a `SchemaError` through schemas) naming
+  the limit. 0.6.5 read these integers in full, at superlinear cost; 0.6.6 refuses them past
+  the limit. Hexadecimal or octal integer text past 1000 digits in `S.Number` and `S.BigInt`
+  coercion reads as an infinity (or is no `BigInt`), as JavaScript's `Number` reads it; a
+  long hexadecimal text in `Number` coercion raised `OverflowError`.
+- `S.RegExp` decoding refuses a pattern whose character classes span more than 2**20 code
+  points, or that nests too deeply to compile (a defect before), and no longer fills `re`'s
+  cache with decoded patterns.
+- The CLI's file prompt escapes control characters in file names, the target line and the
+  submitted value, with the helper CLI output already escaped them with.
 
 ## 0.6.5 (2026-11-14)
 

@@ -142,7 +142,6 @@ def test_a_number_from_json_string_past_the_floats_is_an_infinity_written_null(t
 
 _DIGITS = "7" * 6578
 """More digits than Python's ``int`` reads or ``str`` prints (4300)."""
-_VALUE = int(_DIGITS[:4000]) * 10**2578 + int(_DIGITS[4000:])
 
 
 def test_a_big_decimal_past_4300_digits_formats_and_parses_back() -> None:
@@ -165,11 +164,23 @@ def test_an_iso_duration_past_4300_digits_is_read_and_written_in_full() -> None:
     assert duration.from_iso(iso) == found
 
 
-def test_yaml_and_json_integers_past_4300_digits_are_read_in_full() -> None:
+def test_yaml_and_json_integers_past_their_digit_limits_are_refused() -> None:
+    """0.6.5 read them in full, at superlinear cost; a parse error names the limit."""
     from pyfect import _json_text
+    from pyfect.encoding import MAX_JSON_INTEGER_DIGITS
 
-    assert yaml.parse("a: " + _DIGITS) == {"a": _VALUE}
-    assert _json_text.parse("[-" + _DIGITS + "]") == [-_VALUE]
+    limit = yaml.MAX_INTEGER_DIGITS
+    assert yaml.parse("a: " + "7" * limit) == {"a": int("7" * limit)}
+    for text in ("a: " + "7" * (limit + 1), "a: 0x" + "f" * (limit + 1)):
+        with pytest.raises(ValueError, match=f"more than {limit} digits"):
+            yaml.parse(text)
+    longest = "7" * MAX_JSON_INTEGER_DIGITS
+    assert _json_text.parse(f"[-{longest}]") == [-int(longest)]
+    with pytest.raises(ValueError, match=f"more than {MAX_JSON_INTEGER_DIGITS} digits"):
+        _json_text.parse("[-" + _DIGITS + "]")
+    decoded = S.decode_unknown_exit(S.UnknownFromJsonString)(_DIGITS)
+    assert isinstance(decoded, Failure)
+    assert isinstance(decoded.cause.find_error(), Ok)
 
 
 def test_digit_runs_past_4300_in_schemas_fail_as_schema_errors() -> None:

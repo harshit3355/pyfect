@@ -12,9 +12,10 @@ patterns carry ``i``, ``m`` and ``s`` (``re.IGNORECASE``, ``re.MULTILINE``,
 
 from __future__ import annotations
 
+import importlib
 import re
 from collections.abc import Mapping
-from typing import TypedDict, TypeIs, cast
+from typing import Any, TypedDict, TypeIs, cast
 
 from pyfect import big_decimal as bd
 from pyfect.exit import Exit, Success
@@ -114,7 +115,6 @@ is_between_big_decimal: Between[bd.BigDecimal] = make_is_between(
 
 _FLAGS = (("i", re.IGNORECASE), ("m", re.MULTILINE), ("s", re.DOTALL))
 """JavaScript's flag letters Python patterns carry, in JavaScript's order."""
-_VALID_FLAGS = re.compile(r"(?!.*(.).*\1)[ims]*")
 _WRITTEN_FLAGS = re.IGNORECASE | re.MULTILINE | re.DOTALL | re.UNICODE
 """The flags ``{source, flags}`` carries (``re.UNICODE`` is every ``str`` pattern's)."""
 
@@ -131,17 +131,52 @@ def flags_of(pattern: re.Pattern[str]) -> str:
     return "".join(letter for letter, flag in _FLAGS if pattern.flags & flag)
 
 
+_sre_parser: Any = importlib.import_module("re._parser")
+_sre_compiler: Any = importlib.import_module("re._compiler")
+
+MAX_CLASS_CODE_POINTS = 1 << 20
+"""The most code points the character classes of a decoded ``RegExp`` source may span
+together. CPython's compiler marks each code point of a class range one at a time (up to
+65,536 per class), so a short source of wide classes cost seconds to compile; JavaScript
+keeps ranges as ranges. A source past it is not a valid ``RegExp`` here."""
+
+
+def _class_code_points(tree: object) -> int:
+    """The code points the class ranges of the parsed pattern ``tree`` span."""
+    total = 0
+    stack: list[object] = [tree]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, _sre_parser.SubPattern):
+            pattern: Any = node
+            stack.extend(cast("list[object]", pattern.data))
+        elif isinstance(node, (tuple, list)):
+            items = cast("tuple[object, ...] | list[object]", node)
+            if len(items) == 2 and items[0] is _sre_parser.RANGE:
+                low, high = cast("tuple[int, int]", items[1])
+                total += max(min(high, 0xFFFF) - low + 1, 0)
+            else:
+                stack.extend(items)
+    return total
+
+
 def _compile(source: str, flags: str) -> re.Pattern[str] | None:
     known = dict(_FLAGS)
-    # Each known letter at most once, as JavaScript's ``RegExp`` requires.
-    if _VALID_FLAGS.fullmatch(flags) is None:
+    # Each known letter at most once, as JavaScript's ``RegExp`` requires; the length is
+    # checked first, so the rest looks at a handful of letters.
+    if len(flags) > len(known):
+        return None
+    if any(letter not in known or flags.count(letter) > 1 for letter in flags):
         return None
     value = 0
     for letter in flags:
         value |= known[letter]
     try:
-        return re.compile(source, value)
-    except re.error:
+        if _class_code_points(_sre_parser.parse(source, value)) > MAX_CLASS_CODE_POINTS:
+            return None
+        # Not ``re.compile``: its process-wide cache would keep peer sources alive
+        return cast("re.Pattern[str]", _sre_compiler.compile(source, value))
+    except (re.error, RecursionError, OverflowError):
         return None
 
 

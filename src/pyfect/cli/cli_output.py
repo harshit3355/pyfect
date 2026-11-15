@@ -9,13 +9,13 @@ its output when ``TerminalCapabilities`` says the terminal can.
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol
 
 from pyfect import console
 from pyfect.cli import _ansi as ansi
+from pyfect.cli._terminal_text import escape_control
 from pyfect.cli._width import display_width
 from pyfect.cli.cli_error import CliError, ParseError
 from pyfect.cli.help_doc import FlagDoc, HelpDoc, SubcommandDoc
@@ -67,11 +67,12 @@ class CurrentFormatter(Tag[Formatter]):
     otherwise output uses ``default_formatter``."""
 
 
-_CONTROL = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
-
-
 def _escape(text: str) -> str:
-    return _CONTROL.sub(lambda match: f"\\x{ord(match.group()):02x}", text)
+    """Effect's ``escapeControlCharacters``: C0 controls but tab and line breaks, and DEL."""
+    return escape_control(text, keep=_EFFECT_KEEPS)
+
+
+_EFFECT_KEEPS = "\t\n\r" + "".join(chr(code) for code in range(0x80, 0xA0))
 
 
 @dataclass(frozen=True, slots=True)

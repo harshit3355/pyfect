@@ -548,8 +548,13 @@ def _merge_options(left: ProviderOptions, right: Mapping[str, JsonValue]) -> Pro
 @dataclass
 class _Active:
     index: int
-    text: str
+    pieces: list[str]
+    """The deltas so far, joined once: ``+=`` on an attribute copies the whole text."""
     options: ProviderOptions
+
+    @property
+    def text(self) -> str:
+        return "".join(self.pieces)
 
 
 class _Builder:
@@ -564,13 +569,14 @@ class _Builder:
         self.assistant.append(part)
 
     def start(self, kind: str, id: str, metadata: Mapping[str, JsonValue]) -> None:
-        self.active[kind, id] = _Active(len(self.assistant), "", dict(metadata))
+        self.active[kind, id] = _Active(len(self.assistant), [], dict(metadata))
         self.assistant.append(None)
 
     def delta(self, kind: str, id: str, delta: str, metadata: Mapping[str, JsonValue]) -> None:
         if (active := self.active.get((kind, id))) is not None:
-            active.text += delta
-            active.options = _merge_options(active.options, metadata)
+            active.pieces.append(delta)
+            if metadata:
+                active.options = _merge_options(active.options, metadata)
 
     def end(self, kind: str, id: str, metadata: Mapping[str, JsonValue]) -> None:
         if (active := self.active.pop((kind, id), None)) is not None:
@@ -583,7 +589,7 @@ class _Builder:
 
     def finish(self) -> Prompt:
         for (kind, _), active in self.active.items():
-            if kind == "text" and active.text:
+            if kind == "text" and any(active.pieces):
                 self.close(kind, active)
         content = [p for p in self.assistant if p is not None]
         messages: list[Message] = []
