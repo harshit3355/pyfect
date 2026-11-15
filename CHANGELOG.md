@@ -26,6 +26,9 @@
 - `middleware.decompression()` answers 400 to a body with data after the end of its
   compressed stream, as the web `DecompressionStream` Effect decodes with does, instead of
   keeping that data.
+- The httpx client decodes a response's `gzip`, `deflate` and `br` codings itself, in pieces
+  of at most 64 KiB as the body is read, so `with_body_limit` stops a compressed body before
+  it is inflated; httpx inflated each network chunk whole, and stacked codings multiplied it.
 
 ## 0.6.5 (2026-11-14)
 
