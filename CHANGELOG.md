@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `redis_py`: a connection `reserve` was opening when the client's scope closed is closed.
+  An interrupt that landed after the connection opened on the client's loop, but before the
+  pool took it, left it open with nothing to close it.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated
