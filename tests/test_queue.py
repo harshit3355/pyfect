@@ -646,7 +646,7 @@ def test_failing_a_drained_queue_queues_no_task_for_its_takers():
 
     @fx.gen
     def program():
-        q = yield from fx.Queue[int].bounded(1)
+        q = yield from fx.Queue[int, str].bounded(1)
         taker = yield from q.take().exit().fork()
         yield from fx.yield_now()
         yield from q.fail("boom")
