@@ -242,11 +242,15 @@ def _same(value: object) -> object:
 
 
 def _transformation(
-    layout: Layout, mode: Mode, trusted: _Trusted | None, success_only: bool
+    layout: Layout,
+    mode: Mode,
+    trusted: _Trusted | None,
+    success_only: bool,
+    max_expanded_size: int | None,
 ) -> T.Transformation[object, bytes]:
     def decode(data: bytes, options: ParseOptions) -> Exit[object, Issue]:
         try:
-            value = decode_one_shot(layout, data, options, mode)
+            value = decode_one_shot(layout, data, options, mode, max_expanded_size)
         except _wire.IssueError as error:
             return fail_exit(error.issue)
         if (
@@ -266,43 +270,63 @@ def _transformation(
     return T.Transformation(G.TransformEffect(decode), G.TransformEffect(encode))
 
 
-def _assemble(
+def _assemble(  # noqa: PLR0917
     target: S.Bottom[Any, Any, Any, Any],
     layout: Layout,
     mode: Mode,
     trusted: _Trusted | None,
     success_only: bool = False,
+    max_expanded_size: int | None = None,
 ) -> BytesCodec[Any]:
-    return S.Bytes.pipe(S.decode_to(target, _transformation(layout, mode, trusted, success_only)))
+    transformation = _transformation(layout, mode, trusted, success_only, max_expanded_size)
+    return S.Bytes.pipe(S.decode_to(target, transformation))
 
 
-def _make_codec(schema: S.Codec[Any, Any, Any, Any], fingerprint: bool) -> BytesCodec[Any]:
+DEFAULT_MAX_EXPANDED_SIZE = 64 * 1024 * 1024
+"""How many bytes of values the back-references of one frame may name, when
+a schema pass walks the decoded value (``max_expanded_size``)."""
+
+
+def _make_codec(
+    schema: S.Codec[Any, Any, Any, Any],
+    fingerprint: bool,
+    max_expanded_size: int | None = DEFAULT_MAX_EXPANDED_SIZE,
+) -> BytesCodec[Any]:
     compiled = compile_target(schema)
-    return _codec_in_mode(compiled, compile_mode(compiled.layout, fingerprint))
+    return _codec_in_mode(compiled, compile_mode(compiled.layout, fingerprint), max_expanded_size)
 
 
 def _make_strict_codec(schema: S.Codec[Any, Any, Any, Any]) -> BytesCodec[Any]:
-    return _codec_in_mode(compile_target(schema), STRICT_MODE)
+    return _codec_in_mode(compile_target(schema), STRICT_MODE, DEFAULT_MAX_EXPANDED_SIZE)
 
 
-def _codec_in_mode(compiled: CompiledTarget, mode: Mode) -> BytesCodec[Any]:
+def _codec_in_mode(
+    compiled: CompiledTarget, mode: Mode, max_expanded_size: int | None
+) -> BytesCodec[Any]:
     if not compiled.exact:
-        return _assemble(compiled.target, compiled.layout, mode, None)
+        # The schema pass walks every value a back-reference names again.
+        return _assemble(
+            compiled.target, compiled.layout, mode, None, max_expanded_size=max_expanded_size
+        )
     trusted = _Trusted()
     target = _with_trusted_decode(compiled.target, trusted, not compiled.recursive)
     return _assemble(target, compiled.layout, mode, trusted)
 
 
-def _make_direct_codec(schema: S.Codec[Any, Any, Any, Any], fingerprint: bool) -> BytesCodec[Any]:
+def _make_direct_codec(
+    schema: S.Codec[Any, Any, Any, Any],
+    fingerprint: bool,
+    max_expanded_size: int | None = DEFAULT_MAX_EXPANDED_SIZE,
+) -> BytesCodec[Any]:
     compiled = compile_target(schema)
     mode = compile_mode(compiled.layout, fingerprint)
     if compiled.exact:
         return _assemble(_pass_through(compiled.target), compiled.layout, mode, None)
     if not compiled.exit_success:
-        return make_codec(schema, fingerprint)
+        return make_codec(schema, fingerprint, max_expanded_size)
     trusted = _Trusted()
     target = _with_exit_success_decode(compiled.target, trusted)
-    return _assemble(target, compiled.layout, mode, trusted, True)
+    return _assemble(target, compiled.layout, mode, trusted, True, max_expanded_size)
 
 
 make_codec = lru_cache(maxsize=4096)(_make_codec)

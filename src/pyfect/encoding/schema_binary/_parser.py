@@ -64,6 +64,7 @@ class FrameParser[T]:
     max_frame_size: int | None
     decode_encoded: Callable[[object], object] | None
     dict_: D.DictRead | None
+    max_expanded_size: int | None = None
     buffer: bytearray = field(default_factory=bytearray)
     needed: int = 0
     """The buffered bytes the next frame needs, once its header is read: chunks are only
@@ -146,6 +147,7 @@ class FrameParser[T]:
                 self.mode.positional,
                 self.dict_,
                 self.mode.reject_unknown_fields,
+                expansion=self.max_expanded_size,
             )
             try:
                 value = decode_frame_body(self.layout, reader, self.mode)
@@ -182,7 +184,14 @@ def make_parser(  # noqa: PLR0917
     max_frame_size: int | None,
     decode_encoded: Callable[[object], Any] | None,
     dictionary: bool,
+    max_expanded_size: int | None = None,
 ) -> FrameParser[Any]:
     return FrameParser(
-        layout, mode, options, max_frame_size, decode_encoded, {} if dictionary else None
+        layout,
+        mode,
+        options,
+        max_frame_size,
+        decode_encoded,
+        {} if dictionary else None,
+        max_expanded_size,
     )

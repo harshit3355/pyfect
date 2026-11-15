@@ -27,6 +27,25 @@ class Reader:
     """Handed to a row-run field's immediate consumer, then cleared."""
     nesting: int = 0
     path: list[object] = field(default_factory=list[object])
+    expansion: int | None = None
+    """What back-references may still name, in bytes of the values they
+    name (``None``: unbounded). A schema pass walks every name."""
+    sizes: dict[int, int] = field(default_factory=dict[int, int])
+    """The encoded size of each value a back-reference can name, by id."""
+
+    def keep[V](self, value: V, size: int) -> V:
+        """``value``, decoded from ``size`` bytes, joins a back-reference table."""
+        if self.expansion is not None:
+            self.sizes[id(value)] = max(size, self.sizes.get(id(value), 0))
+        return value
+
+    def referenced[V](self, value: V) -> V:
+        """``value``, named again by a back-reference."""
+        if self.expansion is not None:
+            self.expansion -= max(self.sizes.get(id(value), 0), 1)
+            if self.expansion < 0:
+                raise self.fail("back-references within max_expanded_size")
+        return value
 
     @property
     def remaining(self) -> int:
@@ -97,15 +116,14 @@ class Reader:
                 break
         return value
 
-    def uvarint_big(self) -> int:
-        value = 0
-        shift = 0
-        while True:
-            b = self.byte()
-            value |= (b & 0x7F) << shift
-            if b < 0x80:
-                return value
-            shift += 7
+    def uvarint_big(self, max_bytes: int | None = None) -> int:
+        """Reads the run once, then builds the int by halves: shifting a growing int per
+        byte made a run of N bytes cost O(N^2)."""
+        start = self.pos
+        while self.byte() >= 0x80:
+            if max_bytes is not None and self.pos - start >= max_bytes:
+                raise self.fail("safe integer length")
+        return _from_groups(bytes(self.buf[start : self.pos]))
 
     def skip_varint(self) -> None:
         """Scans without accumulating an attacker-controlled integer."""
@@ -123,7 +141,8 @@ class Reader:
         # Wider schema-proven integers: past the safe range they are the
         # float JavaScript reads, which an integer check then rejects.
         self.pos = start
-        code = self.uvarint_big()
+        # A finite double's sign-magnitude code fits in 1025 bits.
+        code = self.uvarint_big(_NUMBER_VARINT_FALLBACK_MAX_BYTES)
         magnitude = code >> 1
         if magnitude <= W.MAX_SAFE:
             return W.sign_magnitude(code)
@@ -150,3 +169,17 @@ class Reader:
 
     def i32le(self) -> int:
         return W.I32.unpack(self.take(4))[0]
+
+
+_NUMBER_VARINT_FALLBACK_MAX_BYTES = 147
+
+
+def _from_groups(groups: bytes) -> int:
+    """The value of little-endian 7-bit ``groups``, in O(n log n)."""
+    if len(groups) <= 64:
+        value = 0
+        for i, b in enumerate(groups):
+            value |= (b & 0x7F) << (7 * i)
+        return value
+    mid = len(groups) // 2
+    return _from_groups(groups[:mid]) | (_from_groups(groups[mid:]) << (7 * mid))

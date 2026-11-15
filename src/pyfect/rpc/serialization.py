@@ -327,9 +327,12 @@ def make_schema_binary(
     *,
     max_frame_size: MaxFrameSize = _SCHEMA_BINARY_MAX_FRAME_SIZE,
     fingerprint_payloads: bool = False,
+    max_expanded_size: int | None = schema_binary.DEFAULT_MAX_EXPANDED_SIZE,
 ) -> RpcSerializationService:
     """``encoding.schema_binary`` over RPC, with Effect's wire format.
-    ``max_frame_size`` limits a frame a parser buffers. Values are written in
+    ``max_frame_size`` limits a frame a parser buffers, and
+    ``max_expanded_size`` the values one payload's back-references name when
+    its schema has checks (``schema_binary.to_codec``). Values are written in
     the default mode, whose schemas can evolve compatibly; with
     ``fingerprint_payloads`` they also carry their layout hash, and a peer with
     a different layout fails."""
@@ -337,7 +340,9 @@ def make_schema_binary(
 
     def codec_for(schema: S.Top) -> S.Codec[Any, Any, Any, Any]:
         return schema_binary.to_codec_direct(
-            cast("S.Codec[Any, Any, Any, Any]", schema), fingerprint=fingerprint_payloads
+            cast("S.Codec[Any, Any, Any, Any]", schema),
+            fingerprint=fingerprint_payloads,
+            max_expanded_size=max_expanded_size,
         )
 
     return RpcSerializationService(

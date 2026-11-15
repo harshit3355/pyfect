@@ -291,11 +291,11 @@ def _decode_interned(table: list[object], layout: L.Layout, r: Reader) -> object
         ref = (code - 1) // 2
         if ref >= len(table):
             raise r.fail("a known back-reference")
-        return table[ref]
+        return r.referenced(table[ref])
     saved = r.enter(code // 2)
     value = _decode_checked(layout, r)
     r.exit(saved)
-    table.append(value)
+    table.append(r.keep(value, code // 2))
     return value
 
 
@@ -329,7 +329,7 @@ def _decode_run_slot(  # noqa: PLR0911
         ref = (code - 1) // 2
         if table is None or ref >= len(table):
             raise r.fail("a known back-reference")
-        value = table[ref]
+        value = r.referenced(table[ref])
         if value is ABSENT:
             return 0
         out[slot.name] = value
@@ -351,7 +351,7 @@ def _decode_run_slot(  # noqa: PLR0911
     r.intern = None
     r.exit(saved)
     if kind == L.INTERN_SELF:
-        tables.setdefault(slot.index, []).append(value)
+        tables.setdefault(slot.index, []).append(r.keep(value, code // 2))
     if value is ABSENT:
         return 0
     out[slot.name] = value
@@ -868,7 +868,13 @@ def decode_frame_body(layout: L.Layout, r: Reader, mode: Mode) -> object:
     return value
 
 
-def decode_one_shot(layout: L.Layout, data: bytes, options: ParseOptions, mode: Mode) -> object:
+def decode_one_shot(
+    layout: L.Layout,
+    data: bytes,
+    options: ParseOptions,
+    mode: Mode,
+    max_expanded_size: int | None = None,
+) -> object:
     r = Reader(
         data,
         0,
@@ -876,6 +882,7 @@ def decode_one_shot(layout: L.Layout, data: bytes, options: ParseOptions, mode: 
         options,
         mode.positional,
         reject_unknown_fields=mode.reject_unknown_fields,
+        expansion=max_expanded_size,
     )
     n = r.uvarint()
     if n == 0:

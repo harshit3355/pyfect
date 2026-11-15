@@ -15,6 +15,14 @@
   requests at once than the stream buffer holds (17 failing requests with the default 16)
   gets its response; the requests are now written while the response is read, where the
   writes used to wait for a reader that only started after them.
+- `schema_binary`: a varint read as a number fails past the 147 bytes a finite double needs, and
+  long `BigInt`, `Duration` and `BigDecimal` varints are read in near-linear time; both used to
+  cost time quadratic in the run's length.
+- `schema_binary`: when a schema pass checks the decoded value, the values one frame's
+  back-references name are limited to `max_expanded_size` bytes (64 MiB by default, `None` for
+  no limit), a new keyword of `to_codec`, `to_codec_direct`, `parser` and
+  `rpc.serialization.make_schema_binary`. Past it, decoding fails with a `SchemaError`; a check
+  used to run once per reference over the same value.
 
 ## 0.6.5 (2026-11-14)
 

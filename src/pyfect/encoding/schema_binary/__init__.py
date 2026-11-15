@@ -36,6 +36,7 @@ from pyfect.encoding.schema_binary._compile import FIELD_ID_KEY, FIXED_WIDTH_KEY
 from pyfect.encoding.schema_binary._fingerprint import compile_mode
 from pyfect.encoding.schema_binary._parser import Parser, make_parser
 from pyfect.encoding.schema_binary._target import (
+    DEFAULT_MAX_EXPANDED_SIZE,
     BytesCodec,
     compile_target,
     excess_is_error,
@@ -51,16 +52,25 @@ _MAX_FIELD_ID = 0xFFFFFFFF
 
 
 def to_codec[A](
-    schema: S.Codec[A, Any, Any, Any], /, *, fingerprint: bool = False
+    schema: S.Codec[A, Any, Any, Any],
+    /,
+    *,
+    fingerprint: bool = False,
+    max_expanded_size: int | None = DEFAULT_MAX_EXPANDED_SIZE,
 ) -> BytesCodec[A]:
     """``schema`` read from and written to one binary frame, memoized by
     schema identity and wire mode.
+
+    Repeated values are written once and named again by back-references.
+    When a schema pass checks the decoded value, ``max_expanded_size``
+    limits the bytes of the values one frame's back-references name (64 MiB;
+    ``None`` for no limit): past it, decoding fails with a ``SchemaError``.
 
     Bytes carry the layout of the schema that wrote them: read them with that
     schema or a compatible evolution of it (fingerprint mode needs an
     identical encoded layout). Most union codecs prefix values with a member
     selector, so they cannot read bytes written by a member's own codec."""
-    return make_codec(schema.__codec__(), fingerprint)
+    return make_codec(schema.__codec__(), fingerprint, max_expanded_size)
 
 
 def to_codec_strict[A](schema: S.Codec[A, Any, Any, Any], /) -> BytesCodec[A]:
@@ -71,13 +81,17 @@ def to_codec_strict[A](schema: S.Codec[A, Any, Any, Any], /) -> BytesCodec[A]:
 
 
 def to_codec_direct[A](
-    schema: S.Codec[A, Any, Any, Any], /, *, fingerprint: bool = False
+    schema: S.Codec[A, Any, Any, Any],
+    /,
+    *,
+    fingerprint: bool = False,
+    max_expanded_size: int | None = DEFAULT_MAX_EXPANDED_SIZE,
 ) -> BytesCodec[A]:
     """``to_codec`` without the schema pass around the binary layer, for
     schemas the binary layer validates on its own (any other falls back to
     ``to_codec``). It encodes and decodes the same values, but is not a sound
     ``S.is_`` guard: only for callers that never guard on it."""
-    return make_direct_codec(schema.__codec__(), fingerprint)
+    return make_direct_codec(schema.__codec__(), fingerprint, max_expanded_size)
 
 
 def _rethrown[A](f: Callable[[], A]) -> A:
@@ -152,12 +166,15 @@ def parser[A](
     fingerprint: bool = False,
     dictionary: bool = False,
     max_frame_size: int | None = None,
+    max_expanded_size: int | None = DEFAULT_MAX_EXPANDED_SIZE,
     **options: Unpack[ParseOptions],
 ) -> Parser[A]:
     """A stateful parser of concatenated frames. ``max_frame_size`` limits a
-    buffered frame. With ``dictionary``, frames share one string dictionary
-    with the ``encoder`` that wrote them, and must be read in order; a schema
-    the binary layer does not fully validate cannot use it (``ValueError``)."""
+    buffered frame, and ``max_expanded_size`` the values a frame's
+    back-references name, as in ``to_codec``. With ``dictionary``, frames
+    share one string dictionary with the ``encoder`` that wrote them, and
+    must be read in order; a schema the binary layer does not fully validate
+    cannot use it (``ValueError``)."""
     compiled = compile_target(schema)
     decode_target = None if compiled.exact else S.decode_unknown_sync(compiled.target, **options)
 
@@ -172,6 +189,7 @@ def parser[A](
         max_frame_size,
         decode_success if decode_target is not None and compiled.exit_success else decode_target,
         _require_dictionary(compiled.exact, dictionary),
+        None if compiled.exact else max_expanded_size,
     )
 
 
@@ -294,6 +312,7 @@ def field_id(id: int, /) -> Callable[[S.Top], S.Bottom[Any, Any, Any, Any]]:
 
 
 __all__ = [
+    "DEFAULT_MAX_EXPANDED_SIZE",
     "BytesCodec",
     "Encoder",
     "Parser",
