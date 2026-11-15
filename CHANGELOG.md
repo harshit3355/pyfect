@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.7.0 (unreleased)
+
+### Changed
+
+- OpenRouter: `generated.types.ChatToolCall`'s `id` and `ChatStreamToolCall`'s `index` are
+  `NotRequired`, as in Effect 4.1.4 (#10505): a response may omit them, which decoding has
+  accepted since the 0.6 patch that fixed it. Read them with `.get("id")` / `.get("index")`, or
+  check `"id" in call`, instead of `call["id"]`.
+
 ## 0.6.5 (unreleased)
 
 ### Deprecated

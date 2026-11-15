@@ -128,7 +128,6 @@ OPENROUTER = Target(
     "ChatResult",
     "OpenRouter",
     patches=_OPENROUTER_PATCHES,
-    required_in_types=(("ChatToolCall", "id"), ("ChatStreamToolCall", "index")),
 )
 TARGETS = {target.name: target for target in (OPENAI, OPENROUTER)}
 
