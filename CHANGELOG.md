@@ -44,6 +44,12 @@
   decode (a corrupt gzip, deflate or brotli body); since 0.6.6 it raised `NameError: name
   'httpx' is not defined` instead. Lint now enables ruff's TC004, which catches a runtime use
   of a name imported only for type checking.
+- `date_time.zone_named` and the `DateTime` zone functions resolve `CST6CDT`, `EST5EDT`,
+  `MST7MDT` and `PST8PDT` on systems without tzdata-legacy (Ubuntu 26.04, Debian 13), with
+  ICU's data, so they give Node's offsets everywhere (before 1967 they keep standard time, unlike
+  the `America/*` zones tz 2024b made them links to). `scripts/gen_icu_zones.py` now decides
+  which ids carry ICU's data from ICU's and tz's sources, not from the generating machine's tz
+  database.
 
 ## 0.6.6 (2026-11-15)
 

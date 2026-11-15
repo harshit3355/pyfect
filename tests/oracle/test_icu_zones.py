@@ -21,7 +21,14 @@ from zoneinfo import TZPATH
 import pytest
 
 from pyfect import date_time
-from pyfect.date_time._icu_zones import CANONICAL, ICU_VERSION, NODE_VERSION, TZIF
+from pyfect.date_time._icu_zones import (
+    CANONICAL,
+    DATA,
+    ICU_VERSION,
+    NODE_VERSION,
+    TZ_ZONES,
+    TZIF,
+)
 from pyfect.date_time._zones import resolved_zone_id
 
 _ROOT = Path(__file__).parent.parent.parent
@@ -82,6 +89,10 @@ def test_ids_icu_rejects_are_not_zones(written: str) -> None:
         ("SystemV/PST8PDT", datetime(1950, 4, 30, 12, tzinfo=UTC), -7),
         ("SystemV/PST8PDT", datetime(1950, 4, 29, 12, tzinfo=UTC), -8),
         ("SystemV/HST10", datetime(2024, 7, 1, tzinfo=UTC), -10),
+        ("CST6CDT", datetime(1850, 7, 1, tzinfo=UTC), -6),
+        ("CST6CDT", datetime(1950, 7, 1, tzinfo=UTC), -6),
+        ("CST6CDT", datetime(2024, 7, 1, tzinfo=UTC), -5),
+        ("PST8PDT", datetime(1950, 7, 1, tzinfo=UTC), -8),
         ("-0830", datetime(1850, 7, 1, tzinfo=UTC), -8.5),
     ],
 )
@@ -118,6 +129,66 @@ def test_a_canonical_id_zoneinfo_lacks_reads_another_ids_file(tmp_path: Path) ->
         [sys.executable, "-c", script], env=env, capture_output=True, text=True, check=True
     )
     assert result.stdout.split() == ["Asia/Calcutta", "5:30:00", "True", "True"]
+
+
+_UNRESOLVED = (
+    "import sys; sys.modules['tzdata'] = None\n"
+    "from pyfect import date_time; from pyfect.date_time._icu_zones import CANONICAL\n"
+    "print(*sorted(z for z in set(CANONICAL.values()) if date_time.zone_named(z) is None))"
+)
+
+
+def _unresolved(tzpath: Path) -> set[str]:
+    """The canonical ids that don't resolve with ``tzpath`` as the system's
+    tz database and no ``tzdata`` package."""
+    env = {"PYTHONTZPATH": str(tzpath), "PATH": ""}
+    result = subprocess.run(
+        [sys.executable, "-c", _UNRESOLVED], env=env, capture_output=True, text=True, check=True
+    )
+    return set(result.stdout.split())
+
+
+def _system_tzpath() -> Path:
+    return next(Path(d) for d in TZPATH if Path(d, "America/Chicago").exists())
+
+
+def test_every_canonical_id_resolves_with_only_the_region_directories(tmp_path: Path) -> None:
+    """Ubuntu 26.04's and Debian 13's tzdata ship only the region
+    directories, ``Etc``, ``GMT`` and ``UTC``: old names like ``CST6CDT`` are
+    in tzdata-legacy. ICU still has its own data for them."""
+    system = _system_tzpath()
+    for region in _REGIONS:
+        shutil.copytree(system / region, tmp_path / region)
+    for name in ("GMT", "UTC"):
+        shutil.copyfile(system / name, tmp_path / name)
+    assert _unresolved(tmp_path) == set()
+
+
+def test_only_ids_read_from_tz_zones_need_a_tz_database(tmp_path: Path) -> None:
+    """Without any tz database, only the ids whose data is a Zone tz keeps
+    in its region files are missing; given just those files, none is."""
+    from_tz = {zone for zone in CANONICAL.values() if DATA.get(zone, zone) in TZ_ZONES}
+    assert _unresolved(tmp_path) == from_tz
+    system = _system_tzpath()
+    for zone in TZ_ZONES:
+        (tmp_path / zone).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(system / zone, tmp_path / zone)
+    assert _unresolved(tmp_path) == set()
+
+
+_REGIONS = (
+    "Africa",
+    "America",
+    "Antarctica",
+    "Arctic",
+    "Asia",
+    "Atlantic",
+    "Australia",
+    "Etc",
+    "Europe",
+    "Indian",
+    "Pacific",
+)
 
 
 def test_icu_version_is_the_one_the_docs_state() -> None:
