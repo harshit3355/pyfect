@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `process`: an input stream (`stdin` or an input descriptor) that fails now wins over the
+  child's exit status even when the child exits before the spawning fiber yields. The stream
+  starts at once, up to its first wait, so no exit is seen before it has run, as under Node.
+  Before, a fast child (`true`) could give exit code 0 on a loaded machine.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated
