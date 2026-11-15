@@ -13,6 +13,9 @@
 - `hypercorn_server` WebSockets decline `permessage-deflate`, as Effect's `ws` server does,
   take messages up to the same 100 MiB as `uvicorn_server`, and close the connection after a
   too-large message instead of keeping it and its partial message.
+- `socket.server.make_web_socket` connections queue at most one incoming frame while no
+  handler reads them (websockets' `max_queue=1`; the client too), and the server declines
+  `permessage-deflate`, as Effect's `ws` server does. Both can be set through the serve options.
 
 ## 0.6.5 (2026-11-14)
 

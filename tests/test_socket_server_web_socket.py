@@ -142,3 +142,56 @@ def test_messages_from_a_client_gone_before_run_still_reach_the_handler() -> Non
         return (yield from received.take().timeout("5 seconds").replicate_effect(3))
 
     assert fx.run_blocking(scoped(program()).or_die()) == ["a", "b", "closed"]
+
+
+def _queued_frame_bytes() -> int:
+    import gc
+
+    from websockets.asyncio.messages import Assembler
+
+    return sum(
+        len(frame.data)
+        for assembler in gc.get_objects()
+        if type(assembler) is Assembler  # a dead weakref proxy raises on isinstance
+        for frame in assembler.frames.queue
+    )
+
+
+def test_a_connection_no_handler_reads_holds_about_one_message() -> None:
+    """As a paused ``ws`` socket in Effect's NodeSocketServer: websockets queues
+    16 frames by default, and permessage-deflate (off in ``ws``) would make each
+    cost a thousandth of its size on the wire."""
+    import threading
+    import time
+
+    size = 1024 * 1024
+
+    def flood(port: int) -> tuple[int, str | None]:
+        with connect(
+            f"ws://127.0.0.1:{port}", max_size=None, compression="deflate", close_timeout=1
+        ) as client:
+
+            def send_all() -> None:
+                try:
+                    for _ in range(30):
+                        client.send(b"\0" * size)
+                except Exception:  # a server that stops reading may drop us
+                    return
+
+            sender = threading.Thread(target=send_all, daemon=True)
+            sender.start()
+            sender.join(timeout=3.0)
+            time.sleep(0.5)
+            response = client.response
+            extensions = response.headers.get("Sec-WebSocket-Extensions") if response else None
+            return _queued_frame_bytes(), extensions
+
+    @fx.fn
+    def program():
+        srv = yield from make_web_socket(0, "127.0.0.1", max_size=size)
+        port = _port(srv.address)
+        return (yield from effect.blocking(lambda: flood(port)))
+
+    queued, extensions = fx.run_blocking(scoped(program()).or_die())
+    assert extensions is None
+    assert queued <= 2 * size, queued / size

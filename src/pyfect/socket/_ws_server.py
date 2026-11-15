@@ -82,7 +82,15 @@ def _make(
     port: int, host: str | None, policy: OriginPolicy, serve_options: dict[str, Any]
 ) -> Effect[SocketServerService, SocketServerError, Scope]:
     accepted = Accepted()
-    serve_options = {"max_size": DEFAULT_MAX_MESSAGE_SIZE, **serve_options}
+    # As a paused ``ws`` socket: an unread connection holds about one message
+    # (websockets queues 16 frames by default, each up to ``max_size``), and no
+    # permessage-deflate, which ``ws`` servers leave off.
+    serve_options = {
+        "max_size": DEFAULT_MAX_MESSAGE_SIZE,
+        "max_queue": 1,
+        "compression": None,
+        **serve_options,
+    }
     then = serve_options.pop("process_request", None)
 
     async def process_request(connection: ServerConnection, request: Request) -> Any:

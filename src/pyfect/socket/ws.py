@@ -241,6 +241,7 @@ class WsWebSocket:
                 open_timeout=None,
                 proxy=None,
                 max_size=self._max_message_size,
+                max_queue=1,
             )
         except Exception as error:
             self._closed_before_open(error)
