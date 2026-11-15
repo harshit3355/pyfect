@@ -21,6 +21,7 @@ owner runs ``migrate_legacy_store`` once.
 from __future__ import annotations
 
 from pyfect._core import Effect
+from pyfect._public import publish
 from pyfect.crypto.digest import Digest
 from pyfect.crypto.digest import layer_web_crypto as digest_layer_web_crypto
 from pyfect.eventlog._server_encrypted.models import CompactionOptions
@@ -98,3 +99,6 @@ def layer_storage_subtle(
         remote_id_table=remote_id_table,
         compaction=compaction,
     ).pipe(layer_provide(digest_layer_web_crypto))
+
+
+publish(globals())

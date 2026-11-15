@@ -329,10 +329,12 @@ class Connection:
     )
     _cancelled: PeerKeySet[RequestId] = field(default_factory=PeerKeySet[RequestId])
     """The requests ended without an answer (a subscription that overflowed)."""
-    _liveness: dict[RequestId, Liveness] = field(default_factory=dict[RequestId, Liveness])
+    _liveness: PeerKeyDict[RequestId, Liveness] = field(
+        default_factory=PeerKeyDict[RequestId, Liveness]
+    )
+    """Each request in flight's, for the progress it sends."""
     _client_end: Deferred[None] = field(default_factory=Deferred[None])
     """Done once the client's input ended, where its subscriptions complete (stdio)."""
-    """Each request in flight's, for the progress it sends."""
     _reverse_ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     # --- messages ----------------------------------------------------------------------

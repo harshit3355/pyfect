@@ -8,9 +8,10 @@ from __future__ import annotations
 import json
 from typing import Any, TypedDict
 
+from _growth import Work, assert_near_linear
+
 from pyfect import schema as S
 from pyfect.schema import issue as I
-from tests._growth import Work, assert_near_linear
 
 
 class Node(TypedDict):

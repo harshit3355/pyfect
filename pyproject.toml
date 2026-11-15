@@ -169,8 +169,13 @@ target-version = "py313"
 extend-exclude = ["research", "src/pyfect/ai/openai/generated", "src/pyfect/ai/openrouter/generated", "tests/oracle/_generated_code_sample.py"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "PL", "PERF"]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "PL", "PERF", "TID251"]
 # UP046/UP047: Effect and Layer need explicit variance + PEP 696 defaults,
 # which the PEP 695 class syntax cannot spell.
 # PLR0913/PLR2004: combinator signatures and tests legitimately trip these.
 ignore = ["UP046", "UP047", "PLR0913", "PLR2004", "PLC0415"]
+
+# tests/ is not a package: its helpers are imported by module name (`from _growth import ...`).
+# `from tests._x import` only works when the repo root happens to be on sys.path.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"tests".msg = "tests/ is not a package; import its helpers by module name, e.g. `from _growth import ...`"

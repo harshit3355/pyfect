@@ -9,10 +9,10 @@ from __future__ import annotations
 from typing import Literal, TypedDict
 
 import pytest
+from _growth import Work, assert_near_linear
 
 import pyfect as fx
 from pyfect import schema as S
-from tests._growth import Work, assert_near_linear
 
 
 class And(TypedDict):

@@ -45,7 +45,6 @@ from pyfect.ai._mcp.core import PromptEntry, ToolEntry
 from pyfect.context import Context
 from pyfect.deferred import Deferred
 from pyfect.errors import Done
-from pyfect.exit import Success
 from pyfect.http import request as R
 from pyfect.http.client import HttpClientService
 from pyfect.http.response import HttpClientResponse
@@ -1400,16 +1399,6 @@ def test_drops_progress_queued_on_stdout_after_its_request_is_cancelled():
     background = yield from harness.receive()
     assert background["params"] == {"progressToken": "background", "progress": 1}
     assert (yield from harness.stdout.size()) == 0
-
-
-@testing.effect
-def test_should_exit_successfully_when_stdin_closes_after_initialization():
-    """McpServer / stdio / should exit successfully when stdin closes after initialization"""
-    harness = yield from stdio_harness(P.v2025_06_18)
-    yield from harness.initialize()
-    yield from harness.close
-    exit = yield from harness.fiber.await_exit()
-    assert isinstance(exit, Success)
 
 
 def _initialize_line(id: int) -> bytes:

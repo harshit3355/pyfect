@@ -7,12 +7,13 @@ import random
 import re
 from pathlib import Path
 
+from _growth import Work, assert_near_linear
+
 import pyfect
 import pyfect as fx
 from pyfect.sql import statement as st
 from pyfect.sql.statement import Fragment, Literal, Parameter, and_, make_compiler_sqlite
 from pyfect.sql.statement._compiler import _Text  # pyright: ignore[reportPrivateUsage]
-from tests._growth import Work, assert_near_linear
 
 
 def test_and_of_many_clauses_compiles_in_near_linear_time() -> None:

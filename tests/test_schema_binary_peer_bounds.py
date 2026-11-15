@@ -3,12 +3,12 @@
 from typing import Any, TypedDict
 
 import pytest
+from _growth import Sized, Work, assert_near_linear
 
 import pyfect as fx
 from pyfect import schema as S
 from pyfect.encoding import schema_binary
 from pyfect.rpc.serialization import make_schema_binary
-from tests._growth import Sized, Work, assert_near_linear
 
 
 def _uvarint(n: int) -> bytes:

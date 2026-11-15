@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, cast
 
 import pytest
+from _growth import Work, assert_near_linear
 
 import pyfect
 import pyfect as fx
@@ -27,7 +28,6 @@ from pyfect._peer_keys import (
     peer_key,
 )
 from pyfect.rpc._json_rpc import decode_json_rpc, encode_json_rpc
-from tests._growth import Work, assert_near_linear
 
 P = 2**61 - 1
 

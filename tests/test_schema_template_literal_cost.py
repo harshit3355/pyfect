@@ -3,10 +3,10 @@ the text on either side of it, so a string that does not match fails in time
 linear in its length (it used to copy both sides at every split)."""
 
 import pytest
+from _growth import Work, assert_near_linear
 
 import pyfect as fx
 from pyfect import schema as S
-from tests._growth import Work, assert_near_linear
 
 
 @pytest.mark.parametrize(

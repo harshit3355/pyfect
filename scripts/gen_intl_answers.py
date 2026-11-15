@@ -23,7 +23,7 @@ from pathlib import Path
 _ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(_ROOT))
 
-from tests.oracle.intl_matrix import ANSWERS, ENVIRONMENT, ORACLE, cases, digest  # noqa: E402
+from tests.oracle.intl_matrix import ANSWERS, ENVIRONMENT, ORACLE, cases, digest  # noqa: E402, TID251
 
 
 def main() -> None:

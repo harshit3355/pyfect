@@ -135,6 +135,8 @@ NOT_KEYS: dict[tuple[str, str], str] = {
     (r"enc_events_compaction_\w+", "scope"): _GENERATED + ": the store's scope hash",
     (r"enc_events_compaction_\w+", "id"): _GENERATED,
     ("enc_events_compaction_stages", "state"): _VOCABULARY,
+    ("enc_events_scope_aliases", "legacy_scope"): _GENERATED + ": the 0.6.5 scope's hash",
+    ("enc_events_scope_aliases", "scope"): _GENERATED + ": the store's scope hash",
 }
 """``(table pattern, column)``: text columns the rule would flag that hold
 no key compared with outside input, with the reason."""
