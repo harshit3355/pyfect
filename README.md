@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.svg" width="72" height="72" alt="pyfect logo">
+  <img src="https://raw.githubusercontent.com/tylergibbs1/pyfect/main/assets/logo.svg" width="72" height="72" alt="pyfect logo">
 </p>
 
 <h1 align="center">pyfect</h1>
@@ -13,15 +13,15 @@
   <a href="https://pyfect.dev/docs"><img alt="Docs" src="https://img.shields.io/badge/docs-pyfect.dev-0a0a0a"></a>
   <img alt="Python 3.13+" src="https://img.shields.io/badge/python-3.13%2B-0a0a0a">
   <img alt="pyright strict" src="https://img.shields.io/badge/pyright-strict-0a0a0a">
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0a0a0a"></a>
+  <a href="https://github.com/tylergibbs1/pyfect/blob/main/LICENSE"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-0a0a0a"></a>
 </p>
 
 <p align="center">
   <a href="https://pyfect.dev/docs"><b>Read the docs</b></a> ·
   <a href="https://pyfect.dev/docs/installation">Install</a> ·
-  <a href="examples/">Examples</a> ·
-  <a href="docs/PARITY.md">Parity with Effect</a> ·
-  <a href="CONTRIBUTING.md">Contribute</a>
+  <a href="https://github.com/tylergibbs1/pyfect/tree/main/examples">Examples</a> ·
+  <a href="https://github.com/tylergibbs1/pyfect/blob/main/docs/PARITY.md">Parity with Effect</a> ·
+  <a href="https://github.com/tylergibbs1/pyfect/blob/main/CONTRIBUTING.md">Contribute</a>
 </p>
 
 ---
@@ -76,7 +76,7 @@ program = (
     .pipe(fx.provide(layer.succeed(Users, InMemoryUsers())))
 )
 
-fx.run_blocking(program)
+print(fx.run_blocking(program))  # Hello, Ada!
 ```
 
 Remove the `catch_tag` line and pyright stops you before the program runs:
@@ -87,15 +87,19 @@ error: Argument of type "Effect[str, UserNotFound, Never]" cannot be assigned to
     Type "UserNotFound" is not assignable to type "Never"
 ```
 
-[`examples/quickstart.py`](examples/quickstart.py) builds on this with a resource-managed
+That covers the errors an effect fails with, as `greet` does with `yield from UserNotFound(...)`.
+An exception you `raise` is a defect, which the type doesn't track
+([Errors](https://pyfect.dev/docs/errors)).
+
+[`examples/quickstart.py`](https://github.com/tylergibbs1/pyfect/blob/main/examples/quickstart.py) builds on this with a resource-managed
 layer, concurrency, retries and timeouts.
 
 ## How it works
 
 <p align="center">
   <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/how-it-works-dark.svg">
-    <img src="assets/how-it-works-light.svg" alt="An @fx.fn generator builds Effect[A, E, R]; catch_tag removes an error, provide(layer) removes a service, and run_blocking runs the Effect[A, Never, Never] to an Exit." width="225">
+    <source media="(prefers-color-scheme: dark)" srcset="https://raw.githubusercontent.com/tylergibbs1/pyfect/main/assets/how-it-works-dark.svg">
+    <img src="https://raw.githubusercontent.com/tylergibbs1/pyfect/main/assets/how-it-works-light.svg" alt="An @fx.fn generator builds Effect[A, E, R]; catch_tag removes an error, provide(layer) removes a service, and run_blocking runs the Effect[A, Never, Never] to an Exit." width="225">
   </picture>
 </p>
 
@@ -196,8 +200,8 @@ layer, concurrency, retries and timeouts.
 pyfect follows Effect 4.1.2, does what Effect does wherever Python can express it, and runs
 Effect's own test cases as its spec: over 25,000 tests, with a test that fails on any Effect
 test title neither ported nor omitted with a reason, and about 95% of Effect's API so far. Every
-export of the core modules is listed against Effect's in [`docs/coverage/`](docs/coverage), and
-[`docs/PARITY.md`](docs/PARITY.md) tracks what is done, what is open and what still differs. A
+export of the core modules is listed against Effect's in [`docs/coverage/`](https://github.com/tylergibbs1/pyfect/tree/main/docs/coverage), and
+[`docs/PARITY.md`](https://github.com/tylergibbs1/pyfect/blob/main/docs/PARITY.md) tracks what is done, what is open and what still differs. A
 `Duration` is Effect's, exact to the nanosecond at any length or infinite, since 0.5.0. A
 bare number given as a duration is milliseconds, as in Effect; write `"5 seconds"` or a
 `timedelta` to say the unit. Timestamps given as numbers (`testing.set_time`,
@@ -210,8 +214,12 @@ pyfect needs Python 3.13 or later; its one dependency is `typing-extensions`. In
 project).
 
 ```sh
+uv init app && cd app      # a new project; skip in one that has a [project] table
 uv add pyfect-dev
+uv add --dev pyright
 ```
+
+With pip: `pip install pyfect-dev pyright`.
 
 Optional extras: `otel` (OpenTelemetry), `hypothesis`, `pydantic`, `msgspec`, `httpx` (the
 HTTP client backend), `websockets` (WebSocket clients and servers), `server` (the uvicorn
@@ -221,7 +229,7 @@ redis-py), `crypto` (cryptography and JOSE, on cryptography), `eventlog` (the ev
 compression on a live server, on brotlicffi), `http2` (the HTTP/2 server, on hypercorn), `regex` (more
 ECMAScript patterns in schemas) and `watch` (`FileSystem.watch` on
 the operating system's change notification, on watchfiles), for example
-`uv add "pyfect-dev[otel]"`.
+`uv add "pyfect-dev[otel]"` or `pip install "pyfect-dev[otel]"`.
 
 pyright is the type checker pyfect is designed for. In strict mode, add
 `reportUnknownParameterType = false`: pyright reads an unannotated generator's send type as
@@ -232,21 +240,21 @@ generators never use it. See [Installation](https://pyfect.dev/docs/installation
 
 - [Documentation](https://pyfect.dev/docs): guides for each part of the library.
 - [API reference](https://pyfect.dev/docs/reference): every public function and class.
-- [Changelog](CHANGELOG.md): what each release changed.
-- [Examples](examples/): a quickstart, batching, a FastAPI-style service, a stream pipeline
+- [Changelog](https://github.com/tylergibbs1/pyfect/blob/main/CHANGELOG.md): what each release changed.
+- [Examples](https://github.com/tylergibbs1/pyfect/tree/main/examples): a quickstart, batching, a FastAPI-style service, a stream pipeline
   and schema decoding, all checked by pyright.
 - [Effect's docs](https://effect.website/docs): the concepts carry over; pyfect uses
   snake_case and `yield from` in place of `yield*`.
 
 ## Contributing
 
-Contributions are welcome. [`CONTRIBUTING.md`](CONTRIBUTING.md) covers setup, the one
+Contributions are welcome. [`CONTRIBUTING.md`](https://github.com/tylergibbs1/pyfect/blob/main/CONTRIBUTING.md) covers setup, the one
 command that checks everything, and how a change is ported from Effect. Issues labelled
 [good first issue](https://github.com/tylergibbs1/pyfect/labels/good%20first%20issue) are a
 good place to start. Everyone taking part agrees to the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+[Code of Conduct](https://github.com/tylergibbs1/pyfect/blob/main/CODE_OF_CONDUCT.md).
 
 ## License
 
-[MIT](LICENSE). pyfect is an independent port and is not affiliated with Effectful
+[MIT](https://github.com/tylergibbs1/pyfect/blob/main/LICENSE). pyfect is an independent port and is not affiliated with Effectful
 Technologies; Effect is MIT-licensed by its authors.

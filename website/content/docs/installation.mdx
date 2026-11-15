@@ -8,9 +8,13 @@ PyPI: the distribution is named `pyfect-dev` and you import `pyfect`.
 The PyPI package called `pyfect` is an unrelated project.
 
 <InstallCommand
-  uv="uv add pyfect-dev"
-  pip="pip install pyfect-dev"
+  uv={"uv init app && cd app\nuv add pyfect-dev\nuv add --dev pyright"}
+  pip={"mkdir app && cd app\npython -m venv .venv && . .venv/bin/activate\npip install pyfect-dev pyright"}
 />
+
+These start a new project in `app/`. In a project you already have, `uv add pyfect-dev` (or
+`pip install pyfect-dev`) is enough, as long as its `pyproject.toml` has a `[project]` table:
+uv adds dependencies there and refuses a file that only configures tools.
 
 Extras add integrations: `otel` (OpenTelemetry, `pyfect.otel`), `hypothesis`, `pydantic` and
 `msgspec` ([Pydantic and msgspec](/docs/pydantic-msgspec)), `httpx` (the HTTP client backend), `websockets`, `server` (the uvicorn HTTP server),
@@ -22,7 +26,8 @@ response compression, on brotlicffi), `regex` (more ECMAScript patterns in schem
   pip='pip install "pyfect-dev[otel]"'
 />
 
-Importing a module whose extra is missing raises an `ImportError` with the command that installs it.
+Importing a module whose extra is missing raises an `ImportError` with the commands that install it,
+for uv and for pip.
 When the extra is installed but its library fails to import, the `ImportError` shows that
 library's own error instead: psycopg, for one, needs the libpq C library, which slim Docker
 images such as `python:3.14-slim` leave out. Install it with the system's package manager
@@ -52,6 +57,15 @@ reportUnknownParameterType = false
 
 ## Check it works
 
+Save this as `hello.py` and run it with `uv run python hello.py` (or `python hello.py`), then
+`uv run pyright hello.py` (or `pyright hello.py`) to type check it.
+
+<CodeOutput>
+
 <include meta='title="hello.py"'>../../snippets/installation/hello.py</include>
+
+<include lang="text">../../snippets/installation/hello.out</include>
+
+</CodeOutput>
 
 Next: [Effects and generators](/docs/effects).

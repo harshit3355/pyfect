@@ -64,6 +64,11 @@ def install_command(extra: Extra | None = None) -> str:
     return f'uv add "{DISTRIBUTION}[{extra}]"'
 
 
+def pip_install_command(extra: Extra) -> str:
+    """``install_command`` for a project that uses pip."""
+    return f'pip install "{DISTRIBUTION}[{extra}]"'
+
+
 def is_absent(error: ImportError, extra: Extra) -> bool:
     """Whether ``error`` says one of ``extra``'s libraries is not installed,
     rather than installed and failing to import (a missing system library
@@ -76,7 +81,10 @@ def missing_extra(feature: str, extra: Extra, error: ImportError) -> ImportError
     libraries for ``feature`` failed: how to install the extra when a library
     is absent, and otherwise ``error``'s own message."""
     if is_absent(error, extra):
-        return ImportError(f"{feature} needs the {extra!r} extra: {install_command(extra)}")
+        return ImportError(
+            f"{feature} needs the {extra!r} extra: {install_command(extra)}"
+            f" (with pip: {pip_install_command(extra)})"
+        )
     return ImportError(
         f"{feature} could not import the {extra!r} extra's libraries, which are installed: {error}"
     )

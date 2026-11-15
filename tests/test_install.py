@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 
-from pyfect._extras import DISTRIBUTION, LIBRARIES, Extra, install_command
+from pyfect._extras import DISTRIBUTION, LIBRARIES, Extra, install_command, missing_extra
 
 _ROOT = Path(__file__).parent.parent
 _SOURCE = _ROOT / "src" / "pyfect"
@@ -210,6 +210,14 @@ def test_no_document_or_lookup_names_the_bare_pyfect_distribution():
 def test_the_install_command_names_the_pypi_distribution():
     assert install_command() == "uv add pyfect-dev"
     assert install_command("otel") == 'uv add "pyfect-dev[otel]"'
+
+
+def test_a_missing_extra_says_how_to_install_it_with_uv_and_with_pip():
+    absent = ModuleNotFoundError("No module named 'opentelemetry'", name="opentelemetry")
+    assert str(missing_extra("pyfect.otel", "otel", absent)) == (
+        "pyfect.otel needs the 'otel' extra: uv add \"pyfect-dev[otel]\""
+        ' (with pip: pip install "pyfect-dev[otel]")'
+    )
 
 
 def test_no_document_installs_from_git():
