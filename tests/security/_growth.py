@@ -6,7 +6,8 @@ only applies to a local variable; JavaScript's ropes, which Effect relies on, ma
 code linear there). ``growth`` measures a piece of work at a size and at ``FACTOR`` times it:
 linear work grows ``FACTOR`` times, ``n log n`` a little more, quadratic work ``FACTOR**2``
 times. ``BOUND`` sits between. Times are the thread's CPU time, the least of a few runs with
-the collector off, so a loaded machine does not decide the outcome; the size first doubles
+the collector off, so a loaded machine does not decide the outcome (``clock=time.process_time``
+for work that moves to other threads, such as a walk on fresh stacks); the size first doubles
 until the small run takes ``MIN_SECONDS``, so fixed costs do not hide the growth.
 
 An input that outgrows a CPU cache between the two sizes costs more per unit once, which can
@@ -36,21 +37,22 @@ collection walks the whole test process's heap, which cost 40 to 120 ms a call, 
 each parser case's time, and changed nothing measured: the collector is off while it runs."""
 
 type Work = Callable[[], object]
+type Clock = Callable[[], float]
 type Make = Callable[[int], Work]
 """Given a size, the work of parsing an input of that size (built before the clock starts)."""
 
 
-def cpu(work: Work, runs: int = RUNS) -> float:
-    """The least thread CPU time of ``runs`` runs of ``work``."""
+def cpu(work: Work, runs: int = RUNS, clock: Clock = time.thread_time) -> float:
+    """The least CPU time (the thread's, by default) of ``runs`` runs of ``work``."""
     best = float("inf")
     enabled = gc.isenabled()
     gc.collect(YOUNG)
     gc.disable()
     try:
         for _ in range(runs):
-            start = time.thread_time()
+            start = clock()
             work()
-            best = min(best, time.thread_time() - start)
+            best = min(best, clock() - start)
     finally:
         if enabled:
             gc.enable()
@@ -85,23 +87,29 @@ class Growth:
         )
 
 
-def growth(make: Make, size: int, max_size: int = MAX_SIZE) -> Growth:
+def growth(
+    make: Make, size: int, max_size: int = MAX_SIZE, clock: Clock = time.thread_time
+) -> Growth:
     """``make``'s work at ``size`` (doubled until it takes ``MIN_SECONDS``) and at ``FACTOR``
     times that size."""
     while True:
-        small = cpu(make(size))
+        small = cpu(make(size), clock=clock)
         if small >= MIN_SECONDS or size * 2 * FACTOR > max_size:
             break
         size *= 2
-    return Growth(size, small, cpu(make(size * FACTOR)))
+    return Growth(size, small, cpu(make(size * FACTOR), clock=clock))
 
 
-def assert_near_linear(make: Make, size: int, max_size: int = MAX_SIZE) -> Growth:
+def assert_near_linear(
+    make: Make, size: int, max_size: int = MAX_SIZE, clock: Clock = time.thread_time
+) -> Growth:
     """Fails when ``make``'s work grows faster than ``BOUND`` over ``FACTOR`` times the size."""
-    found = growth(make, size, max_size)
+    found = growth(make, size, max_size, clock)
     if found.cheap or not found.superlinear:
         return found
     large = found.size * FACTOR
-    beyond = Growth(large, cpu(make(large)), cpu(make(large * 2)), factor=2)
+    beyond = Growth(
+        large, cpu(make(large), clock=clock), cpu(make(large * 2), clock=clock), factor=2
+    )
     assert not beyond.superlinear, f"superlinear: {found}; then {beyond}"
     return found

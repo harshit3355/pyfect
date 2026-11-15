@@ -44,6 +44,15 @@
   The SQL encrypted server's storage names each store's tables from text that keeps such
   characters apart.
 
+### Performance
+
+- The stack probe that deep recursive walks (recursive schemas, `Equal`, nested JSON, YAML,
+  TOML, logger values, schema binary) make at each level costs the same at any depth: it
+  looked `sys.getrecursionlimit()` frames back, so with a raised limit each probe cost as
+  much as the stack was deep and a deep walk took quadratic time (a recursive union 8,000
+  levels deep at a limit of 100,000: about 920 ms, now about 75 ms, as at the default
+  limit). A walk now moves to a fresh stack every 600 or so frames whatever the limit.
+
 ### Docs
 
 - ScopedCache: an expired entry keeps its resources until the key is next read, a zero time to
