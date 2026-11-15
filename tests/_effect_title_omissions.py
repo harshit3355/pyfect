@@ -50,19 +50,6 @@ _NODE_STREAMS = "Node's streams and `EventTarget`: `process`, `socket` and `http
 
 NOT_PORTED_HTTP2 = "NOT_PORTED HTTP/2 on Node's server: `http.hypercorn_server` differs below ASGI"
 
-_MINOR_TOOL_JSON = (
-    "the next minor release: tool parameters and results in their JSON encoding (Effect #10332, "
-    "#10362) change what `handle` takes and what `encoded_result` holds"
-)
-_MINOR_COMPAT_NULLS = (
-    "the next minor release: `| None` on openai-compat's response types (Effect #10515) is "
-    "stricter for code that reads them"
-)
-_MINOR_REFUSAL = (
-    "the next minor release: a `stop` with a refusal finishing as `content-filter` (Effect "
-    "#10432, #10534) changes a finish reason a program can branch on"
-)
-
 OMISSIONS: tuple[Omission, ...] = (
     *(
         Omission(path, M17_REASON, re.compile("|".join(f"^{re.escape(t)}$" for t in titles)))
@@ -314,78 +301,6 @@ OMISSIONS: tuple[Omission, ...] = (
         "effect/test/schema/Schema.test.ts",
         "section 4: `Struct` keys are mapped with Python comprehensions, not `mapFields` helpers",
         r"evolveEntries|evolveKeys|mapOmit|mapPick|renameKeys|^should work with flow$",
-    ),
-    # Effect 4.1.4 behaviour changes that wait for pyfect's next minor release (VERSIONING.md).
-    _some(
-        "effect/test/ai/Tool.test.ts",
-        _MINOR_TOOL_JSON,
-        r"^(decodes parameters from their JSON encoding|encodes a void result to null"
-        r"|encodes results to their JSON encoding"
-        r"|rejects a non-JSON result for a dynamic tool without a success schema)$",
-    ),
-    _some(
-        "effect/test/ai/Response.test.ts",
-        _MINOR_TOOL_JSON,
-        r"^(keeps the raw encoding for provider-executed tool results"
-        r"|round trips a Toolkit result with a non-JSON encoding through AllParts JSON)$",
-    ),
-    _some(
-        "effect/test/ai/Chat.test.ts",
-        _MINOR_TOOL_JSON,
-        r"^exports tool results with non-JSON types through exportJson$",
-    ),
-    _some(
-        "effect/test/ai/LanguageModel.test.ts",
-        _MINOR_TOOL_JSON,
-        r"^(validates locally handled provider-defined tool parameters in their JSON encoding"
-        r"|validates tool parameters by tool kind when requests share a schema)$",
-    ),
-    _some(
-        "ai/anthropic/test/AnthropicLanguageModel.test.ts",
-        _MINOR_TOOL_JSON,
-        r"^passes tool call params with non-JSON types to the Toolkit$",
-    ),
-    _some(
-        "effect/test/ai/McpServer/McpServer.test.ts",
-        "the next minor release: MCP spans follow the OpenTelemetry MCP conventions and "
-        "`Toolkit.handle` stops recording its arguments (Effect #10304), which changes span names "
-        "and attributes a program can read",
-        r"^(continues the client trace from params\._meta\.traceparent"
-        r"|marks a tool result with isError as a tool_error"
-        r"|names tool call spans after the tool and does not record arguments by default"
-        r"|records the internal error sent after an error response fails to write"
-        r"|records tool arguments when Toolkit\.RecordToolArguments is enabled)$",
-    ),
-    _some(
-        "ai/openai-compat/test/OpenAiEmbeddingModel.test.ts",
-        _MINOR_COMPAT_NULLS,
-        r"^decodes responses with null object and usage$",
-    ),
-    _some(
-        "ai/openai-compat/test/OpenAiLanguageModel.test.ts",
-        _MINOR_COMPAT_NULLS,
-        r"^decodes null optional fields in non-streaming responses$",
-    ),
-    _some(
-        "ai/openai-compat/test/OpenAiLanguageModel.test.ts",
-        "the next minor release: PDF URLs fail with `InvalidUserInputError` where they were sent "
-        "as text, and PDFs become file parts with them (Effect #10514)",
-        r"^sends PDFs as chat completion file parts$|^rejects PDF URLs before sending a request",
-    ),
-    _some(
-        "ai/openai-compat/test/OpenAiLanguageModel.test.ts",
-        _MINOR_REFUSAL,
-        r"^(reports|streams) a refusal through the finish part$",
-    ),
-    _some(
-        "ai/openrouter/test/OpenRouterLanguageModel.test.ts",
-        _MINOR_REFUSAL,
-        r"^(reports|streams) a refusal through the finish part$",
-    ),
-    *_whole(
-        "the next minor release: Effect 4.1.4 regenerates the OpenRouter client (Effect #10521), "
-        "removing exports and adding required response fields",
-        "ai/openrouter/test/Generated.test.ts",
     ),
 )
 
