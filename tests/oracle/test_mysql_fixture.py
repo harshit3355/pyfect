@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 
-from . import _mysql
+from . import _docker, _mysql
 
 
 def _not_found(_name: str) -> None:
@@ -28,13 +28,11 @@ def _dead_pid() -> int:
 
 
 def test_reaps_containers_of_processes_that_are_gone():
-    if (
-        shutil.which("docker") is None
-        or subprocess.run(
-            ["docker", "image", "inspect", _mysql.IMAGE], capture_output=True, check=False
-        ).returncode
-    ):
-        pytest.skip("no Docker, or no MySQL image")
+    try:
+        _docker.require_docker()
+    except RuntimeError as error:
+        pytest.skip(f"no Docker: {error}")
+    _docker.pull(_docker.PLACEHOLDER_IMAGE)
     created = subprocess.run(
         [
             "docker",
@@ -42,8 +40,8 @@ def test_reaps_containers_of_processes_that_are_gone():
             "--label",
             _mysql.LABEL,
             "--label",
-            f"pyfect.test.owner={_dead_pid()}",
-            _mysql.IMAGE,
+            f"{_docker.OWNER}={_dead_pid()}",
+            _docker.PLACEHOLDER_IMAGE,
         ],
         capture_output=True,
         text=True,
@@ -51,8 +49,9 @@ def test_reaps_containers_of_processes_that_are_gone():
     )
     container = created.stdout.strip()
     try:
-        reaped = _mysql.reap_stale()
-        assert any(container.startswith(r) or r.startswith(container[:12]) for r in reaped)
+        # Any process starting a server reaps it too (another xdist worker, another run), so
+        # the test checks that it is gone, not which call removed it.
+        _mysql.reap_stale()
         left = subprocess.run(
             ["docker", "ps", "-a", "-q", "--no-trunc", "--filter", f"id={container}"],
             capture_output=True,
