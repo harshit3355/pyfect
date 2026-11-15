@@ -243,6 +243,10 @@
 - `HttpClientErrorSchema.message` is its cause's message, or its kind when the cause has none,
   as in Effect 4.1.4 (#10496), so an `RpcClientError` for an HTTP failure says what failed. It
   was empty.
+- A framed RPC HTTP response drains while its batch is dispatched, as in Effect 4.1.4 (#10424):
+  a batch with more responses than `stream_buffer_size` hung, and a dispatch that failed (a
+  payload decode defect, a reused request id) left the response waiting forever. Such a
+  response now fails with the dispatch's cause and its requests are interrupted.
 
 ### Performance
 
