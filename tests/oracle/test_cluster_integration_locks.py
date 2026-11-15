@@ -84,6 +84,35 @@ def test_rebuilds_a_blackholed_reserved_lock_connection_and_rejoins_without_spli
 
 
 @testing.live(timeout="90 seconds")
+def test_a_blackholed_lock_connection_stays_blackholed_when_rebuilt(
+    cluster_db: ClusterDatabase,
+):
+    """pyfect-only: the connection a runner rebuilds after a blackhole is
+    blackholed too, so the runner cannot take its shards back before the
+    fault is cleared."""
+
+    def body() -> Body:
+        cluster = yield from make(cluster_db, entities=fx.layer.empty, config=CONFIG)
+        [faulted] = yield from cluster.start(1)
+        yield from cluster.wait_for_stable_assignments()
+        sessions = faulted.lock_fault.sessions
+        blackholed = len(sessions)
+
+        yield from cluster.fault_lock(faulted, "blackhole")
+
+        def rebuilt_statements() -> list[str | None]:
+            return [mode for session in sessions[blackholed:] for mode in session.statements]
+
+        yield from cluster.wait_until(
+            "The runner did not use a rebuilt lock connection",
+            fx.sync(lambda: bool(rebuilt_statements())),
+        )
+        assert rebuilt_statements()[0] == "blackhole", "A rebuilt lock connection was healthy"
+
+    yield from run(cluster_db, body)
+
+
+@testing.live(timeout="90 seconds")
 def test_does_not_reacquire_a_shard_before_forced_release_completes(
     cluster_db: ClusterDatabase,
 ):

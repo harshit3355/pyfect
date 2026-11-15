@@ -131,9 +131,13 @@ class MessageCounts:
 class _LockSession:
     def __init__(self) -> None:
         self.fault: Literal["blackhole", "fail"] | None = None
+        # What each lock statement met: None when it ran, else the fault.
+        self.statements: list[LockFaultMode | None] = []
 
 
 _UNLOCK_ALL = ("pg_advisory_unlock_all", "RELEASE_ALL_LOCKS")
+# The statements that set a lock session up (PostgreSQL, MySQL).
+_SESSION_SETUP = ("idle_session_timeout", "wait_timeout")
 
 
 class _FaultyConnection:
@@ -153,6 +157,8 @@ class _FaultyConnection:
             if any(marker in sql for marker in _UNLOCK_ALL):
                 return effect
             mode = self._session.fault or self._controller.persistent
+            if not any(marker in sql for marker in _SESSION_SETUP):
+                self._session.statements.append(mode)
             if mode == "fail":
                 cause = RuntimeError("lock connection lost")
                 return fx.fail(SqlError(reason=SqlConnectionError(cause=cause)))
@@ -190,12 +196,14 @@ class _LockFaultController:
         self.release_gate = Latch(True)
         self.persistent: Literal["stuck", "hangRelease"] | None = None
         self.current: _LockSession | None = None
+        self.sessions: list[_LockSession] = []
         client = sql.without_transforms()
 
         @fx.gen
         def reserve():
             session = _LockSession()
             self.current = session
+            self.sessions.append(session)
             scope = yield from Scope()
 
             def hang(_: Exit[Any, Any]) -> fx.Effect[None]:
