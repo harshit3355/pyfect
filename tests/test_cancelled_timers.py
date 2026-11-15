@@ -107,6 +107,6 @@ def test_only_the_timer_heap_keeps_a_heap_of_timers() -> None:
     users = {
         path.relative_to(_SRC).as_posix()
         for path in _SRC.rglob("*.py")
-        if re.search(r"^\s*(import heapq|from heapq import)", path.read_text(), re.M)
+        if re.search(r"^\s*(import heapq|from heapq import)", path.read_text(), re.MULTILINE)
     }
     assert users <= allowed, f"use pyfect._timer_heap.TimerHeap in {sorted(users - allowed)}"

@@ -395,8 +395,10 @@ def idle_open(advance: Advance):
 
 SUITE: list[tuple[str, Body]] = [
     (
-        "consecutive: only a Success resets the streak, and the n-th failure opens without "
-        "running the call",
+        (
+            "consecutive: only a Success resets the streak, and the n-th failure opens without "
+            "running the call"
+        ),
         consecutive,
     ),
     (
@@ -405,23 +407,31 @@ SUITE: list[tuple[str, Body]] = [
     ),
     ("half-open admits one probe, rejects the rest, and a success closes", half_open),
     (
-        "a Schedule openDuration replays across openings, carries over a close shorter than the "
-        "last opening, and resets once the circuit has stayed closed that long",
+        (
+            "a Schedule openDuration replays across openings, carries over a close shorter than "
+            "the last opening, and resets once the circuit has stayed closed that long"
+        ),
         schedule_replays,
     ),
     (
-        "a call admitted before the reset deadline opens with its older count after a later "
-        "admit resets it",
+        (
+            "a call admitted before the reset deadline opens with its older count after a later "
+            "admit resets it"
+        ),
         reset_race,
     ),
     (
-        "a Schedule openDuration replays from the recording time and repeats its last delay once "
-        "it ends",
+        (
+            "a Schedule openDuration replays from the recording time and repeats its last delay "
+            "once it ends"
+        ),
         schedule_from_recording_time,
     ),
     (
-        "a Retry-After hint lengthens only the opening it causes and its reset window, capped at "
-        "maxOpenDuration",
+        (
+            "a Retry-After hint lengthens only the opening it causes and its reset window, capped "
+            "at maxOpenDuration"
+        ),
         retry_after_hint,
     ),
     ("an interrupt-only exit records Ignored and an interrupted probe frees its slot", interrupts),
@@ -430,21 +440,27 @@ SUITE: list[tuple[str, Body]] = [
         stale_outcome,
     ),
     (
-        "onRejection allow runs a refused call unrecorded, while an admitted call records and "
-        "can take the probe",
+        (
+            "onRejection allow runs a refused call unrecorded, while an admitted call records and "
+            "can take the probe"
+        ),
         on_rejection_allow,
     ),
 ]
 
 IDLE_SUITE: list[tuple[str, Body]] = [
     (
-        "idle expiry drops a key before a longer reset window ends and its next admit starts at "
-        "count 0",
+        (
+            "idle expiry drops a key before a longer reset window ends and its next admit starts "
+            "at count 0"
+        ),
         idle_reset,
     ),
     (
-        "an Open key outlives idleTimeToLive until its open time ends, so the backoff count "
-        "survives",
+        (
+            "an Open key outlives idleTimeToLive until its open time ends, so the backoff count "
+            "survives"
+        ),
         idle_open,
     ),
 ]

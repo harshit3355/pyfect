@@ -404,7 +404,7 @@ def _define(
     type.__setattr__(cls, _SHAPE, shape)
 
     @functools.wraps(init)
-    def __init__(self: object, *args: object, **kwargs: object) -> None:
+    def __init__(self: object, *args: object, **kwargs: object) -> None:  # noqa: N807  installed as cls.__init__
         init(self, *args, **kwargs)
         shape.validate(self, {})
 

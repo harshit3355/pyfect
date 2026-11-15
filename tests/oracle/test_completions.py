@@ -1139,8 +1139,10 @@ def _replay_power_shell(descriptor: CommandDescriptor, line: str) -> list[str]:
                 [
                     PowerShell.generate("app", descriptor),
                     f"$line = '{escaped}'",
-                    "(TabExpansion2 -inputScript $line -cursorColumn $line.Length)"
-                    ".CompletionMatches | ForEach-Object { $_.CompletionText }",
+                    (
+                        "(TabExpansion2 -inputScript $line -cursorColumn $line.Length)"
+                        ".CompletionMatches | ForEach-Object { $_.CompletionText }"
+                    ),
                 ]
             )
         )

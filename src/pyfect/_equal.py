@@ -13,7 +13,8 @@ through ``set(...)``, ``in`` or a ``dict`` of the values themselves.
 from __future__ import annotations
 
 import math
-from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence, Set
+from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from contextvars import ContextVar
 from typing import cast
 
@@ -51,7 +52,7 @@ def _other_key(value: object, path: set[int]) -> Hashable:
             return (float, "nan")
         case str() | bytes() | int() | float():
             return value
-        case list() | tuple() | Mapping() | Set():
+        case list() | tuple() | Mapping() | AbstractSet():
             return _deep(cast("object", value), path)
         case Hashable():
             hash(value)  # a frozen dataclass holding a list raises here
@@ -76,7 +77,10 @@ def _container_key(value: object, path: set[int]) -> Hashable:
         if isinstance(value, Mapping):
             pairs = cast("Mapping[object, object]", value).items()
             return (dict, frozenset((_key(k, path), _key(v, path)) for k, v in pairs))
-        return (frozenset, frozenset(_key(item, path) for item in cast("Set[object]", value)))
+        return (
+            frozenset,
+            frozenset(_key(item, path) for item in cast("AbstractSet[object]", value)),
+        )
     finally:
         path.remove(marker)
 

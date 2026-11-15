@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import ipaddress
 import ssl
 from dataclasses import dataclass
@@ -27,7 +27,7 @@ class Pem:
 def self_signed(folder: Path, days: int = 30) -> Pem:
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    now = datetime.datetime.now(datetime.UTC)
+    now = dt.datetime.now(dt.UTC)
     names = [x509.DNSName("localhost"), x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]
     cert = (
         x509.CertificateBuilder()
@@ -35,8 +35,8 @@ def self_signed(folder: Path, days: int = 30) -> Pem:
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=5))
-        .not_valid_after(now + datetime.timedelta(days=days))
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(days=days))
         .add_extension(x509.SubjectAlternativeName(names), critical=False)
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(key, hashes.SHA256())

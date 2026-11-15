@@ -213,7 +213,8 @@ class Running:
         served = self.served
 
         async def started() -> None:
-            while not self.server.started and not served.done():
+            # uvicorn exposes `started` as a flag, not an event to wait on.
+            while not self.server.started and not served.done():  # noqa: ASYNC110
                 await asyncio.sleep(0.005)
             if served.done():
                 served.result()

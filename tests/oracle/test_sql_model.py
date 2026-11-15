@@ -15,6 +15,8 @@ from collections.abc import Callable, Generator
 from datetime import datetime
 from typing import Any, NotRequired, TypedDict
 
+import pytest
+
 import pyfect as fx
 from pyfect import case, testing
 from pyfect import schema as S
@@ -299,16 +301,11 @@ def test_a_variant_typed_dict_must_have_the_variant_keys():
         id: int
         name: str
 
-    try:
+    with pytest.raises(TypeError, match="unknown key 'id'"):
 
         class Wrong(Model.Class[WrongInsert]):  # pyright: ignore[reportUnusedClass]
             id: int = Model.field(Model.GeneratedByDb(S.Int))
             name: str
-
-    except TypeError as error:
-        assert "unknown key 'id'" in str(error)
-    else:
-        raise AssertionError("expected TypeError")
 
 
 def test_only_defaulted_keys_may_be_not_required():
@@ -317,15 +314,10 @@ def test_only_defaulted_keys_may_be_not_required():
     class LooseInsert(TypedDict):
         name: NotRequired[str]
 
-    try:
+    with pytest.raises(TypeError, match="'name' is NotRequired"):
 
         class Loose(Model.Class[LooseInsert]):  # pyright: ignore[reportUnusedClass]
             name: str
-
-    except TypeError as error:
-        assert "'name' is NotRequired" in str(error)
-    else:
-        raise AssertionError("expected TypeError")
 
     class StampedInsert(TypedDict):
         created_at: NotRequired[datetime]

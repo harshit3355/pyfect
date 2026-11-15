@@ -116,7 +116,7 @@ class _Transport:
                 with contextlib.suppress(OSError):
                     self._wake_r.recv(64)
                 if self._closed:
-                    raise tds_base.ClosedConnectionError()
+                    raise tds_base.ClosedConnectionError
                 self._on_wake()
                 continue
             if self._deadline is not None and time.monotonic() >= self._deadline:
@@ -285,7 +285,7 @@ class TdsConnection:
     def _check_cancelled(self) -> None:
         with self._lock:
             if self._cancelled == self._request:
-                raise RequestCancelled()
+                raise RequestCancelled
 
     def _attention(self) -> None:
         """On the reading thread, woken: send the cancel asked for."""
@@ -320,7 +320,7 @@ class TdsConnection:
                 names = [column[0] for column in session.res_info.description]
                 rows.append(list(zip(names, list(session.row), strict=True)))
         if self._sent == self._request:
-            raise RequestCancelled()
+            raise RequestCancelled
         if failure is not None:
             raise failure
         return rows

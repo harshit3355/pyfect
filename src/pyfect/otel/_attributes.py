@@ -57,7 +57,7 @@ def _kind(item: object) -> type | None:
 def _homogeneous(items: Sequence[object]) -> AttributeValue:
     kinds = {_kind(item) for item in items}
     if len(kinds) <= 1 and None not in kinds:
-        return cast(AttributeValue, list(items))
+        return cast("AttributeValue", list(items))
     return to_string_unknown(items)
 
 

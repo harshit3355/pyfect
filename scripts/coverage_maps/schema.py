@@ -70,26 +70,20 @@ SCHEMA = Module(
     },
     pythonic={
         "isSchemaError": (ISINSTANCE, "`isinstance(x, SchemaError)`"),
-        **{
-            name: (INTERNAL, "not public")
-            for name in ("withArrayLengthConstraints", "linkDecoding", "makeClassTrusted")
-        },
+        **dict.fromkeys(
+            ("withArrayLengthConstraints", "linkDecoding", "makeClassTrusted"),
+            (INTERNAL, "not public"),
+        ),
         "fieldsAssign": (FIELDS_ASSIGN, "TypedDict inheritance"),
         "MutableJson": (TYPE_LEVEL, "`S.Json`"),
         "Date": (DATE, "`S.DateTimeUtc`"),
         "DateFromString": (DATE, "`S.DateTimeUtcFromString`"),
         "DateFromMillis": (DATE, "`S.DateTimeUtcFromMillis`"),
-        **{
-            name: (WEB, "`pyfect.http.schema.UrlParams` / `RecordFromUrlParams`")
-            for name in (
-                "File",
-                "FormData",
-                "fromFormData",
-                "URLSearchParams",
-                "fromURLSearchParams",
-            )
-        },
-        **{name: (NO_UNDEFINED, "not ported") for name in _UNDEFINED_NAMES},
+        **dict.fromkeys(
+            ("File", "FormData", "fromFormData", "URLSearchParams", "fromURLSearchParams"),
+            (WEB, "`pyfect.http.schema.UrlParams` / `RecordFromUrlParams`"),
+        ),
+        **dict.fromkeys(_UNDEFINED_NAMES, (NO_UNDEFINED, "not ported")),
         "isStringSymbol": (NO_UNDEFINED, "not ported"),
         "PropertyKey": (NO_UNDEFINED, "`S.String` / `S.Number` keys"),
         "UndefinedOr": (OPTIONAL, "`S.NullOr`"),
@@ -138,9 +132,8 @@ AST = Module(
             CONTEXT,
             "the node fields `optional_key`, `key_annotations`, `constructor_default`",
         ),
-        **{
-            name: (INTERNAL, "not public")
-            for name in (
+        **dict.fromkeys(
+            (
                 "defaultParseOptions",
                 "templateLiteralParser",
                 "stepArray",
@@ -170,8 +163,9 @@ AST = Module(
                 "MutableJson",
                 "unknownToJson",
                 "unknownToStringTree",
-            )
-        },
+            ),
+            (INTERNAL, "not public"),
+        ),
         **{
             name: (ISINSTANCE, f"`isinstance(ast, {name.removeprefix('is')})`")
             for name in (
@@ -194,9 +188,8 @@ AST = Module(
                 "isSuspend",
             )
         },
-        **{
-            name: (NO_UNDEFINED, "not ported")
-            for name in (
+        **dict.fromkeys(
+            (
                 "isSymbol",
                 "isUniqueSymbol",
                 "UniqueSymbol",
@@ -204,8 +197,9 @@ AST = Module(
                 "symbol",
                 "isStringSymbol",
                 "symbolString",
-            )
-        },
+            ),
+            (NO_UNDEFINED, "not ported"),
+        ),
         **{
             name: (NO_UNDEFINED, f"a `Declaration`, the schema `S.{schema}`")
             for name, schema in (
@@ -232,15 +226,10 @@ GETTER = Module(
     ("pyfect.schema.getter", "pyfect.schema.getter:Getter"),
     pythonic={
         "Date": (DATE, "`date_time_utc_from_input`"),
-        **{
-            name: (WEB, "`pyfect.http.schema.RecordFromUrlParams`")
-            for name in (
-                "decodeFormData",
-                "encodeFormData",
-                "decodeURLSearchParams",
-                "encodeURLSearchParams",
-            )
-        },
+        **dict.fromkeys(
+            ("decodeFormData", "encodeFormData", "decodeURLSearchParams", "encodeURLSearchParams"),
+            (WEB, "`pyfect.http.schema.RecordFromUrlParams`"),
+        ),
     },
 )
 TRANSFORMATION = Module(
@@ -257,11 +246,11 @@ TRANSFORMATION = Module(
     pythonic={
         "dateFromString": (DATE, "`date_time_utc_from_string`"),
         "dateFromMillis": (DATE, "`S.DateTimeUtcFromMillis`"),
-        **{name: (INTERNAL, "not public") for name in ("errorFromJsonError", "defectFromJson")},
-        **{
-            name: (WEB, "`pyfect.http.schema.RecordFromUrlParams`")
-            for name in ("fromFormData", "fromURLSearchParams")
-        },
+        **dict.fromkeys(("errorFromJsonError", "defectFromJson"), (INTERNAL, "not public")),
+        **dict.fromkeys(
+            ("fromFormData", "fromURLSearchParams"),
+            (WEB, "`pyfect.http.schema.RecordFromUrlParams`"),
+        ),
         "optionFromUndefinedOr": (OPTIONAL, "`option_from_null_or`"),
         "optionFromNullishOr": (OPTIONAL, "`option_from_null_or`"),
     },
@@ -275,23 +264,18 @@ ISSUE = Module(
         "defaultLeafHook": "pyfect.schema.issue.leaf_message",
         "defaultFormatter": "pyfect.schema.issue.format_issue",
     },
-    pythonic={name: (INTERNAL, "not public") for name in ("makeCompositeAtKey", "makeSingle")},
+    pythonic=dict.fromkeys(("makeCompositeAtKey", "makeSingle"), (INTERNAL, "not public")),
 )
 PARSER = Module(
     "SchemaParser",
     "effect/src/SchemaParser.ts",
     ("pyfect.schema", "pyfect.schema:Bottom"),
     pythonic={
-        **{
-            name: (PROMISE, "`run_async` of the `_effect` form")
-            for name in (
-                "decodeUnknownPromise",
-                "decodePromise",
-                "encodeUnknownPromise",
-                "encodePromise",
-            )
-        },
-        **{name: (INTERNAL, "not public") for name in ("_is", "_issue", "run", "asOption")},
+        **dict.fromkeys(
+            ("decodeUnknownPromise", "decodePromise", "encodeUnknownPromise", "encodePromise"),
+            (PROMISE, "`run_async` of the `_effect` form"),
+        ),
+        **dict.fromkeys(("_is", "_issue", "run", "asOption"), (INTERNAL, "not public")),
     },
 )
 REVIVED_SCHEMAS = "`SchemaRepresentation` revivers of schemas pyfect has not ported"
@@ -311,15 +295,10 @@ REPRESENTATION = Module(
     pythonic={
         "isStringSymbolReviver": (NO_UNDEFINED, "not ported"),
         "ChunkReviver": (COLLECTIONS, "an array needs no reviver"),
-        **{
-            name: (REVIVED_SCHEMAS, "not ported")
-            for name in (
-                "DateReviver",
-                "FileReviver",
-                "FormDataReviver",
-                "URLSearchParamsReviver",
-            )
-        },
+        **dict.fromkeys(
+            ("DateReviver", "FileReviver", "FormDataReviver", "URLSearchParamsReviver"),
+            (REVIVED_SCHEMAS, "not ported"),
+        ),
     },
 )
 JSON_SCHEMA = Module(

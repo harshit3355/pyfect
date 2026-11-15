@@ -75,11 +75,12 @@ def _wait_ready(server: ClickhouseServer) -> None:
     while True:
         try:
             _request(server, "SELECT 1")
-            return
         except (OSError, urllib.error.HTTPError):
             if time.monotonic() > deadline:
                 raise RuntimeError("the ClickHouse server did not start in time") from None
             time.sleep(0.25)
+        else:
+            return
 
 
 def _start() -> ClickhouseServer:

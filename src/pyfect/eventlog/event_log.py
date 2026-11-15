@@ -644,7 +644,7 @@ def group_reactivity(
         if isinstance(keys, Mapping):
             yield from registry.register_reactivity(keys)
         else:
-            yield from registry.register_reactivity({tag: keys for tag in group.events})
+            yield from registry.register_reactivity(dict.fromkeys(group.events, keys))
 
     return layer_effect_discard(gen(register))
 

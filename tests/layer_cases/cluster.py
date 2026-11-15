@@ -353,7 +353,7 @@ def _client_of(transport: str) -> AnyLayer:
 def _options_runner(port: int, options: AnyLayer, transport: str, path: str) -> AnyLayer:
     """A runner serving the ``HttpRouter`` routes ``options`` on the live
     server and dialing runners at ``path``."""
-    served = cast(Any, serve)(options).pipe(L.provide(_dialer(transport, path)))
+    served = cast("Any", serve)(options).pipe(L.provide(_dialer(transport, path)))
     return _http_runner(port, served, client=L.empty)
 
 
@@ -724,7 +724,7 @@ CASES: dict[str, Case] = {
     ),
     "pyfect.cluster.cluster_cron.make": Case(
         layer=lambda: cluster_cron.make(
-            name="LayerReuseCron", cron=EVERY_SECOND, execute=cast(Any, _open_fired)
+            name="LayerReuseCron", cron=EVERY_SECOND, execute=cast("Any", _open_fired)
         ),
         needs=lambda: L.merge(_stack(), _fired()),
         use=lambda: _wait_fired,
@@ -825,7 +825,7 @@ CASES: dict[str, Case] = {
         lambda value, port: _with_clients(
             port,
             _with_server(
-                cast(Any, rpc_server_layer)(Rpcs, _RUNNER_SERVER_OPTIONS).pipe(L.provide(value))
+                cast("Any", rpc_server_layer)(Rpcs, _RUNNER_SERVER_OPTIONS).pipe(L.provide(value))
             ),
         ),
         lambda _: _socket_sender(),

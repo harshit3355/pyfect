@@ -388,20 +388,24 @@ def _timeout_warnings(timeout: Duration, settings: Settings) -> list[str]:
     shown = f"{js_number(millis)}ms"
     if js_string(settings.get("send_progress_in_http_headers")) != "1":
         return [
-            f"request_timeout is set to {shown}, but send_progress_in_http_headers is not "
-            "enabled. Long-running queries may fail with socket hang-up errors if they exceed "
-            "the load balancer idle timeout. Consider enabling progress headers with "
-            "clickhouse_settings: { send_progress_in_http_headers: 1, "
-            "http_headers_progress_interval_ms: '<interval>' }. "
-            f"See {_LONG_RUNNING} for more details."
+            (
+                f"request_timeout is set to {shown}, but send_progress_in_http_headers is not "
+                "enabled. Long-running queries may fail with socket hang-up errors if they exceed "
+                "the load balancer idle timeout. Consider enabling progress headers with "
+                "clickhouse_settings: { send_progress_in_http_headers: 1, "
+                "http_headers_progress_interval_ms: '<interval>' }. "
+                f"See {_LONG_RUNNING} for more details."
+            )
         ]
     if "http_headers_progress_interval_ms" not in settings:
         return [
-            f"request_timeout is set to {shown} and send_progress_in_http_headers is enabled, "
-            "but http_headers_progress_interval_ms is not set. It is recommended to set "
-            "http_headers_progress_interval_ms to a value slightly below your load balancer's "
-            "idle timeout (e.g., '110000' for a 120s LB timeout). "
-            f"See {_LONG_RUNNING} for more details."
+            (
+                f"request_timeout is set to {shown} and send_progress_in_http_headers is enabled, "
+                "but http_headers_progress_interval_ms is not set. It is recommended to set "
+                "http_headers_progress_interval_ms to a value slightly below your load balancer's "
+                "idle timeout (e.g., '110000' for a 120s LB timeout). "
+                f"See {_LONG_RUNNING} for more details."
+            )
         ]
     return []
 

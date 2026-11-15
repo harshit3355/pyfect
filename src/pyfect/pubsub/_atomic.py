@@ -161,9 +161,7 @@ class BackingSubscription[A]:
         atomic = self._atomic
         start = atomic._start
         index = self._index
-        return (
-            len(self._returned) + start + len(atomic._slots) - (index if index > start else start)
-        )
+        return len(self._returned) + start + len(atomic._slots) - max(start, index)
 
     def is_empty(self) -> bool:
         return self.size() == 0

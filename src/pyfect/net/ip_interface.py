@@ -132,7 +132,7 @@ def _parts[I, A: IpAddress](
     if "address" not in value or "prefix_length" not in value:
         return address_error(value, "expected an address and prefix length")
     length = value["prefix_length"]
-    return to_address(value["address"]).map(lambda address: (address, length))  # pyright: ignore
+    return to_address(value["address"]).map(lambda address: (address, length))  # pyright: ignore[reportArgumentType, reportReturnType]
 
 
 def from_input(

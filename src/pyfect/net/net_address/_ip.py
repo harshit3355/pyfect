@@ -121,7 +121,7 @@ def _parse_ipv6_segments(text: str) -> Result[list[int], NetAddressError]:  # no
             case Ok(address):
                 value = int(address)
                 embedded = [value >> 16, value & 0xFFFF]
-        (tail if tail else head).pop()
+        (tail or head).pop()
     explicit = len(head) + len(tail) + len(embedded)
     if explicit >= 8 if compressed else explicit != 8:
         return address_error(

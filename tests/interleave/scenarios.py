@@ -437,7 +437,7 @@ def _test_clock(w: World) -> None:
             [*expected[:1], *expected[2:]],
         ):
             return f"woke {woke}"
-        times = {n: t for n, t in woke}
+        times = dict(woke)
         if times["1s"] != 1000 or times["2s"] != 2000:
             return f"woke {woke}"
         return None

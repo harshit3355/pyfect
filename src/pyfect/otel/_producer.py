@@ -43,7 +43,7 @@ type TemporalityPreference = Literal["cumulative", "delta"]
 
 _SCOPE: Final = InstrumentationScope("pyfect.otel.metrics")
 
-_NO_EXTREMUM: Final = cast(float, None)
+_NO_EXTREMUM: Final = cast("float", None)
 """A delta histogram leaves out ``min`` and ``max``, which cannot be
 derived from cumulative ones. The SDK types them as floats; OTLP encodes
 ``None`` as an unset optional field."""
@@ -66,11 +66,11 @@ class _Series:
     def data(self, temporality: AggregationTemporality) -> DataT:
         match self.kind:
             case "gauge":
-                return Gauge(cast(list[NumberDataPoint], self.points))
+                return Gauge(cast("list[NumberDataPoint]", self.points))
             case "histogram":
-                return Histogram(cast(list[HistogramDataPoint], self.points), temporality)
+                return Histogram(cast("list[HistogramDataPoint]", self.points), temporality)
             case "sum" | "monotonic_sum":
-                numbers = cast(list[NumberDataPoint], self.points)
+                numbers = cast("list[NumberDataPoint]", self.points)
                 return Sum(numbers, temporality, self.kind == "monotonic_sum")
 
 

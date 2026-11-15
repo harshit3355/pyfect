@@ -4,7 +4,7 @@ gives, its value types and JSON literals."""
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping
-from typing import Literal as _L
+from typing import Literal as TypingLiteral
 from typing import TypeIs
 
 from pyfect.json_schema import JsonSchema
@@ -14,7 +14,7 @@ from pyfect.schema.issue import Path
 from pyfect.schema.representation._from import error_with_path
 from pyfect.schema.representation._import import _nodes as N
 
-type PatternMode = _L["error", "ignore", "apply"]
+type PatternMode = TypingLiteral["error", "ignore", "apply"]
 
 VALUE_TYPES = ("null", "string", "number", "boolean", "object", "array")
 

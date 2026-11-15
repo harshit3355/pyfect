@@ -243,7 +243,7 @@ def _unwrap(item: TemplateExpressionItem) -> str:
     return _to_text(item)
 
 
-def _to_text(item: str | int | float | bool) -> str:
+def _to_text(item: str | float | bool) -> str:
     if isinstance(item, str):
         return item
     if isinstance(item, bool):

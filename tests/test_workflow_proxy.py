@@ -156,8 +156,10 @@ def test_importing_pyfect_loads_neither_rpc_nor_http_api():
             sys.executable,
             "-I",
             "-c",
-            "import sys, pyfect; "
-            "print(sorted(m for m in ('pyfect.rpc', 'pyfect.http_api') if m in sys.modules))",
+            (
+                "import sys, pyfect; "
+                "print(sorted(m for m in ('pyfect.rpc', 'pyfect.http_api') if m in sys.modules))"
+            ),
         ],
         capture_output=True,
         text=True,

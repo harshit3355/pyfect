@@ -558,7 +558,7 @@ def reason_from_http_status(
 ) -> AnyReason:
     """The reason an HTTP ``status`` stands for (400 a bad request, 401 /
     403 refused credentials, 429 a rate limit, 5xx a provider failure)."""
-    meta: ProviderMetadata = metadata if metadata else {}
+    meta: ProviderMetadata = metadata or {}
     desc = description or None
     match status:
         case 400:
@@ -594,7 +594,7 @@ def build_error_description(
 ) -> str:
     """A one-line description of a failed HTTP call (Effect's
     ``buildErrorDescription``)."""
-    parts = [message if message else f"HTTP {status}", f"({method} {url})"]
+    parts = [message or f"HTTP {status}", f"({method} {url})"]
     if error_code:
         parts.append(f"[code: {error_code}]")
     elif error_type:

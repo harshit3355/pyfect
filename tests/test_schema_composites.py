@@ -207,7 +207,7 @@ def test_a_class_with_its_own_schema_derives_it_from_its_annotation(
     namespace = importlib.import_module(module)
     annotation = getattr(namespace, cls, None) or getattr(builtins, cls)
     # The field's type is a runtime value, which only the functional form takes.
-    Row = cast(Any, TypedDict)("Row", {"field": annotation})
+    Row = cast("Any", TypedDict)("Row", {"field": annotation})
     assert S.Struct(Row).fields["field"] is getattr(namespace, name)
 
 

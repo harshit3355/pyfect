@@ -10,7 +10,8 @@ it as entries, so any key schema takes part on both sides.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Set
+from collections.abc import Callable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 
@@ -75,9 +76,9 @@ def _set_run(nodes: tuple[ast.AST, ...]) -> ast.DeclarationParser:
     values = ast.Arrays((), nodes)
 
     def parse(input: object, node: ast.Declaration, options: ParseOptions) -> ast.ParseResult:
-        if not isinstance(input, Set):
+        if not isinstance(input, AbstractSet):
             return ast.invalid_type(node, input, options)
-        values_in = cast("Set[object]", input)
+        values_in = cast("AbstractSet[object]", input)
         items = tuple(values_in)
         return _built(
             ast.parse_at_key(node, "values", values, items, input=values_in, options=options),

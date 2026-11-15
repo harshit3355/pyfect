@@ -7,7 +7,7 @@ this process."""
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import socket
 from collections.abc import Callable
 from typing import Any
@@ -36,7 +36,7 @@ HOST = "mail.example.test"
 
 def _certificates(name: str) -> tuple[str, str, str]:
     """A CA's PEM, and a leaf it signed for ``DNS:name`` only, with its key."""
-    now = datetime.datetime.now(datetime.UTC)
+    now = dt.datetime.now(dt.UTC)
     ca_key = ec.generate_private_key(ec.SECP256R1())
     ca_name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "test CA")])
     ca = (
@@ -45,8 +45,8 @@ def _certificates(name: str) -> tuple[str, str, str]:
         .issuer_name(ca_name)
         .public_key(ca_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=5))
-        .not_valid_after(now + datetime.timedelta(hours=1))
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(hours=1))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .sign(ca_key, hashes.SHA256())
     )
@@ -57,8 +57,8 @@ def _certificates(name: str) -> tuple[str, str, str]:
         .issuer_name(ca_name)
         .public_key(leaf_key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=5))
-        .not_valid_after(now + datetime.timedelta(hours=1))
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(hours=1))
         .add_extension(x509.SubjectAlternativeName([x509.DNSName(name)]), critical=False)
         .sign(ca_key, hashes.SHA256())
     )

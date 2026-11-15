@@ -382,7 +382,7 @@ class Declaration:
 
 _START = re.compile(r"^(export type |export const |const |export interface |export function )")
 _CONST = re.compile(
-    r"^(?:export )?const ([A-Za-z_$][A-Za-z0-9_$]*)(?:: Schema\.Schema<\1>)?\s*=\s*", re.S
+    r"^(?:export )?const ([A-Za-z_$][A-Za-z0-9_$]*)(?:: Schema\.Schema<\1>)?\s*=\s*", re.DOTALL
 )
 """A declaration, possibly typed as its own type (Effect's generator
 config annotates the schemas TypeScript cannot serialize)."""

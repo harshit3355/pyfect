@@ -7,7 +7,6 @@ registry active (every node then parses through its registry entry)."""
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
 from typing import Any, Literal, TypedDict, TypeIs
 
 import pytest
@@ -33,14 +32,14 @@ def _identity(input: object, options: object) -> Success[object]:
 
 
 @pytest.fixture(params=["interpreter", "registry"], autouse=True)
-def mode(request: pytest.FixtureRequest, fresh_registry: None) -> Iterator[str]:
+def mode(request: pytest.FixtureRequest, fresh_registry: None) -> str:
     if request.param == "registry":
         # A decoder for a node no test uses: the registry is active, and every
         # other node parses through its interpreted entry (``AST.interpret``).
         compiler.set(
             S.String.annotate(title="activator").ast, CompiledDecoder(decode_effect=_identity)
         )
-    yield request.param
+    return request.param
 
 
 def _decoding_issue(schema: S.Decoder[object], input: object) -> Issue:

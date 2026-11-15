@@ -43,7 +43,7 @@ from pyfect.pull import catch_done
 from pyfect.scheduler import BACKGROUND, Cancel, Scheduler, Task
 
 _BUDGETS = (1, 2, 3, 31, 32, 33)
-_PREFIXES = range(0, 36)
+_PREFIXES = range(36)
 
 
 class _InterruptAt:

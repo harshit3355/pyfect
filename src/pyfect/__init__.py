@@ -424,7 +424,7 @@ if not _typing.TYPE_CHECKING:  # pyright would accept any ``fx.<name>`` through 
 
 
 if _typing.TYPE_CHECKING:
-    from pyfect._context_effects import context
+    from pyfect._context_effects import context  # noqa: TC004  the else branch imports it at runtime
 else:
     # ``pyfect.context`` is both the module and the effect ``fx.context(...)``
     # (Effect's ``Context`` and ``Effect.context``): the module is made

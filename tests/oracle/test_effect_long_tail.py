@@ -30,6 +30,8 @@ import threading
 from collections.abc import Callable
 from typing import Any, Never
 
+import pytest
+
 import pyfect as fx
 from pyfect import cause, testing
 from pyfect.cause import Die
@@ -689,12 +691,9 @@ def test_iterator_yields_the_effect_once_then_completes_with_the_sent_value() ->
     effect = fx.succeed(1)
     iterator = iter(effect)
     assert next(iterator) is effect
-    try:
+    with pytest.raises(StopIteration) as stop:
         iterator.send(2)
-    except StopIteration as stop:
-        assert stop.value == 2
-    else:
-        raise AssertionError("the iterator did not complete")
+    assert stop.value.value == 2
     # A finished Python generator stops without a value (JavaScript's iterator
     # returns the sent value again).
     assert next(iterator, "done") == "done"

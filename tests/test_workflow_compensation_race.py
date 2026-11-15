@@ -86,5 +86,5 @@ def test_a_deferred_completed_during_a_race_with_a_short_sleep_keeps_the_compens
         return (yield from running.join())
 
     exit_ = yield from fx.gen(scenario).pipe(fx.provide(_app(log, engine)))
-    assert exit_.cause.find_fail().error == "rejected"  # pyright: ignore
+    assert exit_.cause.find_fail().error == "rejected"  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
     assert log == ["step", "undo v"]

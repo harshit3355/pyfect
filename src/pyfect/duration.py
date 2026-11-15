@@ -537,7 +537,7 @@ _new = object.__new__
 _set = object.__setattr__
 
 
-def _build(millis_value: float | None, nanos_value: int | float) -> Duration:
+def _build(millis_value: float | None, nanos_value: float) -> Duration:
     d = _new(Duration)
     _set(d, "_millis", millis_value)
     _set(d, "_nanos", nanos_value)
@@ -626,7 +626,7 @@ def nanos_or_infinite(duration: Duration) -> int | float:
     return duration._nanos  # pyright: ignore[reportPrivateUsage]
 
 
-def from_nanos_or_infinite(nanos: int | float) -> Duration:
+def from_nanos_or_infinite(nanos: float) -> Duration:
     """The inverse of ``nanos_or_infinite``: an ``int`` of nanoseconds or ``±math.inf``."""
     if isinstance(nanos, int):
         return _make_int(nanos)

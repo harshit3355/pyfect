@@ -248,8 +248,10 @@ def prepare(name: str) -> Path:
             f"only_mutate = {_toml_list([f'src/pyfect/{s}' for s in group.sources])}",
             f"pytest_add_cli_args_test_selection = {_toml_list(selection)}",
             # One hypothesis seed, so every mutant meets the same examples.
-            'pytest_add_cli_args = ["-p", "no:randomly", "-p", "no:cacheprovider", '
-            '"--hypothesis-seed=0"]',
+            (
+                'pytest_add_cli_args = ["-p", "no:randomly", "-p", "no:cacheprovider", '
+                '"--hypothesis-seed=0"]'
+            ),
             f"type_check_command = {_toml_list(type_check)}",
             # A mutant that loops forever is stopped after twice its tests' CPU time (mutmut's
             # default, 15 times, let one runtime mutant spin for two hours).

@@ -562,8 +562,10 @@ def test_journal_queries_use_indexes():
             ),
         } == {
             "conflicts": [
-                "SEARCH effect_event_journal USING INDEX <index> "
-                "(event=? AND primary_key=? AND timestamp>?)"
+                (
+                    "SEARCH effect_event_journal USING INDEX <index> "
+                    "(event=? AND primary_key=? AND timestamp>?)"
+                )
             ],
             "entries": ["SCAN effect_event_journal USING INDEX <index>"],
             "source": ["SEARCH effect_event_journal_sources USING INDEX <index> (entry_id=?)"],

@@ -65,7 +65,7 @@ def _gate_extra(handler: ast.ExceptHandler) -> Extra | None:
                 ),
                 cause=ast.Name(id=cause),
             ) if passed == cause == handler.name:
-                return typing.cast(Extra, extra)
+                return typing.cast("Extra", extra)
             case _:
                 pass
     return None

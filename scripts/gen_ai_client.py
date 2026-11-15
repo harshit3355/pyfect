@@ -250,7 +250,9 @@ def operations(source: str) -> list[Operation]:
 # --- the interface ----------------------------------------------------------------------
 
 
-_PATH_ARGUMENT = re.compile(r'(?:^ +|^  readonly "\w+": \()(\w+): string(?:,?$|\) =>)', re.M)
+_PATH_ARGUMENT = re.compile(
+    r'(?:^ +|^  readonly "\w+": \()(\w+): string(?:,?$|\) =>)', re.MULTILINE
+)
 
 
 def signatures(source: str, target: ClientTarget) -> dict[str, Signature]:

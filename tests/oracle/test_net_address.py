@@ -89,7 +89,7 @@ def test_ipv4_rejects() -> None:
     ]:
         err(na.ipv4_from_string(text))
     err(na.ipv4_from_octets((0, 0, 0, 256)))
-    err(na.ipv4_from_octets(cast(Any, (0, 0, 0, 1.5))))
+    err(na.ipv4_from_octets(cast("Any", (0, 0, 0, 1.5))))
 
 
 IPV6_CASES = [
@@ -142,7 +142,7 @@ def test_ipv6_round_trips() -> None:
         (0x2001, 0xDB8, 0, 1, 2, 3, 4, 5),
         (0xFFFF,) * 8,
     ]:
-        value = ok(na.ipv6_from_segments(cast(na.Ipv6Segments, segments)))
+        value = ok(na.ipv6_from_segments(cast("na.Ipv6Segments", segments)))
         assert v6(na.format_ip(value)) == value
 
 
@@ -194,7 +194,7 @@ def test_mac_rejects() -> None:
     ]:
         err(na.mac_address_from_string(text))
     err(na.mac_address_from_octets((0, 0, 0, 0, 0, 256)))
-    err(na.mac_address_from_octets(cast(Any, (0, 0, 0, 0, 0, 1.5))))
+    err(na.mac_address_from_octets(cast("Any", (0, 0, 0, 0, 0, 1.5))))
     with pytest.raises(NetAddressError):
         mac("invalid")
 
@@ -750,7 +750,7 @@ def test_from_input_parts() -> None:
         inet("192.0.2.1:53")
     )
     err(na.ip_from_input(bytes(5)))
-    err(na.ip_from_input(cast(Any, (1, 2, 3))))
+    err(na.ip_from_input(cast("Any", (1, 2, 3))))
     err(na.ipv4_from_input((256, 0, 0, 1)))
     err(na.ipv4_from_input(bytes(16)))
     err(na.ipv6_from_input(bytes(4)))

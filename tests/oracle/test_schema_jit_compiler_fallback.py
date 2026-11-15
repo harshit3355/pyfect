@@ -421,7 +421,6 @@ class _NotFound(S.TaggedError, tag="NotFound"):
 def test_encodes_tagged_errors_carrying_runtime_internals():
     """encodes tagged errors carrying runtime internals"""
     encode = S.encode_unknown_sync(_NotFound, on_excess_property="error")
-    try:
+    with pytest.raises(_NotFound) as error:
         raise _NotFound(id=1)
-    except _NotFound as error:
-        assert encode(error) == {"_tag": "NotFound", "id": 1}
+    assert encode(error.value) == {"_tag": "NotFound", "id": 1}

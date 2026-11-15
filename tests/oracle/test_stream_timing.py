@@ -38,7 +38,7 @@ from pyfect.stream import Stream
 @testing.effect
 def test_buffer_maintains_elements_and_ordering():
     """maintains elements and ordering"""
-    chunks = [list(range(0, 4)), list(range(2, 6)), list(range(3, 8))]
+    chunks = [list(range(4)), list(range(2, 6)), list(range(3, 8))]
     result = yield from stream.from_arrays(*chunks).buffer(capacity=2).run_collect()
     assert result == [n for chunk in chunks for n in chunk]
 
@@ -75,7 +75,7 @@ def test_buffer_fast_producer_progresses_independently():
 @testing.effect
 def test_buffer_array_suspend_maintains_elements_and_ordering():
     """maintains elements and ordering"""
-    chunks = [list(range(0, 4)), list(range(2, 6)), list(range(3, 8))]
+    chunks = [list(range(4)), list(range(2, 6)), list(range(3, 8))]
     result = yield from stream.from_arrays(*chunks).buffer_array(capacity=2).run_collect()
     assert result == [n for chunk in chunks for n in chunk]
 
@@ -268,7 +268,7 @@ def test_buffer_propagates_defects():
 @testing.effect
 def test_buffer_unbounded_buffers_the_stream():
     """buffer - buffers the stream"""
-    items = list(range(0, 11))
+    items = list(range(11))
     result = yield from stream.from_iterable(items).buffer(capacity="unbounded").run_collect()
     assert result == items
 

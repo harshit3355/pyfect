@@ -138,7 +138,7 @@ def _value(name: DataTypeName, value: object) -> object:  # noqa: PLR0911
         if name == "Date":
             return value.date()
     if name in _UTC_WALL_CLOCK and type(value) is date:
-        return datetime(value.year, value.month, value.day)
+        return datetime(value.year, value.month, value.day)  # noqa: DTZ001  a UTC wall clock
     return value
 
 

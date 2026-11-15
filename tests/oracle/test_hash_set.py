@@ -175,7 +175,7 @@ def test_symbol_iterator_iterates_over_the_set_values() -> None:
 
 def test_supports_for_of_iteration() -> None:
     """supports for...of iteration"""
-    collected = [value for value in HashSet.make("x", "y", "z")]
+    collected = list(HashSet.make("x", "y", "z"))
     assert sorted(collected) == ["x", "y", "z"]
 
 

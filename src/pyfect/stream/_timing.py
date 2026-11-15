@@ -175,7 +175,7 @@ class _Debounce:
 
     __slots__ = ("clock", "emit_at", "emitting", "ended", "last", "pulling", "stopped", "wait_ns")
 
-    def __init__(self, clock: ClockService, wait_ns: int | float) -> None:
+    def __init__(self, clock: ClockService, wait_ns: float) -> None:
         self.clock = clock
         self.wait_ns = wait_ns
         self.last: Chunk | None = None

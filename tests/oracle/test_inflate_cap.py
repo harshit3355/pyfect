@@ -10,6 +10,8 @@ import tracemalloc
 import zlib
 from collections.abc import Iterator
 
+import pytest
+
 import pyfect as fx
 from pyfect import stream
 from pyfect.encoding import zip as Zip
@@ -96,7 +98,5 @@ def test_a_large_entry_holds_at_most_the_limit() -> None:
 
 def test_zlib_words_for_the_over_subscribed_code() -> None:
     """What the local ``zlib`` says, which the test above expects."""
-    try:
+    with pytest.raises(zlib.error, match=r"invalid code lengths set$"):
         zlib.decompress(per_message()[0], -15)
-    except zlib.error as error:
-        assert str(error).endswith("invalid code lengths set")

@@ -41,7 +41,7 @@ def test_from_step_still_takes_a_step_deciding_continue_or_stop() -> None:
 
     counter = itertools.count(1)
     bump = fx.sync(lambda: next(counter))
-    with pytest.warns(DeprecationWarning):
+    with pytest.warns(DeprecationWarning, match=r"is removed in 0\.7\.0"):
         assert fx.run_sync(bump.repeat(schedule.from_step(fx.succeed(step)))) == -3
 
 

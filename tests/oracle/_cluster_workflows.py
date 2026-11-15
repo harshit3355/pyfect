@@ -118,7 +118,7 @@ def make_test_workflow_engine(
 def poll_until(
     wf: workflow.Workflow[Any, Any, Any],
     execution_id: str,
-    tag: type[Complete[Any, Any]] | type[Suspended],
+    tag: type[Complete[Any, Any] | Suspended],
 ) -> Generator[Any, Any, Any]:
     service = yield from Sharding()
     result = yield from wf.poll(execution_id)

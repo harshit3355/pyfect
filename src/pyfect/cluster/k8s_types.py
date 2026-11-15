@@ -671,8 +671,6 @@ class EphemeralContainer(TypedDict):
 class FieldsV1(TypedDict):
     """FieldsV1 stores a set of fields in a data structure like a Trie, in JSON format."""
 
-    pass
-
 
 class ManagedFieldsEntry(TypedDict):
     """ManagedFieldsEntry is a workflow-id, a FieldSet and the group version of the resource

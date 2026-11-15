@@ -390,7 +390,9 @@ def test_passes_the_type_produced_by_is_int_to_following_check_callbacks():
 
 def test_omits_is_pattern_flags_that_json_schema_cannot_represent():
     """checks and callbacks / omits isPattern flags that JSON Schema cannot represent"""
-    document = R.to_representation(S.String.check(S.is_pattern(re.compile("^[a-z]+$", re.I))))
+    document = R.to_representation(
+        S.String.check(S.is_pattern(re.compile("^[a-z]+$", re.IGNORECASE)))
+    )
     out = R.to_json_schema_document(document)
     assert (out.dialect, out.schema, out.definitions) == ("draft-2020-12", {"type": "string"}, {})
 

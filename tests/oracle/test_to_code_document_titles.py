@@ -497,8 +497,10 @@ def test_enum(members: dict[str, Any], rendered: str) -> None:
         ),
         (
             (S.Literal("a"), S.TemplateLiteral(S.String, S.Literals(["-", "+"]), S.Number)),
-            'S.TemplateLiteral(S.Literal("a"), '
-            'S.TemplateLiteral(S.String, S.Literals(["-", "+"]), S.Number))',
+            (
+                'S.TemplateLiteral(S.Literal("a"), '
+                'S.TemplateLiteral(S.String, S.Literals(["-", "+"]), S.Number))'
+            ),
         ),
         (
             (S.Literal("a"), S.Union([S.String, S.Number])),

@@ -103,7 +103,7 @@ def _releasing_gauge(registry: dict[Any, Any]) -> int | None:
     for snapshot in metric.snapshot_unsafe(Context.make(metric.MetricRegistry, registry)):
         if snapshot.id == "effect_cluster_shards_releasing":
             assert isinstance(snapshot.state, metric.GaugeState)
-            return int(cast(metric.GaugeState[int], snapshot.state).value)
+            return int(cast("metric.GaugeState[int]", snapshot.state).value)
     return None
 
 

@@ -18,7 +18,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import ClassVar
-from typing import Literal as _L
+from typing import Literal as TypingLiteral
 
 from pyfect.schema.ast import UnionMode
 
@@ -55,7 +55,7 @@ class Filter:
     representation: CheckRepresentationAnnotation | None = None
     annotations: Annotations | None = None
     aborted: bool = False
-    tag: ClassVar[_L["Filter"]] = "Filter"
+    tag: ClassVar[TypingLiteral["Filter"]] = "Filter"
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,7 +65,7 @@ class FilterGroup:
     checks: tuple[Check, *tuple[Check, ...]]
     representation: CheckRepresentationAnnotation | None = None
     annotations: Annotations | None = None
-    tag: ClassVar[_L["FilterGroup"]] = "FilterGroup"
+    tag: ClassVar[TypingLiteral["FilterGroup"]] = "FilterGroup"
 
 
 type Check = Filter | FilterGroup
@@ -79,37 +79,37 @@ class _Node:
 
 @dataclass(frozen=True, slots=True)
 class Null(_Node):
-    tag: ClassVar[_L["Null"]] = "Null"
+    tag: ClassVar[TypingLiteral["Null"]] = "Null"
 
 
 @dataclass(frozen=True, slots=True)
 class Undefined(_Node):
-    tag: ClassVar[_L["Undefined"]] = "Undefined"
+    tag: ClassVar[TypingLiteral["Undefined"]] = "Undefined"
 
 
 @dataclass(frozen=True, slots=True)
 class Void(_Node):
-    tag: ClassVar[_L["Void"]] = "Void"
+    tag: ClassVar[TypingLiteral["Void"]] = "Void"
 
 
 @dataclass(frozen=True, slots=True)
 class ObjectKeyword(_Node):
-    tag: ClassVar[_L["ObjectKeyword"]] = "ObjectKeyword"
+    tag: ClassVar[TypingLiteral["ObjectKeyword"]] = "ObjectKeyword"
 
 
 @dataclass(frozen=True, slots=True)
 class Never(_Node):
-    tag: ClassVar[_L["Never"]] = "Never"
+    tag: ClassVar[TypingLiteral["Never"]] = "Never"
 
 
 @dataclass(frozen=True, slots=True)
 class Unknown(_Node):
-    tag: ClassVar[_L["Unknown"]] = "Unknown"
+    tag: ClassVar[TypingLiteral["Unknown"]] = "Unknown"
 
 
 @dataclass(frozen=True, slots=True)
 class Any(_Node):
-    tag: ClassVar[_L["Any"]] = "Any"
+    tag: ClassVar[TypingLiteral["Any"]] = "Any"
 
 
 @dataclass(frozen=True, slots=True)
@@ -124,22 +124,22 @@ class Content:
 @dataclass(frozen=True, slots=True)
 class String(_Node):
     content: Content | None = field(default=None, kw_only=True)
-    tag: ClassVar[_L["String"]] = "String"
+    tag: ClassVar[TypingLiteral["String"]] = "String"
 
 
 @dataclass(frozen=True, slots=True)
 class Number(_Node):
-    tag: ClassVar[_L["Number"]] = "Number"
+    tag: ClassVar[TypingLiteral["Number"]] = "Number"
 
 
 @dataclass(frozen=True, slots=True)
 class Boolean(_Node):
-    tag: ClassVar[_L["Boolean"]] = "Boolean"
+    tag: ClassVar[TypingLiteral["Boolean"]] = "Boolean"
 
 
 @dataclass(frozen=True, slots=True)
 class BigInt(_Node):
-    tag: ClassVar[_L["BigInt"]] = "BigInt"
+    tag: ClassVar[TypingLiteral["BigInt"]] = "BigInt"
 
 
 @dataclass(frozen=True, slots=True)
@@ -147,7 +147,7 @@ class Literal(_Node):
     """One exact value."""
 
     literal: LiteralValue
-    tag: ClassVar[_L["Literal"]] = "Literal"
+    tag: ClassVar[TypingLiteral["Literal"]] = "Literal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,13 +155,13 @@ class Enum(_Node):
     """Enum members as ``(name, value)`` pairs."""
 
     enums: tuple[tuple[str, EnumValue], ...]
-    tag: ClassVar[_L["Enum"]] = "Enum"
+    tag: ClassVar[TypingLiteral["Enum"]] = "Enum"
 
 
 @dataclass(frozen=True, slots=True)
 class TemplateLiteral(_Node):
     parts: tuple[Representation, ...]
-    tag: ClassVar[_L["TemplateLiteral"]] = "TemplateLiteral"
+    tag: ClassVar[TypingLiteral["TemplateLiteral"]] = "TemplateLiteral"
 
 
 @dataclass(frozen=True, slots=True)
@@ -179,7 +179,7 @@ class Arrays(_Node):
 
     elements: tuple[Element, ...] = ()
     rest: tuple[Representation, ...] = ()
-    tag: ClassVar[_L["Arrays"]] = "Arrays"
+    tag: ClassVar[TypingLiteral["Arrays"]] = "Arrays"
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,14 +200,14 @@ class IndexSignature:
 class Objects(_Node):
     property_signatures: tuple[PropertySignature, ...] = ()
     index_signatures: tuple[IndexSignature, ...] = ()
-    tag: ClassVar[_L["Objects"]] = "Objects"
+    tag: ClassVar[TypingLiteral["Objects"]] = "Objects"
 
 
 @dataclass(frozen=True, slots=True)
 class Union(_Node):
     types: tuple[Representation, ...]
     mode: UnionMode = "any_of"
-    tag: ClassVar[_L["Union"]] = "Union"
+    tag: ClassVar[TypingLiteral["Union"]] = "Union"
 
 
 @dataclass(frozen=True, slots=True)
@@ -216,7 +216,7 @@ class Declaration(_Node):
 
     type_parameters: tuple[Representation, ...] = ()
     representation: RepresentationAnnotation | None = field(default=None, kw_only=True)
-    tag: ClassVar[_L["Declaration"]] = "Declaration"
+    tag: ClassVar[TypingLiteral["Declaration"]] = "Declaration"
 
 
 @dataclass(frozen=True, slots=True)
@@ -225,7 +225,7 @@ class Suspend:
 
     thunk: Representation
     annotations: Annotations | None = None
-    tag: ClassVar[_L["Suspend"]] = "Suspend"
+    tag: ClassVar[TypingLiteral["Suspend"]] = "Suspend"
 
 
 @dataclass(frozen=True, slots=True)
@@ -233,7 +233,7 @@ class Reference:
     """A named definition of the document's ``references``."""
 
     ref: str
-    tag: ClassVar[_L["Reference"]] = "Reference"
+    tag: ClassVar[TypingLiteral["Reference"]] = "Reference"
 
 
 type Representation = (

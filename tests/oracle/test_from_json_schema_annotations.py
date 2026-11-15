@@ -393,20 +393,18 @@ def test_json_schema_import_include_annotation_key_does_not_validate_discarded_a
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple(
-                [
-                    {
-                        "allOf": [
-                            {
-                                "type": "array",
-                                "prefixItems": [{"$ref": "#/$defs/A", "x-sensitive": True}],
-                                "items": False,
-                            },
-                            {"type": "array", "items": False},
-                        ]
-                    },
-                    {"$ref": "#/$defs/A"},
-                ]
+            (
+                {
+                    "allOf": [
+                        {
+                            "type": "array",
+                            "prefixItems": [{"$ref": "#/$defs/A", "x-sensitive": True}],
+                            "items": False,
+                        },
+                        {"type": "array", "items": False},
+                    ]
+                },
+                {"$ref": "#/$defs/A"},
             ),
             {"A": {"$ref": "#/$defs/A"}},
         ),
@@ -431,12 +429,10 @@ def test_json_schema_import_include_annotation_key_preserves_shared_definition_m
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple(
-                [
-                    {"$ref": "#/$defs/Name", "x-local": True},
-                    {"$ref": "#/$defs/Name"},
-                    {"type": "array", "items": {"$ref": "#/$defs/Name"}, "x-array": True},
-                ]
+            (
+                {"$ref": "#/$defs/Name", "x-local": True},
+                {"$ref": "#/$defs/Name"},
+                {"type": "array", "items": {"$ref": "#/$defs/Name"}, "x-array": True},
             ),
             {
                 "Name": {"type": "string", "x-definition": True},

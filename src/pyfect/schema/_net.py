@@ -24,7 +24,7 @@ from ipaddress import (
     IPv6Interface,
     IPv6Network,
 )
-from types import ModuleType as _strategies_module
+from types import ModuleType
 from typing import Any, TypeIs, cast
 
 from pyfect.duration import Duration, seconds
@@ -62,7 +62,7 @@ def _is[A](cls: type[A] | tuple[type[A], ...]) -> Callable[[object], TypeIs[A]]:
     return guard
 
 
-type _Draw = Callable[[_strategies_module], Callable[[tuple[Any, ...]], Any]]
+type _Draw = Callable[[ModuleType], Callable[[tuple[Any, ...]], Any]]
 
 
 def _declaration[A](cls: type[A] | tuple[type[A], ...], identifier: str, draw: _Draw) -> Bottom[A]:

@@ -1065,7 +1065,7 @@ def test_underlines_the_active_label(env: Services[Env]):
 # --- Prompt.Custom -------------------------------------------------------------------
 
 
-def _custom_transition(transition: type[NextFrame[Any]] | type[Submit[Any]]):
+def _custom_transition(transition: type[NextFrame[Any] | Submit[Any]]):
     def body() -> Generator[fx.Effect[Any, Any, Any], Any]:
         rendering = yield from fx.Deferred[None, Never].make()
         resume = yield from fx.Deferred[None, Never].make()

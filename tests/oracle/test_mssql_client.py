@@ -177,8 +177,10 @@ def test_insert_and_update_values_helpers_bind_returning_parameters_after_row_va
         "UPDATE people SET name = data.name {}",
         sql.update_values([{"name": "Ada"}, {"name": "Mira"}], "data").returning(returning),
     ).compile() == (
-        "UPDATE people SET name = data.name OUTPUT INSERTED.id, @3 AS source "
-        "FROM (values (@1),(@2)) AS [data]([name])",
+        (
+            "UPDATE people SET name = data.name OUTPUT INSERTED.id, @3 AS source "
+            "FROM (values (@1),(@2)) AS [data]([name])"
+        ),
         ("Ada", "Mira", "audit"),
     )
 
@@ -286,8 +288,10 @@ def test_update_values_helper_returning_identifier(returning: st.Identifier | st
         sql.update_values([{"name": "Rowan"}, {"name": "Mira"}], "data").returning(returning),
     ).compile()
     assert result == (
-        "UPDATE people SET name = data.name OUTPUT [INSERTED].[name] "
-        "FROM (values (@1),(@2)) AS [data]([name])",
+        (
+            "UPDATE people SET name = data.name OUTPUT [INSERTED].[name] "
+            "FROM (values (@1),(@2)) AS [data]([name])"
+        ),
         ("Rowan", "Mira"),
     )
 

@@ -37,7 +37,9 @@ def is_valid_key(key: str | None) -> bool:
 
 def accept_key(key: str) -> str:
     """The ``Sec-WebSocket-Accept`` answering ``key`` (RFC 6455 §4.2.2)."""
-    return base64.b64encode(hashlib.sha1((key + _GUID).encode("ascii")).digest()).decode("ascii")
+    return base64.b64encode(
+        hashlib.sha1((key + _GUID).encode("ascii"), usedforsecurity=False).digest()
+    ).decode("ascii")
 
 
 def is_valid_close_code(code: int) -> bool:

@@ -131,7 +131,7 @@ class _Walk:
             return self._run()
         except (OverflowError, ValueError):
             # Running off ``datetime``'s years 1-9999 means nothing matched.
-            raise _NoMatch() from None
+            raise _NoMatch from None
 
     def _run(self) -> datetime:
         steps: tuple[_Step, ...] = (self._second, self._minute, self._hour, self._day, self._month)
@@ -160,7 +160,7 @@ class _Walk:
                 attempts = 0  # skipped fold candidates do not count against the budget
             else:
                 return make_zoned(wall, self.zone, disambiguation=self.disambiguation)
-        raise _NoMatch()
+        raise _NoMatch
 
     def _needs_step(self, target: int, current: int) -> bool:
         return target < current if self.reverse else target > current
@@ -295,7 +295,7 @@ class _Walk:
                 previous = with_fields(previous, day=0)
                 found = self.table.day[previous.day]
             if found is None:
-                raise _NoMatch()
+                raise _NoMatch
             return (with_fields(previous, day=found) - wall).days
         if target is None or (not self.reverse and target > month_days):
             # A next matching day missing from this month must not overflow

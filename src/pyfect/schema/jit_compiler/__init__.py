@@ -50,7 +50,7 @@ def _build(ast: AST, resolve: Resolve, source: str) -> Any:
     lines = source.splitlines()
     module = "\n".join(["def factory(ast, R, resolve):", *(f"    {line}" for line in lines)])
     namespace: dict[str, Any] = {}
-    builtins.exec(module, namespace)
+    builtins.exec(module, namespace)  # noqa: S102  runs code this module generated
     return namespace["factory"](ast, runtime, resolve)
 
 

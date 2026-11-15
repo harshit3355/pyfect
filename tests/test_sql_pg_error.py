@@ -26,8 +26,10 @@ def test_a_lost_connection_without_sqlstate_is_a_connection_error():
 @pytest.mark.parametrize(
     "text",
     [
-        'connection failed: connection to server at "127.0.0.1", port 5432 failed: '
-        'FATAL:  password authentication failed for user "postgres"',
+        (
+            'connection failed: connection to server at "127.0.0.1", port 5432 failed: '
+            'FATAL:  password authentication failed for user "postgres"'
+        ),
         "connection failed: fe_sendauth: no password supplied",
         'connection failed: FATAL:  no pg_hba.conf entry for host "10.0.0.1", user "x"',
     ],

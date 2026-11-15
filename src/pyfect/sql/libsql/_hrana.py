@@ -214,7 +214,7 @@ class RemoteClient:
 
     def http(self) -> httpx.AsyncClient:
         if self._http is None:
-            self._http = httpx.AsyncClient(timeout=None)
+            self._http = httpx.AsyncClient(timeout=None)  # noqa: S113  Effect's fetch sets no timeout
         return self._http
 
     async def execute(self, sql: str, args: Sequence[object], /) -> ResultSet:

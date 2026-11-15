@@ -1308,7 +1308,7 @@ def test_retries_failed_write_and_flushes_changes():
         class Tapped(base):
             @property
             def changes(self):
-                return base.changes.fget(self).tap(subscriptions.offer)  # pyright: ignore
+                return base.changes.fget(self).tap(subscriptions.offer)  # pyright: ignore[reportOptionalCall]
 
         journal.__class__ = Tapped
         return journal

@@ -11,7 +11,7 @@ handshake that takes longer than ``handshake_timeout`` (Node's ``handshakeTimeou
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import socket
 import threading
 from collections.abc import Callable
@@ -34,15 +34,15 @@ from pyfect.scope import scoped
 def _pem() -> tuple[bytes, bytes]:
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "localhost")])
-    now = datetime.datetime.now(datetime.UTC)
+    now = dt.datetime.now(dt.UTC)
     cert = (
         x509.CertificateBuilder()
         .subject_name(name)
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=5))
-        .not_valid_after(now + datetime.timedelta(days=1))
+        .not_valid_before(now - dt.timedelta(minutes=5))
+        .not_valid_after(now + dt.timedelta(days=1))
         .sign(key, hashes.SHA256())
     )
     key_pem = key.private_bytes(

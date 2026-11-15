@@ -96,8 +96,10 @@ def _code(schema: Any) -> R.CodeDocument:
         ),
         (
             S.String.check(S.is_min_length(1)),
-            "S.String.check(S.is_min_length(1)"
-            '.annotate(expected="a value with a length of at least 1"))',
+            (
+                "S.String.check(S.is_min_length(1)"
+                '.annotate(expected="a value with a length of at least 1"))'
+            ),
             "str",
         ),
         (S.Option(S.String), 'S.Option(S.String).annotate(expected="Option")', "fx.Option[str]"),

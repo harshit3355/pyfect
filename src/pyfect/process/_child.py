@@ -157,11 +157,12 @@ class Child:
         if self.owns_group():
             try:
                 os.killpg(self.pid, sig)
-                return
             except OSError as error:
                 # Only zombies remain in an exited leader's group.
                 if self.exited() and error.errno == errno.EPERM:
                     return
+            else:
+                return
         self._signal_process(sig)
 
     def signal(self, sig: signal.Signals) -> Effect[None, PlatformError]:

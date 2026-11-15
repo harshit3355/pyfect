@@ -410,7 +410,7 @@ class _ControlledStorageBase:
 def _controlled_message_storage(
     storage: MessageStorageService, controller: _RunnerStorageController
 ) -> MessageStorageService:
-    base = cast(StorageBase, _ControlledStorageBase(storage.base, controller))
+    base = cast("StorageBase", _ControlledStorageBase(storage.base, controller))
     return replace(storage, base=base)
 
 

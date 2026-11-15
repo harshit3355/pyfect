@@ -57,7 +57,7 @@ def test_schema_representation_from_json_schema_multi_document_rejects_open_patt
     throws(
         lambda: R.from_json_schema_multi_document(
             multi_document(
-                "draft-2020-12", tuple([{"type": "string"}, {"type": "array", "items": open}]), {}
+                "draft-2020-12", ({"type": "string"}, {"type": "array", "items": open}), {}
             ),
             patterns="apply",
         ),
@@ -67,11 +67,9 @@ def test_schema_representation_from_json_schema_multi_document_rejects_open_patt
         lambda: R.from_json_schema_multi_document(
             multi_document(
                 "draft-2020-12",
-                tuple(
-                    [
-                        {"$ref": "#/$defs/Values"},
-                        {"type": "array", "items": {"$ref": "#/$defs/Values"}},
-                    ]
+                (
+                    {"$ref": "#/$defs/Values"},
+                    {"type": "array", "items": {"$ref": "#/$defs/Values"}},
                 ),
                 {"Values": open},
             ),
@@ -88,9 +86,7 @@ def test_schema_representation_from_json_schema_multi_document_imports_closed_pa
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple(
-                [{"$ref": "#/$defs/Values"}, {"type": "array", "items": {"$ref": "#/$defs/Values"}}]
-            ),
+            ({"$ref": "#/$defs/Values"}, {"type": "array", "items": {"$ref": "#/$defs/Values"}}),
             {
                 "Values": {
                     "type": "object",
@@ -120,11 +116,9 @@ def test_schema_representation_from_json_schema_multi_document_imports_never_thr
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple(
-                [
-                    {"type": "object", "properties": {"value": {"$ref": "#/$defs/Impossible"}}},
-                    {"$ref": "#/$defs/Impossible"},
-                ]
+            (
+                {"type": "object", "properties": {"value": {"$ref": "#/$defs/Impossible"}}},
+                {"$ref": "#/$defs/Impossible"},
             ),
             {"Impossible": {"not": {}}},
         )
@@ -160,11 +154,9 @@ def test_schema_representation_from_json_schema_multi_document_keeps_resource_sc
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple(
-                [
-                    {"type": "object", "properties": {"child": {"$id": "child", "type": "number"}}},
-                    {"$id": "https://example.com/root", "$ref": "#/$defs/X"},
-                ]
+            (
+                {"type": "object", "properties": {"child": {"$id": "child", "type": "number"}}},
+                {"$id": "https://example.com/root", "$ref": "#/$defs/X"},
             ),
             {"X": {"type": "string"}},
         )
@@ -201,11 +193,9 @@ def test_schema_representation_from_json_schema_multi_document_rejects_a_referen
         lambda: R.from_json_schema_multi_document(
             multi_document(
                 "draft-2020-12",
-                tuple(
-                    [
-                        {"type": "string"},
-                        {"type": "array", "items": {"$id": "child", "$ref": "#/$defs/X"}},
-                    ]
+                (
+                    {"type": "string"},
+                    {"type": "array", "items": {"$id": "child", "$ref": "#/$defs/X"}},
                 ),
                 {"X": {"type": "string"}},
             )
@@ -220,7 +210,7 @@ def test_schema_representation_from_json_schema_multi_document_propagates_the_pa
     "SchemaRepresentation.fromJsonSchemaMultiDocument / propagates the pattern policy through reachable definitions"
     document = multi_document(
         "draft-2020-12",
-        tuple([{"$ref": "#/$defs/A"}]),
+        ({"$ref": "#/$defs/A"},),
         {"A": {"type": "string", "pattern": "^a+$"}},
     )
     throws(
@@ -262,7 +252,7 @@ def test_schema_representation_from_json_schema_multi_document_preserves_an_on_e
 
     throws(
         lambda: R.from_json_schema_multi_document(
-            multi_document("draft-2020-12", tuple([{"type": "string"}]), {}), on_enter=_fn1
+            multi_document("draft-2020-12", ({"type": "string"},), {}), on_enter=_fn1
         ),
         _fn2,
     )
@@ -274,14 +264,12 @@ def test_preserves_content_schema_as_an_annotation_without_traversing_it() -> No
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple(
-                [
-                    {
-                        "type": "string",
-                        "contentMediaType": "application/json",
-                        "contentSchema": {"$ref": "#/$defs/Payload"},
-                    }
-                ]
+            (
+                {
+                    "type": "string",
+                    "contentMediaType": "application/json",
+                    "contentSchema": {"$ref": "#/$defs/Payload"},
+                },
             ),
             {
                 "Payload": {
@@ -319,7 +307,7 @@ def test_schema_representation_from_json_schema_multi_document_does_not_import_u
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple([{"type": "string"}]),
+            ({"type": "string"},),
             {"Unused": {"type": "number", "description": "unused"}},
         ),
         on_enter=_fn3,
@@ -334,13 +322,11 @@ def test_schema_representation_from_json_schema_multi_document_preserves_root_or
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple(
-                [
-                    {"$ref": "#/$defs/A"},
-                    {"$ref": "#/$defs/A", "description": "second"},
-                    {"type": "array", "items": {"$ref": "#/$defs/A"}},
-                    {"$ref": "#/$defs/A", "description": "fourth"},
-                ]
+            (
+                {"$ref": "#/$defs/A"},
+                {"$ref": "#/$defs/A", "description": "second"},
+                {"type": "array", "items": {"$ref": "#/$defs/A"}},
+                {"$ref": "#/$defs/A", "description": "fourth"},
             ),
             {"A": {"type": "string", "minLength": 1}},
         )
@@ -382,7 +368,7 @@ def test_schema_representation_from_json_schema_multi_document_resolves_alias_ch
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple([{"$ref": "#/$defs/A", "description": "root"}]),
+            ({"$ref": "#/$defs/A", "description": "root"},),
             {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/C"}, "C": {"type": "number"}},
         )
     )
@@ -417,7 +403,7 @@ def test_schema_representation_from_json_schema_multi_document_tracks_recursive_
     schemas = R.from_json_schema_multi_document(
         multi_document(
             "draft-2020-12",
-            tuple([{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]),
+            ({"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}),
             {"A": {"$ref": "#/$defs/A"}, "B": {"$ref": "#/$defs/B"}},
         )
     )
@@ -448,7 +434,7 @@ def test_schema_representation_from_json_schema_multi_document_throws_when_a_ref
     throws(
         lambda: R.from_json_schema_multi_document(
             multi_document(
-                "draft-2020-12", tuple([{"$ref": "#/$defs/Missing", "description": "resolve"}]), {}
+                "draft-2020-12", ({"$ref": "#/$defs/Missing", "description": "resolve"},), {}
             )
         ),
         'Missing definition "Missing" for $ref "#/$defs/Missing".\n  at ["schemas"][0]["$ref"]',
@@ -463,7 +449,7 @@ def test_schema_representation_from_json_schema_multi_document_throws_when_resol
         lambda: R.from_json_schema_multi_document(
             multi_document(
                 "draft-2020-12",
-                tuple([{"$ref": "#/$defs/A", "description": "resolve"}]),
+                ({"$ref": "#/$defs/A", "description": "resolve"},),
                 {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}},
             )
         ),
@@ -479,7 +465,7 @@ def test_schema_representation_from_json_schema_multi_document_also_validates_ci
         lambda: R.from_json_schema_multi_document(
             multi_document(
                 "draft-2020-12",
-                tuple([{"allOf": [{"$ref": "#/$defs/A"}, {"description": "resolve"}]}]),
+                ({"allOf": [{"$ref": "#/$defs/A"}, {"description": "resolve"}]},),
                 {"A": {"$ref": "#/$defs/B"}, "B": {"$ref": "#/$defs/A"}},
             )
         ),
