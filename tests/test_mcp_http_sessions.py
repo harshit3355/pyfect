@@ -143,7 +143,7 @@ def test_a_session_keeps_only_the_decoded_initialize_fields():
     import tracemalloc
 
     http = yield from _http(max_initialize_bytes="4 MiB")
-    body = json.dumps(_initialize(pad=[[] for _ in range(300_000)]), separators=(",", ":"))
+    body = json.dumps(_initialize(pad=[list[int]() for _ in range(300_000)]), separators=(",", ":"))
     request = (
         R.post(URL)
         .set_headers({"accept": "application/json, text/event-stream"})

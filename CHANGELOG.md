@@ -7,6 +7,9 @@
 - `mcp_server.layer_http` reads an `initialize` under its own `max_initialize_bytes` limit
   (64 KiB by default; a larger one gets 413), and a session keeps only the decoded
   `initialize` fields, not the whole message.
+- A multipart field's `charset` is read as `TextDecoder` reads it, as in Effect: only the
+  WHATWG Encoding Standard's labels name a decoder, and any other label decodes as UTF-8,
+  instead of selecting any Python codec.
 
 ## 0.6.5 (2026-11-14)
 
