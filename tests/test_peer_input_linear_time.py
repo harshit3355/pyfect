@@ -17,6 +17,7 @@ from pyfect.http.find_my_way._router import (
     Router,
     _safe_decode_uri,  # pyright: ignore[reportPrivateUsage]
 )
+from pyfect.http.web import WebRequest
 from pyfect.http_api._path import to_router_path
 
 type Case = Callable[[int], Callable[[], object]]
@@ -43,7 +44,14 @@ def _comma_params(n: int) -> Callable[[], object]:
     return lambda: router.find("GET", path)
 
 
+def _repeated_header(n: int) -> Callable[[], object]:
+    """An ASGI request's head: some servers (httptools) set no head limit."""
+    request = WebRequest("http://localhost/", headers=[("x", "a")] * n)
+    return lambda: request.headers
+
+
 CASES: dict[str, tuple[Case, int]] = {
+    "ASGI request with many lines of one header": (_repeated_header, 5_000),
     "find-my-way path with %25 runs": (_percent_25_path, 20_000),
     "HttpApi parameters joined by a comma": (_comma_params, 100),
 }

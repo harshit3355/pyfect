@@ -31,6 +31,8 @@
   it is inflated; httpx inflated each network chunk whole, and stacked codings multiplied it.
 - `uvicorn_server` WebSockets decline `permessage-deflate` by default, as Effect's `ws`
   server does (`config={"ws_per_message_deflate": True}` turns it back on).
+- An ASGI request's (and WebSocket upgrade's) repeated header lines are joined once, in time
+  linear in their number.
 
 ## 0.6.5 (2026-11-14)
 
