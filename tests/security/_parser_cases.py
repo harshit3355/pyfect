@@ -366,7 +366,6 @@ data(event_log_session_auth.decode_session_auth_payload)
 @case(
     cookies.parse_header,
     "cookies.parse_header: many empty pairs (#49)",
-    fixed_elsewhere="#49, sec2-net",
 )
 def _cookie_pairs(n: int) -> Work:
     value = ";" * n + "=x"
@@ -390,7 +389,6 @@ CASES.append(
         multipart_parser.decode_field,
         _punycode_field,
         size=64_000,
-        fixed_elsewhere="#26, sec2-net",
     )
 )
 
@@ -408,7 +406,6 @@ CASES.append(
         find_my_way.Router.find,
         _router_escapes,
         size=16_000,
-        fixed_elsewhere="#50, sec2-net",
     )
 )
 
@@ -424,7 +421,6 @@ CASES.append(
         WebRequest,
         _repeated_header,
         size=4000,
-        fixed_elsewhere="#57, sec2-net",
     )
 )
 
@@ -538,7 +534,6 @@ def _varint(n: int) -> bytes:
     schema_binary.parser,
     "schema_binary: a long big-varint run in an RPC payload (#70)",
     size=16_000,
-    fixed_elsewhere="#70, sec2-rpc",
 )
 def _schema_binary_varint(n: int) -> Work:
     codec = serialization.make_schema_binary().codec_for(S.Struct(_Payload))
@@ -553,7 +548,6 @@ def _schema_binary_varint(n: int) -> Work:
     serialization.json_rpc,
     "rpc json_rpc: a batch of hash-colliding integer ids (#27)",
     size=2000,
-    fixed_elsewhere="#27, sec2-rpc",
 )
 def _json_rpc_ids(n: int) -> Work:
     collide = 2**61 - 1
@@ -642,7 +636,6 @@ def _regexp_flags(n: int) -> Work:
 @case(
     S.FrozenSet,
     "FrozenSet(Number) JSON: hash-colliding integers (#25)",
-    fixed_elsewhere="#25, owner not assigned on this branch",
 )
 def _frozen_set_collisions(n: int) -> Work:
     decode = S.decode_unknown_exit(S.to_codec_json(S.FrozenSet(S.Number)))
@@ -776,6 +769,9 @@ _REASONS: dict[str, list[str]] = {
     ],
     "a schema decode of each message; json_rpc is measured": [
         "pyfect.rpc.message.decode_from_server",
+    ],
+    "matches one already-decoded message's tag and id; constant work": [
+        "pyfect.rpc.message.decode_control",
     ],
     "schema_binary frames; schema_binary is measured (#70)": [
         "pyfect.eventlog.event_log_message.decode_changes_encrypted",
