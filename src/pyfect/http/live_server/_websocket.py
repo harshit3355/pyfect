@@ -380,15 +380,16 @@ class _Session:
             return void
         return self._send_messages(chunks)
 
-    def switched(self) -> _Session:
-        """This session, once the ``101`` is sent: from now on shutdown can send it 1001."""
-        self.exchange.go_away = suspend(self._go_away)
-        return self
+    @property
+    def go_away(self) -> Effect[None]:
+        """How shutdown ends this session: a close with 1001 (Going Away), unless one was sent."""
 
-    def _go_away(self) -> Effect[None]:
-        if not self.claim_close():
-            return void
-        return self._send((encode_close(1001),)).catch_all(lambda _: void)
+        def send() -> Effect[None]:
+            if not self.claim_close():
+                return void
+            return self._send((encode_close(1001),)).catch_all(lambda _: void)
+
+        return suspend(send)
 
     def close(self, exit: Exit[object, object]) -> Effect[None]:
         """After ``read`` has stopped: the replies it left, then the
@@ -422,10 +423,11 @@ def web_socket(exchange: Exchange, websocket: WebSocketConfig) -> SocketService:
             )
         exchange.upgraded = _SWITCHED
         session = _Session(exchange, websocket.max_message_size, negotiated)
+
         return (
-            conn.write((head,))
+            exchange.write_switch(head, session.go_away)
             .map_error(lambda _: _closed_before_upgrade())
-            .map(lambda _: session.switched())
+            .as_(session)
         )
 
     def release(session: _Session, exit: Exit[object, object]) -> Effect[None]:

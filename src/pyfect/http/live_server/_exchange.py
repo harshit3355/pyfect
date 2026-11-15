@@ -20,6 +20,7 @@ from typing import Any
 
 from pyfect._core import Effect
 from pyfect._digits import parse_digits
+from pyfect._effect_args import require_effect
 from pyfect.cause import Cause
 from pyfect.cause import die as die_cause
 from pyfect.effect import fail_cause, succeed, suspend, void
@@ -154,6 +155,18 @@ class Exchange:
             return void
 
         return self.conn.write(chunks).catch_all(lost)
+
+    def write_switch(self, head: bytes, go_away: Effect[None]) -> Effect[None, SocketError]:
+        """Write the ``101`` head; ``go_away`` is how shutdown ends the upgraded connection.
+        It is set on the loop as the head is handed to the transport, since the client can
+        see the head, and shutdown begin, before this write returns."""
+        require_effect(go_away, "go_away")
+
+        def switching() -> tuple[bytes, ...]:
+            self.go_away = go_away
+            return (head,)
+
+        return self.conn.write_with(switching)
 
     def write_continue(self) -> Effect[None]:
         """Ask the client for the body it holds back, once."""

@@ -222,7 +222,9 @@
   clients are connected, as in Effect 4.1.4 (#10405): WebSockets get a close with 1001 (Going
   Away) as soon as shutdown starts, other upgraded connections are ended, and any still open
   after the wait are destroyed. A connected, responsive client held a 5-second shutdown for
-  the whole 5 seconds and got 1001 only when its handler was interrupted.
+  the whole 5 seconds and got 1001 only when its handler was interrupted. This holds from the
+  moment the `101` is written, even when shutdown starts before the server's write of it
+  returns.
 - A request scope moved to a streamed body with `scope_transfer_to_stream` closes once both the
   request (middleware and tracing included) and the body have finished, with the body's exit,
   as in Effect 4.1.4 (#10366). It closed as soon as the body ended, before the middleware and

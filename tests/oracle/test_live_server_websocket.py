@@ -37,6 +37,7 @@ from pyfect.http.live_server import PerMessageDeflate
 from pyfect.http.server_request import HttpServerRequest
 from pyfect.scope import scoped
 from pyfect.socket import SocketError, to_stream
+from pyfect.socket._connection import Connection
 
 from . import test_uvicorn_http_server as uv
 from ._live_http import TIMEOUT, port, run_live
@@ -748,5 +749,78 @@ def test_shutdown_ends_other_upgraded_connections_at_once() -> None:
 
     _routed(handler(), program(), graceful_shutdown_timeout="10 seconds")
     assert received[0].startswith(b"HTTP/1.1 101 ")
+    [exit] = drained
+    assert not (isinstance(exit, Failure) and exit.cause.has_interrupts)
+
+
+def _raw_client(at: int, switched: threading.Event, ended: threading.Event) -> None:
+    with socket.create_connection(("127.0.0.1", at), timeout=TIMEOUT) as conn:
+        conn.sendall(
+            b"GET /ws HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: Upgrade\r\nUpgrade: tcp\r\n\r\n"
+        )
+        head = b""
+        while chunk := conn.recv(65536):
+            head += chunk
+            switched.set()
+        ended.set()
+        assert head.startswith(b"HTTP/1.1 101 ")
+
+
+def _ws_client(at: int, switched: threading.Event, ended: threading.Event) -> None:
+    conn, _head = _handshake(at)
+    with conn:
+        switched.set()
+        going_away = b"\x88\x02" + struct.pack("!H", 1001)
+        received = b""
+        while going_away not in received and (chunk := conn.recv(65536)):
+            received += chunk
+        ended.set()
+        assert going_away in received
+
+
+@pytest.mark.parametrize("client", [_raw_client, _ws_client], ids=["raw", "websocket"])
+def test_shutdown_ends_an_upgrade_whose_switch_is_still_being_written(
+    monkeypatch: pytest.MonkeyPatch, client: Any
+) -> None:
+    """Not an Effect title. The client can see the 101 and shutdown can begin before the
+    server's write of it has returned, so shutdown must already know how to end the
+    connection: here the write of the 101 returns only once the client has seen the end."""
+    switched, ended = threading.Event(), threading.Event()
+    original = Connection.write_with
+
+    def write_with(self: Connection, make: Any) -> fx.Effect[None, SocketError]:
+        switches: list[bytes] = []
+
+        def made() -> tuple[bytes, ...]:
+            chunks = make()
+            switches.extend(chunk for chunk in chunks if chunk.startswith(b"HTTP/1.1 101 "))
+            return chunks
+
+        def returned(_: None) -> fx.Effect[None]:
+            return (
+                effect.blocking(lambda: ended.wait(TIMEOUT)).as_void() if switches else effect.void
+            )
+
+        return original(self, made).flat_map(returned)
+
+    monkeypatch.setattr(Connection, "write_with", write_with)
+    drained: list[fx.Exit[None, SocketError]] = []
+
+    @fx.fn
+    def handler():
+        request = yield from HttpServerRequest()
+        sock = yield from request.upgrade
+        drained.append((yield from to_stream(sock).run_drain().exit()))
+        return server_response.empty()
+
+    @fx.fn
+    def program():
+        at = yield from port
+        finished = yield from effect.blocking(lambda: client(at, switched, ended)).fork_daemon()
+        yield from effect.blocking(lambda: switched.wait(TIMEOUT))
+        return finished
+
+    finished = _routed(handler(), program(), graceful_shutdown_timeout="10 seconds")
+    fx.run_blocking(finished.join())
     [exit] = drained
     assert not (isinstance(exit, Failure) and exit.cause.has_interrupts)
