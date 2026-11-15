@@ -726,7 +726,7 @@
  "tests/test_disable_checks_ports.py": 6.11,
  "tests/test_doc_inline_code.py": 0.03,
  "tests/test_doc_server_tls.py": 0.0,
- "tests/test_doc_snippets.py": 192.56,
+ "tests/test_doc_snippets.py": 91.0,
  "tests/test_duration.py": 0.12,
  "tests/test_duration_iso.py": 0.01,
  "tests/test_duration_literals.py": 78.81,
