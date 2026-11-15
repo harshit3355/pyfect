@@ -11,11 +11,13 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
-from typing import cast
+import json
+from typing import Literal, TypeAliasType, cast, get_args, get_origin, get_type_hints
 
 from hypothesis import strategies as st
 
 from .program import (
+    NODES,
     AcquireUseRelease,
     All,
     Buffer,
@@ -87,7 +89,8 @@ from .program import (
 
 _MS = st.sampled_from([1, 5, 10, 50, 100])
 _SMALL = st.integers(0, 4)
-_CONCURRENCY: st.SearchStrategy[Concurrency] = st.sampled_from([None, 1, 2, "unbounded"])
+_CONCURRENCIES: tuple[Concurrency, ...] = (None, 1, 2, "unbounded")
+_CONCURRENCY: st.SearchStrategy[Concurrency] = st.sampled_from(_CONCURRENCIES)
 _ENDS: st.SearchStrategy[ForkEnd] = st.sampled_from(["join", "interrupt", "await", "detach"])
 _SINKS: st.SearchStrategy[Sink] = st.sampled_from(["collect", "sum", "drain", "count"])
 _VALUES = st.lists(st.integers(0, 9), max_size=5).map(tuple)
@@ -250,8 +253,9 @@ def programs(max_leaves: int = 12) -> st.SearchStrategy[Expr]:
 
 # A shape whose op count differs between the runtimes by one shows only at the one budget
 # where that op is the last before a yield, so a fresh program at one random budget finds it
-# by luck. The corpus sweeps these budgets for a program using each node instead
-# (``python -m runtime_diff --sweep``), up to past the 32-op inline limit.
+# by luck. The corpus sweeps these budgets for programs using each node, and each value of a
+# field choosing how a node runs (``MODES``), instead (``python -m runtime_diff --sweep``),
+# up to past the 32-op inline limit.
 SWEEP_BUDGETS = range(3, 61)
 SWEEP_TIMES = 3
 
@@ -267,27 +271,70 @@ def probe(program: Expr) -> Expr:
     return _numbered(Seq(0, (Exited(0, fork),)))
 
 
-def ops(value: Json) -> set[str]:
-    """Every ``op`` in a program's JSON form."""
+def _choices(hint: object) -> tuple[Json, ...]:
+    """The values the generator gives a field of this type when it chooses a mode."""
+    if hint is bool:
+        return (False, True)
+    if hint is Concurrency:
+        return _CONCURRENCIES
+    if isinstance(hint, TypeAliasType):
+        return _choices(hint.__value__)
+    if get_origin(hint) is Literal:
+        return get_args(hint)
+    return ()
+
+
+MODES: dict[str, dict[str, tuple[Json, ...]]] = {
+    name: {
+        field: choices
+        for field, hint in get_type_hints(node).items()
+        if (choices := _choices(hint))
+    }
+    for name, node in NODES.items()
+}
+"""For each node, its fields choosing how it runs (a ``bool``, a ``Literal``, a
+``Concurrency``) and the values the generator gives them."""
+
+
+def feature(op: str, field: str, value: Json) -> str:
+    return f"{op}.{field}={json.dumps(value)}"
+
+
+FEATURES = set(NODES) | {
+    feature(op, field, value)
+    for op, fields in MODES.items()
+    for field, values in fields.items()
+    for value in values
+}
+"""What the sweep covers: every node, and every value of every mode."""
+
+
+def features(value: Json) -> set[str]:
+    """The ``FEATURES`` a program's JSON form uses."""
     if isinstance(value, list):
-        return set[str]().union(*(ops(item) for item in value))
+        return set[str]().union(*(features(item) for item in value))
     if isinstance(value, dict):
-        found = {str(value["op"])} if "op" in value else set[str]()
-        return found.union(*(ops(item) for item in value.values()))
+        found = set[str]()
+        if "op" in value:
+            op = str(value["op"])
+            found = {op} | {feature(op, field, value[field]) for field in MODES[op]}
+        return found.union(*(features(item) for item in value.values()))
     return set()
 
 
 def covering(candidates: list[Expr], times: int) -> list[Expr]:
-    """Few of ``candidates`` such that each node the candidates use is used by at least
-    ``times`` picks: ``times`` rounds, each picking until every node is used, each pick
-    the program using the most nodes the round still wants, ties to the smallest."""
-    left = [(ops(to_json(c)), len(str(to_json(c))), c) for c in candidates]
+    """Few of ``candidates`` such that each feature the candidates use is used by at least
+    ``times`` picks: ``times`` rounds, each picking until every feature is used, each pick
+    the program using the most features the round still wants, ties to the smallest."""
+    left = [(features(to_json(c)), len(str(to_json(c))), c) for c in candidates]
     every = set[str]().union(*(used for used, _, _ in left))
     picked: list[Expr] = []
     for _ in range(times):
         wanted = set(every)
         while wanted and left:
             row = max(left, key=lambda row: (len(row[0] & wanted), -row[1]))
+            if not row[0] & wanted:
+                break  # what is still wanted, no candidate left uses
             left.remove(row)
             picked.append(row[2])
             wanted -= row[0]

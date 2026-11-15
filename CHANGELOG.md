@@ -18,6 +18,18 @@
   the other streams that pull their sources with `Channel.to_pull_scoped` no longer spend a
   step before building the pull. A fiber running them under `MaxOpsBeforeYield` yields where
   Effect's does, so a forked child or a queue producer runs at the same point.
+- A fiber whose effect is done interrupts and awaits its children in a run of its own,
+  counting steps from the first again, as Effect's fiber does. Under a small
+  `MaxOpsBeforeYield` it no longer yields there, so a child forked without starting is
+  interrupted before it runs, as in Effect.
+- `Stream.flat_map` with `concurrency` above 1 (and `switch_map`, `Channel.merge_all`) and
+  `Stream.buffer` / `Channel.buffer` build as Effect's generators do, step for step: the queue
+  and latch are made as steps, the queue's shutdown is added to the scope as Effect's
+  `Scope.addFinalizer` adds it, and `buffer` builds its upstream before making its queue.
+- `Queue.fail` / `fail_cause` / `end` on a queue with nothing left to take ends it at once
+  and queues no task, as Effect's `failCauseUnsafe` does. The stray task sat in the
+  dispatcher of the fiber that made the queue, so that fiber's later forks ran ahead of
+  tasks other fibers had queued since.
 
 ## 0.6.6 (2026-11-15)
 

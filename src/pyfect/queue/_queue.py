@@ -250,10 +250,14 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         with self._lock:
             match self._state:
                 case st.Open(takers=takers, offers=offers, awaiters=awaiters):
+                    # As Effect's ``failCauseUnsafe``: with nothing left to take
+                    # the queue ends now, waking its takers, and schedules nothing.
+                    if not self._items and not offers:
+                        self._finish(cause)
+                        return True
                     self._state = st.Closing(takers, offers, awaiters, cause)
                     # A batch take waiting for its minimum can now drain the rest.
                     takers.notify_ready_soon(self._waker)
-                    self._finish_if_drained()
                     return True
                 case st.Closing() | st.Done():
                     return False
