@@ -10,6 +10,9 @@
 - A multipart field's `charset` is read as `TextDecoder` reads it, as in Effect: only the
   WHATWG Encoding Standard's labels name a decoder, and any other label decodes as UTF-8,
   instead of selecting any Python codec.
+- `hypercorn_server` WebSockets decline `permessage-deflate`, as Effect's `ws` server does,
+  take messages up to the same 100 MiB as `uvicorn_server`, and close the connection after a
+  too-large message instead of keeping it and its partial message.
 
 ## 0.6.5 (2026-11-14)
 

@@ -11,6 +11,7 @@ Otherwise as ``uvicorn_server``, on the same request handling and shutdown.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import socket
 import ssl
 from collections.abc import Mapping
@@ -23,6 +24,8 @@ try:
     from hypercorn.asyncio.run import worker_serve  # pyright: ignore[reportUnknownVariableType]
     from hypercorn.config import Config, Sockets
     from hypercorn.logging import Logger
+    from hypercorn.protocol.events import Event, Request, StreamClosed
+    from hypercorn.protocol.ws_stream import WSStream
 except ImportError as error:  # pragma: no cover - depends on the environment
     raise missing_extra("pyfect.http.hypercorn_server", "http2", error) from error
 
@@ -45,6 +48,7 @@ from pyfect.layer import Layer, merge, provide_merge
 from pyfect.layer import effect as layer_effect
 from pyfect.path import Path
 from pyfect.scope import Scope as ScopeTag
+from pyfect.socket._web_socket import DEFAULT_MAX_MESSAGE_SIZE
 from pyfect.socket.server import SocketServerError
 
 
@@ -70,6 +74,36 @@ class _Config(Config):
         return None if context is None else close_without_waiting(context)
 
 
+_handle = WSStream.handle
+_handle_events = WSStream._handle_events  # pyright: ignore[reportPrivateUsage]
+
+
+async def _handle_without_extensions(self: WSStream, event: Event) -> None:
+    """hypercorn always accepts permessage-deflate, and wsproto inflates a
+    frame with no bound on its size: pyfect's servers decline it, as Effect's
+    ``ws`` server does, by not seeing the offer."""
+    if isinstance(self.config, _Config) and isinstance(event, Request):
+        headers = [(k, v) for k, v in event.headers if k.lower() != b"sec-websocket-extensions"]
+        event = dataclasses.replace(event, headers=headers)
+    await _handle(self, event)
+
+
+async def _handle_events_closing(self: WSStream) -> None:
+    """After a too-large message hypercorn sends 1009 but keeps the message
+    and the connection: pyfect's servers drop both, as ``ws`` does."""
+    await _handle_events(self)
+    buffer = self.buffer
+    if isinstance(self.config, _Config) and buffer.length > buffer.max_length and not self.closed:
+        buffer.clear()
+        await self.send(StreamClosed(stream_id=self.stream_id))
+
+
+# Only streams of a pyfect server (its ``_Config``) change; other hypercorn
+# servers in the process are left as they are.
+WSStream.handle = _handle_without_extensions
+WSStream._handle_events = _handle_events_closing  # pyright: ignore[reportPrivateUsage]
+
+
 class _Hypercorn:
     """hypercorn as an ``Engine``: it takes its sockets and a trigger to stop."""
 
@@ -78,6 +112,7 @@ class _Hypercorn:
         self.config = _Config()
         self.config.graceful_timeout = engine_backstop_seconds(options)
         self.config.logger_class = _EngineLogger
+        self.config.websocket_max_message_size = DEFAULT_MAX_MESSAGE_SIZE
         for name, value in options.get("config", {}).items():
             setattr(self.config, name, value)
         self.started = False
