@@ -34,7 +34,6 @@ import argparse
 import json
 import os
 import re
-import subprocess
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -56,9 +55,9 @@ class Target:
     example: str
     """A schema the package docstring decodes."""
     client_title: str | None = None
-    revision: str | None = None
-    """The Effect commit whose Generated.ts the package follows, when it is not the reference
-    checkout's own: a fix Effect made after the release the checkout is on."""
+    patches: tuple[tuple[str, str], ...] = ()
+    """Replacements applied to the reference checkout's Generated.ts, each of a text that
+    occurs once: a fix Effect made after the release the checkout is on."""
 
     @property
     def package(self) -> str:
@@ -76,17 +75,13 @@ class Target:
         return f"packages/ai/{self.name}/src/Generated.ts"
 
     def read_source(self) -> str:
-        """The Generated.ts the package follows: ``revision``'s, read from the reference
-        checkout's history, or else the checkout's own."""
-        if self.revision is None:
-            return self.default_source().read_text()
-        shown = subprocess.run(
-            ["git", "-C", str(_reference()), "show", f"{self.revision}:{self.source_path}"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
-        return shown.stdout
+        """The reference checkout's Generated.ts, with ``patches`` applied."""
+        source = self.default_source().read_text()
+        for old, new in self.patches:
+            if source.count(old) != 1:
+                raise GenerateError(f"{self.name}: a patch matches {source.count(old)} times")
+            source = source.replace(old, new)
+        return source
 
 
 def _reference() -> Path:
@@ -94,9 +89,39 @@ def _reference() -> Path:
 
 
 OPENAI = Target("openai", "OpenAI", "FunctionToolCall", "OpenAi")
-# fb998b526 (Effect 4.1.4, #10505): tool calls without an `id` and stream deltas without an
+# Effect fb998b526 (4.1.4, #10505): tool calls without an `id` and stream deltas without an
 # `index` decode. The rest of 4.1.4's regeneration changes the API, so it waits for a minor.
-OPENROUTER = Target("openrouter", "OpenRouter", "ChatResult", "OpenRouter", revision="fb998b526")
+_INDEX_DESCRIPTION = '{ "description": "Tool call index in the array" }'
+_ID_DESCRIPTION = '{ "description": "Tool call identifier" }'
+_OPENROUTER_PATCHES = (
+    (
+        '  readonly "id"?: string | null\n  readonly "index": number\n',
+        '  readonly "id"?: string | null\n  readonly "index"?: number\n',
+    ),
+    (
+        f'  "index": Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n'
+        '    Schema.isInt().annotate({ "expected": "an integer" })\n'
+        "  ),\n",
+        '  "index": Schema.optionalKey(\n'
+        f"    Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n"
+        '      Schema.isInt().annotate({ "expected": "an integer" })\n'
+        "    )\n"
+        "  ),\n",
+    ),
+    (
+        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+        '  readonly "id": string\n',
+        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+        '  readonly "id"?: string\n',
+    ),
+    (
+        f'  "id": Schema.String.annotate({_ID_DESCRIPTION}),\n',
+        f'  "id": Schema.optionalKey(Schema.String.annotate({_ID_DESCRIPTION})),\n',
+    ),
+)
+OPENROUTER = Target(
+    "openrouter", "OpenRouter", "ChatResult", "OpenRouter", patches=_OPENROUTER_PATCHES
+)
 TARGETS = {target.name: target for target in (OPENAI, OPENROUTER)}
 
 
