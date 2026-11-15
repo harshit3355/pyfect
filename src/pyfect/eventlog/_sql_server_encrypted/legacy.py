@@ -20,8 +20,8 @@ from typing import Never
 
 from pyfect import schema as S
 from pyfect._core import Effect
-from pyfect._js import text_encode
 from pyfect._json_text import quote
+from pyfect._text_keys import key_bytes
 from pyfect.crypto.digest import Digest, DigestService, sha256
 from pyfect.effect import fail, gen
 from pyfect.eventlog._server_encrypted.models import make_compaction_config
@@ -75,7 +75,7 @@ def aliases_table(prefix: str) -> str:
 
 
 def _scope(digest: DigestService, key: str) -> Effect[str]:
-    return digest.digest_hex(sha256, text_encode(key)).map(lambda hex: hex[:16])
+    return digest.digest_hex(sha256, key_bytes(key)).map(lambda hex: hex[:16])
 
 
 def _has_batches(db: Db, scope: str) -> Effect[bool, SqlError]:

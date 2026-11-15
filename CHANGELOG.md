@@ -39,6 +39,10 @@
   to wait, used to leave the program hanging. Every way out of `run_main`, including a
   `KeyboardInterrupt` raised by user code and a real SIGINT, now restores the handlers it
   found, where it used to leave the closed loop's SIGINT handler installed.
+- Event log servers refuse a public key or store id that is not well-formed Unicode (holds a
+  lone surrogate): `Authenticate` fails `Forbidden` and `StoreIdSchema` does not decode it.
+  The SQL encrypted server's storage names each store's tables from text that keeps such
+  characters apart.
 
 ### Docs
 

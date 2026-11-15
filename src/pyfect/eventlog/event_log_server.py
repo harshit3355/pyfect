@@ -19,6 +19,7 @@ from typing import Any, Never
 
 from pyfect._core import Effect
 from pyfect._effect_args import require_effect
+from pyfect._text_keys import is_well_formed
 from pyfect.clock import current_time_millis
 from pyfect.context import Tag
 from pyfect.crypto.mac import timing_safe_equal
@@ -341,6 +342,14 @@ def _authenticate(
                             "Session auth challenge has expired",
                             payload.public_key,
                         )
+                    )
+                )
+            if not is_well_formed(payload.public_key):
+                # Its bytes, binding and signed payload would be those of
+                # the key with U+FFFD in place of each lone surrogate.
+                return (
+                    yield from fail(
+                        _forbidden("Authenticate", "Public key is not well-formed Unicode")
                     )
                 )
             if authorize_identity is not None:
