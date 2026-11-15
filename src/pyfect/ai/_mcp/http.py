@@ -20,7 +20,7 @@ from pyfect import stream
 from pyfect._core import Effect
 from pyfect._fiber import Fiber
 from pyfect._js import text_encode
-from pyfect.ai._mcp import batch, frames
+from pyfect.ai._mcp import batch, frames, liveness
 from pyfect.ai._mcp import sessions as S
 from pyfect.ai._mcp.core import McpServer, McpServerService
 from pyfect.ai._mcp.dispatch import (
@@ -199,7 +199,9 @@ def _answer_on_stream(
                 )
             if "method" not in first.value and not subscription:
                 return response.json_unsafe(cast("Any", first.value), headers=headers)
-            events = stream.make(first.value).concat(stream.from_queue(messages)).map(_event)
+            # Progress whose request ended while it waited for the reader is dropped.
+            queued = stream.from_queue(messages).filter(lambda m: not liveness.dropped(m))
+            events = stream.make(first.value).concat(queued).map(_event)
             if subscription:
                 events = events.merge(_KEEP_ALIVE, halt_strategy="left")
             body = events.ensuring(abandon(serving))

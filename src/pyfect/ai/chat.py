@@ -38,6 +38,7 @@ from pyfect.effect import sync
 from pyfect.exit import Exit
 from pyfect.layer import Layer
 from pyfect.layer import effect as layer_effect
+from pyfect.option import Option
 from pyfect.persistence import PersistenceError
 from pyfect.persistence.persistence import BackingPersistence, BackingPersistenceStore
 from pyfect.ref import Ref
@@ -194,6 +195,7 @@ class Service:
         concurrency: Concurrency = "unbounded",
         disable_tool_call_resolution: Literal[True],
         tool_call_validation: Literal["deferred"],
+        allow_empty: Literal[False] = False,
     ) -> Effect[lm.GenerateObjectResponse[str, Never, A], AiError, lm.LanguageModel]: ...
     @overload
     def generate_object[A](
@@ -207,6 +209,7 @@ class Service:
         concurrency: Concurrency = "unbounded",
         disable_tool_call_resolution: bool = False,
         tool_call_validation: Literal["strict"] = "strict",
+        allow_empty: Literal[False] = False,
     ) -> Effect[lm.GenerateObjectResponse[Never, Never, A], AiError, lm.LanguageModel]: ...
     @overload
     def generate_object[A, NN: LiteralString, RP, EE, RR](
@@ -220,6 +223,7 @@ class Service:
         concurrency: Concurrency = "unbounded",
         disable_tool_call_resolution: Literal[True],
         tool_call_validation: Literal["deferred"],
+        allow_empty: Literal[False] = False,
     ) -> Effect[lm.GenerateObjectResponse[str, RP, A], AiError | EE, lm.LanguageModel | RR]: ...
     @overload
     def generate_object[A, NN: LiteralString, RP, EE, RR](
@@ -233,7 +237,68 @@ class Service:
         concurrency: Concurrency = "unbounded",
         disable_tool_call_resolution: bool = False,
         tool_call_validation: Literal["strict"] = "strict",
+        allow_empty: Literal[False] = False,
     ) -> Effect[lm.GenerateObjectResponse[NN, RP, A], AiError | EE, lm.LanguageModel | RR]: ...
+    @overload
+    def generate_object[A](
+        self,
+        prompt: P.RawInput,
+        *,
+        schema: S.Codec[A, Any, Any, Any],
+        object_name: str | None = None,
+        toolkit: None = None,
+        tool_choice: lm.ToolChoice = "auto",
+        concurrency: Concurrency = "unbounded",
+        disable_tool_call_resolution: Literal[True],
+        tool_call_validation: Literal["deferred"],
+        allow_empty: Literal[True],
+    ) -> Effect[lm.GenerateObjectResponse[str, Never, Option[A]], AiError, lm.LanguageModel]: ...
+    @overload
+    def generate_object[A](
+        self,
+        prompt: P.RawInput,
+        *,
+        schema: S.Codec[A, Any, Any, Any],
+        object_name: str | None = None,
+        toolkit: None = None,
+        tool_choice: lm.ToolChoice = "auto",
+        concurrency: Concurrency = "unbounded",
+        disable_tool_call_resolution: bool = False,
+        tool_call_validation: Literal["strict"] = "strict",
+        allow_empty: Literal[True],
+    ) -> Effect[lm.GenerateObjectResponse[Never, Never, Option[A]], AiError, lm.LanguageModel]: ...
+    @overload
+    def generate_object[A, NN: LiteralString, RP, EE, RR](
+        self,
+        prompt: P.RawInput,
+        *,
+        schema: S.Codec[A, Any, Any, Any],
+        object_name: str | None = None,
+        toolkit: _ToolkitInput[NN, RP, EE, RR],
+        tool_choice: lm.ToolChoice = "auto",
+        concurrency: Concurrency = "unbounded",
+        disable_tool_call_resolution: Literal[True],
+        tool_call_validation: Literal["deferred"],
+        allow_empty: Literal[True],
+    ) -> Effect[
+        lm.GenerateObjectResponse[str, RP, Option[A]], AiError | EE, lm.LanguageModel | RR
+    ]: ...
+    @overload
+    def generate_object[A, NN: LiteralString, RP, EE, RR](
+        self,
+        prompt: P.RawInput,
+        *,
+        schema: S.Codec[A, Any, Any, Any],
+        object_name: str | None = None,
+        toolkit: _ToolkitInput[NN, RP, EE, RR],
+        tool_choice: lm.ToolChoice = "auto",
+        concurrency: Concurrency = "unbounded",
+        disable_tool_call_resolution: bool = False,
+        tool_call_validation: Literal["strict"] = "strict",
+        allow_empty: Literal[True],
+    ) -> Effect[
+        lm.GenerateObjectResponse[NN, RP, Option[A]], AiError | EE, lm.LanguageModel | RR
+    ]: ...
     def generate_object(
         self,
         prompt: P.RawInput,
@@ -245,6 +310,7 @@ class Service:
         concurrency: Concurrency = "unbounded",
         disable_tool_call_resolution: bool = False,
         tool_call_validation: lm.ToolCallValidation = "strict",
+        allow_empty: bool = False,
     ) -> Effect[Any, Any, Any]:
         """``language_model.generate_object`` on the history plus ``prompt``."""
         call = self._call(
@@ -259,6 +325,7 @@ class Service:
                     concurrency=concurrency,
                     disable_tool_call_resolution=disable_tool_call_resolution,
                     tool_call_validation=tool_call_validation,
+                    allow_empty=allow_empty,
                 )
             ),
         )

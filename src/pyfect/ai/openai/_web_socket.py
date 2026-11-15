@@ -31,12 +31,14 @@ from pyfect.ai import ai_error as E
 from pyfect.ai import response_id_tracker as RIT
 from pyfect.ai.ai_error import AiError
 from pyfect.ai.openai import _schema as W
+from pyfect.ai.openai._errors import ERRORS
 from pyfect.cause import Cause
 from pyfect.errors import Done
 from pyfect.exit import Exit
 from pyfect.http import request as http_request
 from pyfect.http import response as http_response
 from pyfect.http.client import HttpClientService
+from pyfect.http.error import HttpClientError
 from pyfect.http.response import HttpClientResponse
 from pyfect.queue import Queue
 from pyfect.rc_ref import RcRef
@@ -285,7 +287,15 @@ class _RefSlot:
 
     __slots__ = ("__weakref__", "ref")
 
-    ref: RcRef[_Connection, Never]
+    ref: RcRef[_Connection, AiError]
+
+
+def _preparation_failed(error: object) -> Effect[Never, AiError]:
+    """A client transform failing to prepare the connection request (Effect's
+    ``mapHttpClientError``); anything else it fails with is a defect."""
+    if isinstance(error, HttpClientError):
+        return ERRORS.http_error(error, "createResponseStream")
+    return fx.die(error)
 
 
 def _forget(slot: weakref.ref[_RefSlot]) -> Effect[None]:
@@ -306,9 +316,15 @@ def make(
     def build():
         tracker: RIT.Service = yield from RIT.make
         socket_scope: CloseableScope = yield from Scope()
-        make_request: Effect[_Request] = http_client.flat_map(
+        make_request: Effect[_Request, AiError] = http_client.flat_map(
             lambda http: http.preprocess(http_request.post("/responses"))
-        ).or_die()
+        ).catch_all(_preparation_failed)
+        # Reused by later turns, so credentials are not prepared again for each one.
+        connection_request: list[_Request] = []
+
+        def acquire(request: _Request) -> Effect[_Connection, Never, Scope]:
+            connection_request[:] = [request]
+            return _open(request, tracker, invalidate, max_response_bytes)
 
         slot = _RefSlot()
         invalidate = scope_mod.fork_in(
@@ -316,16 +332,16 @@ def make(
             socket_scope,
             start_immediately=True,
         ).as_(None)
-        ref: RcRef[_Connection, Never] = yield from RcRef.make(
-            make_request.flat_map(
-                lambda request: _open(request, tracker, invalidate, max_response_bytes)
-            ),
-            idle_time_to_live=_IDLE_TIME_TO_LIVE,
+        ref: RcRef[_Connection, AiError] = yield from RcRef.make(
+            make_request.flat_map(acquire), idle_time_to_live=_IDLE_TIME_TO_LIVE
         )
         slot.ref = ref
-        yield from scope_mod.scoped(ref.get())
+        # Primed; the first response stream reports a failure to prepare the connection.
+        yield from scope_mod.scoped(ref.get()).ignore()
         semaphore: Semaphore = yield from Semaphore.make(1)
-        request: _Request = yield from make_request
+        request = fx.suspend(
+            lambda: fx.succeed(connection_request[0]) if connection_request else make_request
+        )
         service = SocketService(lambda options: _stream(slot.ref, semaphore, request, options))
         return service, tracker
 
@@ -333,9 +349,9 @@ def make(
 
 
 def _stream(
-    ref: RcRef[_Connection, Never],
+    ref: RcRef[_Connection, AiError],
     semaphore: Semaphore,
-    request: _Request,
+    request: Effect[_Request, AiError],
     options: W.CreateResponse,
 ) -> Effect[ResponseStream, AiError]:
     @fx.gen
@@ -361,4 +377,4 @@ def _stream(
         return St.from_queue(turn)
 
     stream: Stream[W.ResponseStreamEvent, AiError] = St.unwrap(open_turn)
-    return fx.succeed((http_response.make(request, "", status=200), stream))
+    return request.map(lambda request: (http_response.make(request, "", status=200), stream))

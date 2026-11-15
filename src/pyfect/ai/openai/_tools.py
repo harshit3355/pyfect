@@ -61,17 +61,19 @@ def _provider_defined(tool: AnyProviderDefined) -> Item:
     return {**P.obj(args), "type": kind}
 
 
-def _function(tool: T.AnyTool, config: Mapping[str, Any]) -> Item:
-    mode = T.get_strict_mode(tool)
-    default = config.get("strict_json_schema")
-    strict = mode if mode is not None else (default if default is not None else True)
+def strict_tools(config: Mapping[str, Any]) -> PT.StrictTools:
+    """How a request's function tools are advertised and their calls decoded."""
+    return PT.StrictTools.of(to_codec_openai, config)
+
+
+def _function(tool: T.AnyTool, strict: PT.StrictTools) -> Item:
     item: Item = {
         "type": "function",
         "name": tool.name,
         "parameters": PT.tool_json_schema(
-            MODULE, tool, require_object=True, transformer=to_codec_openai
+            MODULE, tool, require_object=True, transformer=strict.advertised(tool)
         ),
-        "strict": strict,
+        "strict": strict.is_strict(tool),
     }
     description = T.get_description(tool)
     if description is not None:
@@ -79,9 +81,7 @@ def _function(tool: T.AnyTool, config: Mapping[str, Any]) -> Item:
     return item
 
 
-def prepare_tools(
-    config: Mapping[str, Any], options: lm.ProviderOptions, names: NameMapper
-) -> Tools:
+def prepare_tools(strict: PT.StrictTools, options: lm.ProviderOptions, names: NameMapper) -> Tools:
     """Raises ``UnsupportedInput`` for a tool the API cannot take."""
     if not options.tools:
         return Tools(None, None)
@@ -95,7 +95,7 @@ def prepare_tools(
         allowed = [tool for tool in options.tools if tool.name in allowed_names]
         tool_choice = "required" if choice.get("mode") == "required" else "auto"
     tools = [
-        _provider_defined(tool) if isinstance(tool, T.ProviderDefined) else _function(tool, config)
+        _provider_defined(tool) if isinstance(tool, T.ProviderDefined) else _function(tool, strict)
         for tool in allowed
     ]
     if isinstance(choice, str):
@@ -109,11 +109,13 @@ def prepare_tools(
     return Tools(tools, tool_choice)
 
 
-def prepare_response_format(config: Mapping[str, Any], options: lm.ProviderOptions) -> Item:
-    """Raises ``UnsupportedInput`` for a schema without a JSON Schema."""
+def prepare_response_format(config: Mapping[str, Any], options: lm.ProviderOptions) -> Item | None:
+    """The ``text.format`` of a JSON response, ``None`` for plain text (OpenAI's
+    default, which some compatible backends reject when sent). Raises
+    ``UnsupportedInput`` for a schema without a JSON Schema."""
     response_format = options.response_format
     if not isinstance(response_format, lm.JsonFormat):
-        return {"type": "text"}
+        return None
     strict = config.get("strict_json_schema")
     return {
         "type": "json_schema",

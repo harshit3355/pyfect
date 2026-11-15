@@ -28,10 +28,15 @@ def compat_options(options: Pr.ProviderOptions) -> P.JsonObject:
     return P.obj(options.get(KEY))
 
 
+_DEVELOPER_ROLE_MODELS = re.compile(r"o[0-9]|gpt-5|codex-|computer-use")
+"""OpenAI's reasoning model families, matched at the start of a model name:
+``o3`` takes ``developer``; ``olmo-2`` and ``openai/o3`` (another host's name
+for it) take ``system``."""
+
+
 def system_role(model: str) -> str:
-    """``developer`` for the reasoning model families, else ``system``."""
-    prefixes = ("o", "gpt-5", "codex-", "computer-use")
-    return "developer" if model.startswith(prefixes) else "system"
+    """``developer`` for OpenAI's reasoning model families, else ``system``."""
+    return "developer" if _DEVELOPER_ROLE_MODELS.match(model) else "system"
 
 
 def _is_file_id(data: Pr.FileData, prefixes: Sequence[str] | None) -> bool:

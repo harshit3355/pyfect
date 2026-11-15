@@ -24,7 +24,7 @@ import pyfect as fx
 from pyfect import testing
 from pyfect.ai import chat, toolkit
 from pyfect.ai import prompt as Pr
-from pyfect.ai.anthropic import _response, client
+from pyfect.ai.anthropic import _response, _server_tools, client
 from pyfect.ai.anthropic import language_model as alm
 from pyfect.ai.anthropic import tool as AT
 from pyfect.ai.tool import NameMapper
@@ -92,6 +92,40 @@ _CASES: list[tuple[str, toolkit.Toolkit[Any, Any, Any, Any], list[dict[str, Any]
             _result("text_editor_code_execution_tool_result", _VIEW_ERROR),
         ],
     ),
+    *(
+        (
+            f"text editor 20250825 {command}",
+            toolkit.make(AT.CodeExecution_20250825()),
+            [
+                _use("text_editor_code_execution", {"command": command, "path": "/tmp/x", **extra}),
+                _result("text_editor_code_execution_tool_result", result),
+            ],
+        )
+        for command, extra, result in (
+            ("view", {}, {"type": "text_editor_code_execution_view_result", "content": "hi"}),
+            (
+                "create",
+                {"file_text": "hi"},
+                {"type": "text_editor_code_execution_create_result", "is_file_update": False},
+            ),
+            (
+                "str_replace",
+                {"old_str": "hi", "new_str": "ho"},
+                {"type": "text_editor_code_execution_str_replace_result", "lines": []},
+            ),
+        )
+    ),
+    (
+        "encrypted code execution 20250825",
+        toolkit.make(AT.CodeExecution_20250825()),
+        [
+            _use("code_execution", {"code": "print(391)"}),
+            _result(
+                "code_execution_tool_result",
+                {"type": "encrypted_code_execution_result", "encrypted_stdout": "e", "content": []},
+            ),
+        ],
+    ),
     (
         "code execution 20250522",
         toolkit.make(AT.CodeExecution_20250522()),
@@ -135,11 +169,31 @@ _CASES: list[tuple[str, toolkit.Toolkit[Any, Any, Any, Any], list[dict[str, Any]
 ]
 
 
+_TOOLS = (
+    AT.CodeExecution_20250825(),
+    AT.WebFetch_20250910({}),
+    AT.WebSearch_20250305({}),
+    AT.ToolSearchRegex_20251119(),
+    AT.ToolSearchBM25_20251119(),
+)
+
+
 def test_every_server_result_block_has_a_case():
     covered = {block["type"] for _, _, blocks in _CASES for block in blocks[1:]}
     # An MCP call names no toolkit tool, so a response holding one fails to
     # decode (as in Effect); `test_mcp_result_is_provider_executed` covers it.
     assert covered | {"mcp_tool_result"} == set(_response.SERVER_RESULT_BLOCKS)
+
+
+def test_every_server_result_block_replays():
+    """The replay writes back every result block the decoders read."""
+    replayed = {*_server_tools.RESULT_BLOCKS.values(), *_server_tools.code_execution_blocks()}
+    assert replayed | {"mcp_tool_result"} == set(_server_tools.SERVER_RESULT_BLOCKS)
+
+
+def test_every_server_call_is_a_provider_tool():
+    tools = {tool.provider_name for tool in _TOOLS}
+    assert set(_server_tools.SERVER_CALLS.values()) <= tools
 
 
 def test_mcp_result_is_provider_executed():

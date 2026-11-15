@@ -17,6 +17,7 @@ from pyfect import schema as S
 from pyfect._core import Effect
 from pyfect._js import text_encode
 from pyfect._json_text import stringify
+from pyfect.ai._mcp import pages
 from pyfect.ai._mcp.invoke import Invoke, RequestRejected
 from pyfect.ai._mcp.skill_rules import (
     EXTENSION_ID,
@@ -412,15 +413,18 @@ def serve(
     if not catalog.present:
         # As a server that does not declare the extension.
         return fail(method_not_found(method))
-    if request.get("cursor") is not None:
-        return fail(InvalidParams("Unknown cursor"))
+    rejected = pages.reject_cursor(request.get("cursor"))
     if method == "skills/list":
-        return catalog.list(enabled).map(lambda skills: {"skills": cast("Any", skills)})
+        return rejected.and_then(
+            catalog.list(enabled).map(lambda skills: {"skills": cast("Any", skills)})
+        )
     uri: str = request["uri"]
     if method == "skills/get":
         return catalog.get(uri, enabled).map(lambda skill: {"skill": cast("Any", skill)})
-    return catalog.read_directory(uri, enabled).map(
-        lambda children: {"resources": cast("Any", children)}
+    return rejected.and_then(
+        catalog.read_directory(uri, enabled).map(
+            lambda children: {"resources": cast("Any", children)}
+        )
     )
 
 

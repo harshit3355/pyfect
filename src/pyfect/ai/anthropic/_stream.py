@@ -25,21 +25,12 @@ from pyfect.ai.anthropic._response import (
     transform_params,
     usage_part,
 )
+from pyfect.ai.anthropic._server_tools import SERVER_CALLS
+from pyfect.ai.anthropic._tools import ToolCodecs
 from pyfect.ai.response import FinishReason
 from pyfect.ai.tool import NameMapper, unsafe_secure_json_parse
 from pyfect.http.response import HttpClientResponse
 from pyfect.stream import Stream
-
-_SERVER_CALLS = frozenset(
-    {
-        "code_execution",
-        "bash_code_execution",
-        "text_editor_code_execution",
-        "web_fetch",
-        "web_search",
-    }
-)
-_SEARCH_CALLS = frozenset({"tool_search_tool_bm25", "tool_search_tool_regex"})
 
 
 @dataclass
@@ -64,6 +55,7 @@ class _Usage:
 @dataclass
 class _State:
     options: lm.ProviderOptions
+    codecs: ToolCodecs
     response: HttpClientResponse
     results: ServerResults
     max_chars: int
@@ -111,7 +103,7 @@ class _State:
 
     def _prepopulated_tool_use(self, block: W.ContentBlock) -> Gen[list[Part]]:
         name = self.names.get_custom_name(block["name"])
-        params = yield from transform_params(self.options, name, block.get("input"))
+        params = yield from transform_params(self.options, self.codecs, name, block.get("input"))
         call: Part = {"type": "tool-call", "id": block["id"], "name": name, "params": params}
         caller = caller_metadata(block)
         if caller is not None:
@@ -186,14 +178,11 @@ class _State:
 
     def _server_tool_use_start(self, index: int, block: W.ContentBlock) -> list[Part]:
         provider = block["name"]
-        if provider in _SERVER_CALLS:
-            custom = provider_tool_name(provider)
-        elif provider in _SEARCH_CALLS:
-            self.results.search_calls[block["id"]] = provider
-            custom = provider
-        else:
+        if provider not in SERVER_CALLS:
             return []
-        name = self.names.get_custom_name(custom)
+        if provider.startswith("tool_search_tool_"):
+            self.results.search_calls[block["id"]] = provider
+        name = self.names.get_custom_name(provider_tool_name(provider))
         self.blocks[index] = _ToolBlock(
             block["id"], name, P.TextBuffer("", self.max_chars), True, provider, True
         )
@@ -314,7 +303,7 @@ class _State:
             )
             return (yield from fx.fail(error))
         if block.provider_executed is not True:
-            params = yield from transform_params(self.options, block.name, params)
+            params = yield from transform_params(self.options, self.codecs, block.name, params)
         part: Part = {"type": "tool-call", "id": block.id, "name": block.name, "params": params}
         if block.provider_executed is not None:
             part["providerExecuted"] = block.provider_executed
@@ -364,11 +353,13 @@ def make_stream_response(
     events: Stream[W.MessageStreamEvent, AiError],
     response: HttpClientResponse,
     names: NameMapper,
+    *,
+    codecs: ToolCodecs,
     max_chars: int,
 ) -> Stream[Part, AiError, Any]:
     """``max_chars`` bounds each tool call's streamed parameters."""
     results = ServerResults(names, citable_documents(options.prompt))
-    state = _State(options, response, results, max_chars)
+    state = _State(options, codecs, response, results, max_chars)
 
     def convert(event: W.MessageStreamEvent) -> Effect[list[Part], AiError, Any]:
         return fx.gen(lambda: state.event(event))

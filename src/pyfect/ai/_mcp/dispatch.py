@@ -22,6 +22,7 @@ from pyfect._fiber import Fiber
 from pyfect._peer_keys import PeerKeyDict, PeerKeySet
 from pyfect.ai._mcp import (
     log_levels,
+    pages,
     param_headers,
     projection,
     reverse_policy,
@@ -34,6 +35,7 @@ from pyfect.ai._mcp.failure import interrupted_failure
 from pyfect.ai._mcp.http_status import fail_with_http_status
 from pyfect.ai._mcp.input_wire import CONTINUATION_PARAMS, INPUT_REQUESTS, ContinuationParams
 from pyfect.ai._mcp.invoke import RequestRejected, ResourceNotFound, unwrap_rejected
+from pyfect.ai._mcp.liveness import Liveness, Progress, RequestLiveness
 from pyfect.ai.mcp_protocol import AnyProtocolAdapter, Registry
 from pyfect.ai.mcp_schema import (
     CALL_TOOL_PARAMS,
@@ -44,6 +46,9 @@ from pyfect.ai.mcp_schema import (
     HEADER_MISMATCH_ERROR_CODE,
     IMPLEMENTATION,
     INITIALIZE_PARAMS,
+    LIST_PROMPTS,
+    LIST_RESOURCE_TEMPLATES,
+    LIST_RESOURCES,
     LIST_ROOTS_RESULT,
     LIST_TOOLS,
     METHOD_NOT_FOUND_ERROR_CODE,
@@ -76,6 +81,7 @@ from pyfect.ai.mcp_schema import (
     McpReverseOperationError,
     McpReverseOperationUnsupported,
     McpServerClient,
+    Method,
     ProtocolError,
     RequestContext,
     RequestId,
@@ -84,6 +90,7 @@ from pyfect.ai.mcp_schema import (
     ReverseOperation,
     ServerCapabilities,
     ServerClient,
+    Tool,
     parse_request_id,
 )
 from pyfect.cause import Cause, Fail
@@ -322,6 +329,10 @@ class Connection:
     )
     _cancelled: PeerKeySet[RequestId] = field(default_factory=PeerKeySet[RequestId])
     """The requests ended without an answer (a subscription that overflowed)."""
+    _liveness: dict[RequestId, Liveness] = field(default_factory=dict[RequestId, Liveness])
+    _client_end: Deferred[None] = field(default_factory=Deferred[None])
+    """Done once the client's input ended, where its subscriptions complete (stdio)."""
+    """Each request in flight's, for the progress it sends."""
     _reverse_ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 
     # --- messages ----------------------------------------------------------------------
@@ -364,20 +375,27 @@ class Connection:
         @gen
         def run():
             self.closed = True
+            for liveness in self._liveness.values():
+                liveness.abandon()
             for fiber in list(self._inflight.values()):
                 yield from fiber.interrupt()
 
         return run
 
-    def drain(self) -> Effect[None]:
-        """Wait for the requests still being served, ending the subscriptions
-        among them: nobody is left to cancel those."""
+    def drain(self, *, complete_subscriptions: bool = False) -> Effect[None]:
+        """Wait for the requests still being served. Nobody is left to cancel
+        the subscriptions among them: they complete, answered, with
+        ``complete_subscriptions`` (Effect's stdio, at stdin's end), else
+        they are interrupted."""
 
         @gen
         def run():
-            # Taken at once: awaiting one, another may end by itself (overflow).
-            for fiber in [self._inflight[id] for id in self._listening]:
-                yield from fiber.interrupt()
+            if complete_subscriptions:
+                yield from self._client_end.succeed(None)
+            else:
+                # Taken at once: awaiting one, another may end by itself (overflow).
+                for fiber in [self._inflight[id] for id in self._listening]:
+                    yield from fiber.interrupt()
             while self._inflight:
                 yield from next(iter(self._inflight.values())).await_exit()
 
@@ -387,20 +405,26 @@ class Connection:
         """Serve ``request`` on its own fiber, which ends once its response
         is written or it is cancelled (writing nothing)."""
         id = request.id
+        liveness = Liveness()
 
         def done() -> None:
+            liveness.answered = True
+            if self._liveness.get(id) is liveness:
+                del self._liveness[id]
             self._inflight.pop(id, None)
             self._listening.discard(id)
             self._cancelled.discard(id)
 
         served = (
             self.answer(id, request.method, request.params, out)
+            .pipe(provide_service(RequestLiveness, liveness))
             .flat_map(lambda reply: _VOID if reply is None else out(reply))
             .ensuring(sync(done))
         )
 
         def track(fiber: Fiber[None, Never]) -> Fiber[None, Never]:
             self._inflight[id] = fiber
+            self._liveness[id] = liveness
             if request.method == SUBSCRIPTIONS_LISTEN.name:
                 self._listening.add(id)
             return fiber
@@ -462,9 +486,18 @@ class Connection:
             return sync(lambda: setattr(self, "initialized", True))
         if method == "notifications/cancelled":
             request_id = parse_request_id(params.get("requestId"))
-            fiber = None if request_id is None else self._inflight.get(request_id)
+            if request_id is None:
+                return _VOID
+            fiber = self._inflight.get(request_id)
             if fiber is not None:
-                return sync(lambda: fiber.interrupt_as_unsafe(None))
+                liveness = self._liveness.get(request_id)
+
+                def cancel() -> None:
+                    if liveness is not None:
+                        liveness.abandon()
+                    fiber.interrupt_as_unsafe(None)
+
+                return sync(cancel)
         return _VOID
 
     def _answered(self, body: JsonObject) -> Effect[None]:
@@ -520,7 +553,18 @@ class Connection:
         def deliver(method: str, params: JsonObject) -> Effect[None]:
             if not wants(method, params):
                 return _VOID
-            return out(notification(method, projection.notification(protocol, method, params)))
+            message = notification(method, projection.notification(protocol, method, params))
+            if method != "notifications/progress":
+                return out(message)
+
+            def live(liveness: Option[Liveness]) -> Effect[None]:
+                if liveness is None:
+                    return out(message)
+                if liveness.value.answered:
+                    return _VOID
+                return out(Progress(message, liveness.value))
+
+            return service_option(RequestLiveness).flat_map(live)
 
         return deliver
 
@@ -779,12 +823,22 @@ class Connection:
             )
 
         def listed[D](
+            list_method: Method[Any, Any],
             key: str,
             items: Callable[[RequestContext], Effect[list[D], RequestRejected, RequestServices]],
             project: Callable[[D], Any],
         ) -> Effect[Wire, McpError]:
-            return serve(
-                lambda c: unwrap_rejected(items(c).map(lambda xs: {key: [project(x) for x in xs]}))
+            """A core list: one complete page, so a supplied cursor is unknown."""
+            return (
+                _decode(list_method.payload_schema, params)
+                .flat_map(lambda request: pages.reject_cursor(request.get("cursor")))
+                .and_then(
+                    serve(
+                        lambda c: unwrap_rejected(
+                            items(c).map(lambda xs: {key: [project(x) for x in xs]})
+                        )
+                    )
+                )
             )
 
         match method:
@@ -796,8 +850,8 @@ class Connection:
                     lambda decoded: self._subscribe(decoded["uri"], subscribe)
                 )
             case "tools/list":
-                return _decode(LIST_TOOLS.payload_schema, params).and_then(
-                    listed("tools", server.list_tools, lambda t: projection.tool(protocol, t))
+                return listed(
+                    LIST_TOOLS, "tools", server.list_tools, lambda t: projection.tool(protocol, t)
                 )
             case "tools/call":
                 return _decode(CALL_TOOL_PARAMS, params).flat_map(
@@ -805,10 +859,14 @@ class Connection:
                 )
             case "resources/list":
                 return listed(
-                    "resources", server.list_resources, lambda r: projection.resource(protocol, r)
+                    LIST_RESOURCES,
+                    "resources",
+                    server.list_resources,
+                    lambda r: projection.resource(protocol, r),
                 )
             case "resources/templates/list":
                 return listed(
+                    LIST_RESOURCE_TEMPLATES,
                     "resourceTemplates",
                     server.list_resource_templates,
                     lambda t: projection.resource_template(protocol, t),
@@ -821,7 +879,10 @@ class Connection:
                 )
             case "prompts/list":
                 return listed(
-                    "prompts", server.list_prompts, lambda p: projection.prompt(protocol, p)
+                    LIST_PROMPTS,
+                    "prompts",
+                    server.list_prompts,
+                    lambda p: projection.prompt(protocol, p),
                 )
             case "prompts/get":
                 return _decode(GET_PROMPT.payload_schema, params).flat_map(
@@ -880,8 +941,9 @@ class Connection:
     # --- 2026-07-28 ----------------------------------------------------------------------
 
     def _listen(self, id: RequestId, params: JsonObject, out: Send) -> Effect[Wire, McpError]:
-        """A ``subscriptions/listen`` stream, on ``out``. It has no result: it
-        ends when cancelled, or by itself when its backlog overflows."""
+        """A ``subscriptions/listen`` stream, on ``out``. It ends when
+        cancelled, or by itself: unanswered when its backlog overflows,
+        with a complete result when the client's input ended."""
 
         def send(method: str, body: JsonObject) -> Effect[None]:
             return out(notification(method, body))
@@ -905,8 +967,12 @@ class Connection:
                 subscribe=self.server.subscribe_events,
                 send=send,
                 terminate=terminate,
+                client_end=self._client_end.wait(),
             )
-            return scoped(listened).and_then(interrupt())
+            ended: JsonObject = {"_meta": {subscriptions.SUBSCRIPTION_ID_META: id}}
+            return scoped(listened).flat_map(
+                lambda overflowed: interrupt() if overflowed else succeed(ended)
+            )
 
         return _decode(SUBSCRIPTIONS_LISTEN.payload_schema, params).flat_map(listening)
 
@@ -954,7 +1020,7 @@ class Connection:
         if requested_level is not None and not log_levels.is_logging_level(requested_level):
             return fail(InvalidParams(f"Invalid request log level {requested_level!r}"))
         if method == SUBSCRIPTIONS_LISTEN.name:
-            return self._listen(id, params, out)
+            return self._listen(id, params, out).map(lambda result: complete(result, False))
         if method == "prompts/list" and not self.server.has_registrations.prompts:
             # An unadvertised capability's method (Effect's 2026-07-28 prompts/list).
             return fail_with_http_status(404, _method_not_found_bare())
@@ -997,12 +1063,41 @@ def _call_tool(
     revision reports them so (Effect's per-revision ``tools/call``), but a
     retry the tool refuses (a tampered state) stays a protocol error."""
     name = call["name"]
-    found = server.find_tool(name, context)
-    if found is None:
+    if server.find_tool(name, context) is None:
         return fail(InvalidParams(f"Tool '{name}' not found"))
-    outcome: Effect[CallToolResult | InputRequired, McpError | RequestRejected, RequestServices] = (
-        server.call_tool_for(call, context)
-    )
+
+    def mirrored(request: Option[ServerRequest]) -> Callable[[Tool], Effect[None, McpError]]:
+        """2026-07-28's check of the parameters an HTTP request mirrors in its
+        headers, once the tool is known to be visible to the request."""
+
+        def check(tool: Tool) -> Effect[None, McpError]:
+            if not protocol.is_stateless or request is None:
+                return _VOID
+            mismatch = param_headers.mismatch(
+                tool["inputSchema"], call.get("arguments"), request.value.headers
+            )
+            if mismatch is None:
+                return _VOID
+            return fail_with_http_status(
+                400, ProtocolError(mismatch, error_code=HEADER_MISMATCH_ERROR_CODE)
+            )
+
+        return check
+
+    def call_with(request: Option[ServerRequest]) -> Effect[Wire, McpError, RequestServices]:
+        outcome: Effect[
+            CallToolResult | InputRequired, McpError | RequestRejected, RequestServices
+        ] = server.call_tool_for(call, context, before_handle=mirrored(request))
+        return _tool_outcome(protocol, context, outcome)
+
+    return service_option(HttpServerRequest).flat_map(call_with)
+
+
+def _tool_outcome(
+    protocol: AnyProtocolAdapter,
+    context: RequestContext,
+    outcome: Effect[CallToolResult | InputRequired, McpError | RequestRejected, RequestServices],
+) -> Effect[Wire, McpError, RequestServices]:
     continued = context.input_responses is not None or context.request_state is not None
     if protocol.reports_tool_errors_as_results:
 
@@ -1031,18 +1126,7 @@ def _call_tool(
             return fail(InvalidParams(reason))
         return succeed(projection.call_tool_result(protocol, outcome))
 
-    def checked(request: Option[ServerRequest]) -> Effect[Wire, McpError, RequestServices]:
-        if protocol.is_stateless and request is not None:
-            mismatch = param_headers.mismatch(
-                found.tool["inputSchema"], call.get("arguments"), request.value.headers
-            )
-            if mismatch is not None:
-                return fail_with_http_status(
-                    400, ProtocolError(mismatch, error_code=HEADER_MISMATCH_ERROR_CODE)
-                )
-        return called.flat_map(on_wire)
-
-    return service_option(HttpServerRequest).flat_map(checked)
+    return called.flat_map(on_wire)
 
 
 def _input_required(

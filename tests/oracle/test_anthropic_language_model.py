@@ -165,6 +165,137 @@ GlobToolkit = K.make(GlobTool)
 GlobLayer = GlobToolkit.to_layer(GlobTool.handler(lambda _, __: fx.succeed("found.ts")))
 
 
+# tool schema strictness ----------------------------------------------------------------
+
+
+class _Contact(TypedDict):
+    id: str
+    name: NotRequired[str]
+    nickname: NotRequired[str | None]
+    fields: NotRequired[dict[str, str]]
+
+
+Contact = T.make(
+    "UpdateContact",
+    parameters=S.Struct(_Contact, name=S.String.check(S.is_min_length(1), S.is_max_length(255))),
+)
+
+# (name, model, config, the tool's own Strict, the request's strict)
+_STRICTNESS: list[tuple[str, str, alm.ConfigService, bool | None, bool | None]] = [
+    ("global non-strict", "claude-sonnet-4-5", {"strict_json_schema": False}, None, False),
+    ("tool opt-out", "claude-sonnet-4-5", {"strict_json_schema": True}, False, False),
+    ("tool opt-in", "claude-sonnet-4-5", {"strict_json_schema": False}, True, True),
+    ("default strict", "claude-sonnet-4-5", {}, None, True),
+    ("unsupported model", "claude-sonnet-4-20250514", {}, True, None),
+    ("disabled capability", "claude-sonnet-4-5", {"structured_outputs": False}, True, None),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "model", "config", "tool_strict", "strict"),
+    _STRICTNESS,
+    ids=[c[0] for c in _STRICTNESS],
+)
+@testing.effect
+def test_tool_schema_strictness(
+    name: str,
+    model: str,
+    config: alm.ConfigService,
+    tool_strict: bool | None,
+    strict: bool | None,
+):
+    """tool schema strictness: each case's strict field, advertised schema and decoded params"""
+    mock = mock_json(
+        _message(
+            [
+                {
+                    "type": "tool_use",
+                    "id": "call_null",
+                    "name": "UpdateContact",
+                    "input": {"id": "c1", "nickname": None},
+                },
+                {
+                    "type": "tool_use",
+                    "id": "call_record",
+                    "name": "UpdateContact",
+                    "input": {"id": "c1", "fields": {"a": "x"}},
+                },
+            ],
+            model=model,
+            stop_reason="tool_use",
+        )
+    )
+    response = yield from _provided(
+        lm.generate_text(
+            "Update the contact",
+            toolkit=K.make(Contact.annotate(T.Strict, tool_strict)),
+            disable_tool_call_resolution=True,
+        ),
+        mock,
+        model,
+        config,
+    )
+    (body,) = mock.bodies
+    tool = body["tools"][0]
+    assert tool.get("strict") is strict, name
+    schema = tool["input_schema"]
+    if strict is True:
+        assert schema["required"] == ["id", "name", "nickname", "fields"]
+        # The strict codec's null-to-omission normalization stays
+        assert response.tool_calls[0].params == {"id": "c1"}
+    else:
+        assert schema["required"] == ["id"]
+        assert schema["properties"]["name"] == {"type": "string", "minLength": 1, "maxLength": 255}
+        assert schema["properties"]["fields"]["type"] == "object"
+        assert schema["properties"]["fields"]["additionalProperties"] == {"type": "string"}
+        assert [call.params for call in response.tool_calls] == [
+            {"id": "c1", "nickname": None},
+            {"id": "c1", "fields": {"a": "x"}},
+        ]
+
+
+@pytest.mark.parametrize("initial_content", [True, False], ids=["initial content", "JSON deltas"])
+@testing.effect
+def test_tool_schema_strictness_streaming(initial_content: bool):
+    """tool schema strictness / preserves non-strict params in streaming ${initialContent ? "initial content" : "JSON deltas"}"""  # noqa: E501
+    inputs = [{"id": "c1", "nickname": None}, {"id": "c1", "fields": {"a": "x"}}]
+    content = [
+        {"type": "tool_use", "id": f"call_{index}", "name": "UpdateContact", "input": input}
+        for index, input in enumerate(inputs)
+    ]
+    start = _start("claude-sonnet-4-5")
+    start["message"]["content"] = content if initial_content else []
+    blocks: list[object] = []
+    if not initial_content:
+        for index, block in enumerate(content):
+            blocks += [
+                {
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {**block, "input": {}},
+                },
+                {
+                    "type": "content_block_delta",
+                    "index": index,
+                    "delta": {
+                        "type": "input_json_delta",
+                        "partial_json": json.dumps(block["input"]),
+                    },
+                },
+                {"type": "content_block_stop", "index": index},
+            ]
+    mock = mock_sse([start, *blocks, _delta("tool_use"), _STOP])
+    parts = yield from _provided(
+        lm.stream_text(
+            "Update the contact", toolkit=K.make(Contact), disable_tool_call_resolution=True
+        ).run_collect(),
+        mock,
+        "claude-sonnet-4-5",
+        {"strict_json_schema": False},
+    )
+    assert [p.params for p in parts if isinstance(p, R.ToolCallPart)] == inputs
+
+
 # streamText ----------------------------------------------------------------------------
 
 
@@ -435,6 +566,99 @@ def test_generate_fallback_iterations():
     assert meta(metadata.metadata, "anthropic", "fallback") == _FALLBACK
     finish = _first(response.content, R.FinishPart)
     assert meta(finish.metadata, "anthropic", "usage", "iterations") == iterations
+
+
+@testing.effect
+def test_generate_web_fetch_without_citations():
+    """generateText / decodes a web fetch result whose document omits citations"""
+    content = [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_1",
+            "name": "web_fetch",
+            "input": {"url": "https://example.com"},
+        },
+        {
+            "type": "web_fetch_tool_result",
+            "tool_use_id": "srvtoolu_1",
+            "content": {
+                "type": "web_fetch_result",
+                "url": "https://example.com",
+                "retrieved_at": "2026-03-03T15:05:04.091000+00:00",
+                "content": {
+                    "type": "document",
+                    "source": {
+                        "type": "text",
+                        "media_type": "text/plain",
+                        "data": "Example Domain",
+                    },
+                    "title": "Example Domain",
+                },
+            },
+        },
+    ]
+    response = yield from _provided(
+        lm.generate_text(
+            "What is on https://example.com?", toolkit=K.make(AT.WebFetch_20250910({}))
+        ),
+        mock_json(_message(content)),
+    )
+    result = _first(response.content, R.ToolResultSuccess)
+    assert result.is_failure is False
+
+
+@testing.effect
+def test_generate_citation_without_file_id():
+    """generateText / decodes citations without a file_id"""
+    citation = {
+        "type": "char_location",
+        "cited_text": "30 days",
+        "document_index": 0,
+        "document_title": None,
+        "start_char_index": 24,
+        "end_char_index": 31,
+    }
+    text = "Returns are accepted within 30 days."
+    prompt = Pr.make(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "file",
+                        "mediaType": "text/plain",
+                        "data": text.encode(),
+                        "options": {"anthropic": {"citations": {"enabled": True}}},
+                    }
+                ],
+            }
+        ]
+    )
+    response = yield from _provided(
+        lm.generate_text(prompt),
+        mock_json(_message([{"type": "text", "text": text, "citations": [citation]}])),
+    )
+    source = _first(response.content, R.DocumentSourcePart)
+    assert source.metadata["anthropic"] == {
+        "source": "document",
+        "type": "char_location",
+        "citedText": "30 days",
+        "startCharIndex": 24,
+        "endCharIndex": 31,
+    }
+
+
+@testing.effect
+def test_generate_container_without_skills():
+    """generateText / decodes a response container without skills"""
+    container = {"id": "container_1", "expires_at": "2026-11-04T12:00:00.000000Z"}
+    response = yield from _provided(
+        lm.generate_text("Hello"),
+        mock_json(_message([{"type": "text", "text": "Hello"}], container=container)),
+    )
+    finish = _first(response.content, R.FinishPart)
+    metadata: Any = finish.metadata["anthropic"]
+    assert metadata["container"] == container
 
 
 @testing.effect
@@ -785,6 +1009,7 @@ def test_object_fallback_response_tool():
         "disable_parallel_tool_use": True,
     }
     assert response.value == {"title": "Rain"}
+    assert response.finish_reason == "stop"
 
 
 @testing.effect
@@ -819,6 +1044,7 @@ def test_object_native_json_with_tool_call():
     )
     assert response.value == {"title": "Rain"}
     assert response.tool_calls[0].name == "Weather"
+    assert response.finish_reason == "tool-calls"
 
 
 # system messages -----------------------------------------------------------------------
@@ -1260,6 +1486,8 @@ _SEARCH_TOOLKIT = K.make(
     AT.ToolSearchRegex_20251119(),
     AT.ToolSearchBM25_20251119(),
     AT.WebSearch_20250305({}),
+    AT.WebFetch_20250910({}),
+    AT.CodeExecution_20250522(),
 )
 _SEARCH_LAYER = _SEARCH_TOOLKIT.to_layer(ListContacts.handler(lambda _, __: fx.succeed(())))
 _TOOL_REFERENCES = [{"type": "tool_reference", "tool_name": "ListContacts"}]
@@ -1308,6 +1536,83 @@ _SEARCH_CONTENT: list[dict[str, Any]] = [
                 "page_age": None,
             }
         ],
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_4",
+        "name": "web_fetch",
+        "input": {"url": "https://example.com/contacts"},
+    },
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_4",
+        "content": {
+            "type": "web_fetch_result",
+            "url": "https://example.com/contacts",
+            "retrieved_at": None,
+            "content": {
+                "type": "document",
+                "source": {"type": "text", "media_type": "text/plain", "data": "Anna"},
+                "title": None,
+                "citations": {"enabled": True},
+            },
+        },
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_5",
+        "name": "web_fetch",
+        "input": {"url": "https://example.com/missing"},
+    },
+    {
+        "type": "web_fetch_tool_result",
+        "tool_use_id": "srvtoolu_5",
+        "content": {"type": "web_fetch_tool_result_error", "error_code": "url_not_accessible"},
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_6",
+        "name": "code_execution",
+        "input": {"code": "print(1)"},
+    },
+    {
+        "type": "code_execution_tool_result",
+        "tool_use_id": "srvtoolu_6",
+        "content": {
+            "type": "code_execution_result",
+            "stdout": "1\n",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_7",
+        "name": "code_execution",
+        "input": {"code": "print(2)"},
+    },
+    {
+        "type": "code_execution_tool_result",
+        "tool_use_id": "srvtoolu_7",
+        "content": {"type": "code_execution_tool_result_error", "error_code": "unavailable"},
+    },
+    {
+        "type": "server_tool_use",
+        "id": "srvtoolu_8",
+        "name": "code_execution",
+        "input": {"code": "print(3)"},
+    },
+    {
+        "type": "code_execution_tool_result",
+        "tool_use_id": "srvtoolu_8",
+        "content": {
+            "type": "encrypted_code_execution_result",
+            "encrypted_stdout": "encrypted",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
     },
     {"type": "tool_use", "id": "toolu_1", "name": "ListContacts", "input": {"name": "Anna"}},
 ]
@@ -1378,6 +1683,12 @@ def test_tool_search_replays_provider_executed_results(mode: str):
             if isinstance(p, R.ToolResultSuccess | R.ToolResultFailure) and p.id == "srvtoolu_1"
         )
         assert list(search.result) == _TOOL_REFERENCES
+        encrypted = next(
+            p
+            for p in first_parts
+            if isinstance(p, R.ToolResultSuccess | R.ToolResultFailure) and p.id == "srvtoolu_8"
+        )
+        assert not encrypted.is_failure
         yield from lm.generate_text(
             prompt.concat(Pr.from_response_parts(first_parts)),
             toolkit=_SEARCH_TOOLKIT,
@@ -1389,6 +1700,116 @@ def test_tool_search_replays_provider_executed_results(mode: str):
     assert [m["role"] for m in body["messages"]] == ["user", "assistant", "user"]
     assert body["messages"][1]["content"] == _SEARCH_CONTENT
     assert [b["tool_use_id"] for b in body["messages"][2]["content"]] == ["toolu_1"]
+
+
+_CODE_EXECUTION_OPERATIONS: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
+    (
+        "code_execution",
+        {"code": "print(1)"},
+        {
+            "type": "code_execution_result",
+            "stdout": "1\n",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
+    ),
+    (
+        "bash_code_execution",
+        {"command": "printf hello"},
+        {
+            "type": "bash_code_execution_result",
+            "stdout": "hello",
+            "stderr": "",
+            "return_code": 0,
+            "content": [],
+        },
+    ),
+    (
+        "text_editor_code_execution",
+        {"command": "create", "path": "/tmp/example.txt", "file_text": "hello"},
+        {"type": "text_editor_code_execution_create_result", "is_file_update": False},
+    ),
+    (
+        "text_editor_code_execution",
+        {"command": "view", "path": "/tmp/example.txt"},
+        {
+            "type": "text_editor_code_execution_view_result",
+            "content": "hello",
+            "file_type": "text",
+            "num_lines": 1,
+            "start_line": 1,
+            "total_lines": 1,
+        },
+    ),
+    (
+        "text_editor_code_execution",
+        {
+            "command": "str_replace",
+            "path": "/tmp/example.txt",
+            "old_str": "hello",
+            "new_str": "world",
+        },
+        {
+            "type": "text_editor_code_execution_str_replace_result",
+            "lines": ["world"],
+            "new_lines": 1,
+            "new_start": 1,
+            "old_lines": 1,
+            "old_start": 1,
+        },
+    ),
+    (
+        "bash_code_execution",
+        {"command": "pwd"},
+        {"type": "bash_code_execution_tool_result_error", "error_code": "unavailable"},
+    ),
+    (
+        "text_editor_code_execution",
+        {"command": "view", "path": "/tmp/missing.txt"},
+        {
+            "type": "text_editor_code_execution_tool_result_error",
+            "error_code": "file_not_found",
+            "error_message": None,
+        },
+    ),
+]
+
+
+@pytest.mark.parametrize("mode", ["generateText", "streamText"])
+@testing.effect
+def test_code_execution_20250825_operations(mode: str):
+    """tool search / completes and replays CodeExecution_20250825 operations (${mode})"""
+    toolkit = K.make(AT.CodeExecution_20250825())
+    content = [
+        block
+        for index, (name, input, result) in enumerate(_CODE_EXECUTION_OPERATIONS)
+        for block in (
+            {"type": "server_tool_use", "id": f"srvtoolu_{index}", "name": name, "input": input},
+            {"type": f"{name}_tool_result", "tool_use_id": f"srvtoolu_{index}", "content": result},
+        )
+    ]
+    mock = _search_mock(content)
+    prompt = Pr.make("Create, read, and edit a file, then run a command")
+
+    def program() -> Any:
+        if mode == "generateText":
+            parts = list((yield from lm.generate_text(prompt, toolkit=toolkit)).content)
+        else:
+            parts = list((yield from lm.stream_text(prompt, toolkit=toolkit).run_collect()))
+        failures = [
+            p.is_failure for p in parts if isinstance(p, R.ToolResultSuccess | R.ToolResultFailure)
+        ]
+        assert failures == [False, False, False, False, False, True, True]
+        yield from lm.generate_text(prompt.concat(Pr.from_response_parts(parts)), toolkit=toolkit)
+
+    yield from _provided(fx.gen(program), mock, _LEGACY, None, toolkit.to_layer())
+    assert mock.bodies[0]["tools"] == [
+        {"name": "code_execution", "type": "code_execution_20250825"}
+    ]
+    body = mock.bodies[1]
+    assert [m["role"] for m in body["messages"]] == ["user", "assistant"]
+    assert body["messages"][1]["content"] == content
 
 
 class _Host(TypedDict):

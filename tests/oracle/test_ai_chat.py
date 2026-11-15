@@ -199,6 +199,74 @@ def _expected(options: dict[str, Any]) -> P.Prompt:
     )
 
 
+class _Key(TypedDict):
+    key: str
+
+
+class _Answer(TypedDict):
+    answer: str
+
+
+Lookup = T.make("Lookup", parameters=S.Struct(_Key), success=S.String)
+LoopToolkit = K.make(Lookup)
+LoopToolkitLayer = LoopToolkit.to_layer(
+    Lookup.handler(lambda params, _: fx.succeed(f"value of {params['key']}"))
+)
+
+
+@testing.effect
+def test_allow_empty_keeps_tool_history():
+    """Chat / generateObject with allowEmpty preserves tool calls and results in history"""
+
+    def body():
+        chat = yield from C.empty
+        response = yield from chat.generate_object(
+            "Look it up", schema=S.Struct(_Answer), toolkit=LoopToolkit, allow_empty=True
+        ).pipe(
+            with_language_model(
+                generate_text=[
+                    {"type": "tool-call", "id": "call-1", "name": "Lookup", "params": {"key": "a"}},
+                    {
+                        "type": "finish",
+                        "reason": "tool-calls",
+                        "usage": {"inputTokens": {}, "outputTokens": {}},
+                    },
+                ]
+            )
+        )
+        assert response.value is None
+        assert (yield from chat.history.get()) == P.make(
+            [
+                {"role": "user", "content": "Look it up"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool-call",
+                            "id": "call-1",
+                            "name": "Lookup",
+                            "params": {"key": "a"},
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "content": [
+                        {
+                            "type": "tool-result",
+                            "id": "call-1",
+                            "name": "Lookup",
+                            "result": "value of a",
+                            "isFailure": False,
+                        }
+                    ],
+                },
+            ]
+        )
+
+    yield from fx.gen(body).pipe(fx.provide(LoopToolkitLayer))
+
+
 @testing.effect
 def test_persists_history():
     """Chat / should persist chat history to the backing persistence store"""

@@ -38,12 +38,14 @@ from pyfect import sink, stdio, stream, testing
 from pyfect.ai import mcp_protocol as P
 from pyfect.ai import mcp_schema as MS
 from pyfect.ai import mcp_server as M
+from pyfect.ai import mcp_test
 from pyfect.ai import tool as T
 from pyfect.ai import toolkit as K
 from pyfect.ai._mcp.core import PromptEntry, ToolEntry
 from pyfect.context import Context
 from pyfect.deferred import Deferred
 from pyfect.errors import Done
+from pyfect.exit import Success
 from pyfect.http import request as R
 from pyfect.http.client import HttpClientService
 from pyfect.http.response import HttpClientResponse
@@ -1295,3 +1297,162 @@ def test_the_direct_service_has_no_client_to_ask():
     prompted = yield from _direct(server.get_prompt_result("P", {})).flip()
     assert isinstance(prompted, MS.InvalidParams)
     assert prompted.message == "Client input is not supported by this MCP protocol"
+
+
+@testing.effect
+def test_reads_string_and_byte_content_with_the_registered_mime_type():
+    """McpServer / resources / reads string and byte content with the registered MIME type"""
+    data = bytes([1, 2, 3])
+    registrations = fx.layer.merge(
+        M.resource(
+            uri="test://app",
+            name="app",
+            mime_type="text/html;profile=mcp-app",
+            content=fx.succeed("<p>app</p>"),
+        ),
+        M.resource_template(
+            M.uri_template("test://bytes/", S.String),
+            name="bytes",
+            mime_type="application/octet-stream",
+            content=lambda _uri, _name: fx.succeed(data),
+        ),
+        M.resource(uri="test://plain", name="plain", content=fx.succeed("plain")),
+        M.resource(
+            uri="test://result",
+            name="result",
+            mime_type="text/plain",
+            content=fx.succeed(
+                MS.ReadResourceResult(contents=[{"uri": "test://result#part", "text": "part"}])
+            ),
+        ),
+    )
+    client = yield from mcp_test.make_client(registrations, protocols=(P.v2025_11_25,))
+
+    def read(uri: str) -> fx.Effect[list[Any], Any]:
+        return client.read_resource({"uri": uri}).map(lambda result: list(result["contents"]))
+
+    assert (yield from read("test://app")) == [
+        {"uri": "test://app", "mimeType": "text/html;profile=mcp-app", "text": "<p>app</p>"}
+    ]
+    assert (yield from read("test://bytes/data")) == [
+        {"uri": "test://bytes/data", "mimeType": "application/octet-stream", "blob": "AQID"}
+    ]
+    assert (yield from read("test://plain")) == [{"uri": "test://plain", "text": "plain"}]
+    # A full result is the handler's own answer and is returned as is.
+    assert (yield from read("test://result")) == [{"uri": "test://result#part", "text": "part"}]
+
+
+@testing.effect
+def test_drops_progress_queued_on_stdout_after_its_request_is_cancelled():
+    """(pyfect) The stdio form of ``drops queued progress after cancellation but preserves
+    background progress``: the progress waits in the bounded output queue behind a write the
+    client is not reading, and is dropped once its request is cancelled."""
+    blocked = Deferred[None]()
+    release = Deferred[None]()
+    queued = Deferred[None]()
+    cancelled = Deferred[None]()
+
+    def before_write(message: dict[str, Any]) -> fx.Effect[None]:
+        if message.get("method") == "notifications/message":
+            return blocked.succeed(None).and_then(release.wait())
+        return fx.void
+
+    server = yield from M.make()
+
+    def handle(_: object) -> fx.Effect[Any, Any, Any]:
+        @fx.gen
+        def run():
+            progress: MS.JsonObject = {"progressToken": "request", "progress": 1}
+            yield from server.notify("notifications/progress", progress).fork(
+                start_immediately=True
+            )
+            yield from queued.succeed(None)
+            return (yield from fx.never)
+
+        return run.ensuring(cancelled.succeed(None).as_void())
+
+    yield from server.add_tool(
+        ToolEntry({"name": "Progress", "inputSchema": {"type": "object"}}, Context.empty(), handle)
+    )
+    harness = yield from stdio_harness(P.v2025_11_25, server=server, before_write=before_write)
+    yield from harness.initialize()
+    yield from harness.send_request("ping")  # notifications/initialized is read
+    yield from server.notify(
+        "notifications/message", {"level": "error", "data": "blocked"}
+    ).fork_scoped(start_immediately=True)
+    yield from blocked.wait()
+    yield from harness.send(
+        {
+            "jsonrpc": "2.0",
+            "id": "work",
+            "method": "tools/call",
+            "params": {"name": "Progress", "_meta": {"progressToken": "request"}},
+        }
+    )
+    yield from queued.wait()
+    yield from harness.send_notification("notifications/cancelled", {"requestId": "work"})
+    yield from cancelled.wait()
+    yield from release.succeed(None)
+    yield from server.notify(
+        "notifications/progress", {"progressToken": "background", "progress": 1}
+    )
+    assert (yield from harness.receive())["method"] == "notifications/message"
+    background = yield from harness.receive()
+    assert background["params"] == {"progressToken": "background", "progress": 1}
+    assert (yield from harness.stdout.size()) == 0
+
+
+@testing.effect
+def test_should_exit_successfully_when_stdin_closes_after_initialization():
+    """McpServer / stdio / should exit successfully when stdin closes after initialization"""
+    harness = yield from stdio_harness(P.v2025_06_18)
+    yield from harness.initialize()
+    yield from harness.close
+    exit = yield from harness.fiber.await_exit()
+    assert isinstance(exit, Success)
+
+
+def _initialize_line(id: int) -> bytes:
+    request = {
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {},
+            "clientInfo": {"name": "TestClient", "version": "1.0.0"},
+        },
+    }
+    return (json.dumps(request) + "\n").encode()
+
+
+@testing.effect
+def test_should_give_each_layer_stdio_server_its_own_protocol_in_one_layer_graph():
+    """McpServer / stdio / should give each layerStdio server its own protocol in one layer graph"""
+
+    def make_stdio(id: int, out: Queue[str]) -> fx.layer.Layer[stdio.Stdio]:
+        def output(*, end_on_done: bool = False) -> stdio.Output:
+            def write(chunk: str | bytes) -> fx.Effect[None]:
+                return out.offer(chunk.decode() if isinstance(chunk, bytes) else chunk).as_void()
+
+            return cast("stdio.Output", sink.for_each(write))
+
+        return stdio.layer_test(
+            stdin=stream.make(_initialize_line(id)).concat(stream.never), stdout=output
+        )
+
+    def server(name: str) -> fx.layer.Layer[M.McpServer, Any, stdio.Stdio]:
+        return M.layer_stdio(name=name, version="1.0.0", protocols=[P.v2025_11_25])
+
+    stdout_a = yield from Queue[str].unbounded()
+    stdout_b = yield from Queue[str].unbounded()
+    yield from fx.layer.merge(
+        server("A").pipe(fx.layer.provide(make_stdio(1, stdout_a))),
+        server("B").pipe(fx.layer.provide(make_stdio(2, stdout_b))),
+    ).build()
+    response_a = json.loads((yield from stdout_a.take()))
+    response_b = json.loads((yield from stdout_b.take()))
+    assert response_a["id"] == 1
+    assert response_a["result"]["serverInfo"]["name"] == "A"
+    assert response_b["id"] == 2
+    assert response_b["result"]["serverInfo"]["name"] == "B"

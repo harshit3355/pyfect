@@ -69,6 +69,7 @@ from pyfect.ai.telemetry import CurrentSpanTransformer, SpanTransformer
 from pyfect.ai.tool import AnyTool, CodecTransformer
 from pyfect.context import Tag
 from pyfect.json_schema._model import JsonSchema
+from pyfect.option import Option, Some
 from pyfect.schema import SchemaError
 from pyfect.stream import Stream
 from pyfect.stream import _constructors as StreamC
@@ -668,6 +669,7 @@ class Service:
         concurrency: Concurrency = "unbounded",
         disable_tool_call_resolution: bool = False,
         tool_call_validation: ToolCallValidation = "strict",
+        allow_empty: bool = False,
     ) -> Effect[GenerateObjectResponse[Any, Any, Any], Any, Any]:
         """See the module's ``generate_object``."""
         name = get_object_name(object_name, schema)
@@ -686,7 +688,7 @@ class Service:
                 options, toolkit, tool_choice, concurrency, disable_tool_call_resolution, sent=sent
             )
             return self._transformed(content, sent).flat_map(
-                lambda parts: self._structured(parts, schema).map(
+                lambda parts: self._structured(parts, schema, allow_empty=allow_empty).map(
                     lambda value: GenerateObjectResponse[Any, Any, Any](parts, value)
                 )
             )
@@ -718,8 +720,14 @@ class Service:
             lambda transformer: content.flat_map(lambda parts: apply(transformer, parts))
         )
 
-    def _structured(self, parts: Sequence[object], schema: S.Top) -> Effect[object, AiError]:
+    def _structured(
+        self, parts: Sequence[object], schema: S.Top, *, allow_empty: bool
+    ) -> Effect[object, AiError]:
+        """The decoded value; with ``allow_empty``, ``None`` for empty or whitespace-only
+        text and ``Some`` of the value otherwise."""
         text = "".join(part.text for part in parts if isinstance(part, R.TextPart))
+        if allow_empty and not text.strip():
+            return fx.succeed(None)
         if not text:
             reason = StructuredOutputError(
                 description="No text content in response", response_text=text
@@ -731,11 +739,12 @@ class Service:
             reason = UnsupportedSchemaError(description=str(error))
             return fx.fail(_error("generateObject", reason))
         decode = cast("Any", S.decode_unknown_effect(S.from_json_string(codec)))
-        return cast("Effect[object, SchemaError]", decode(text)).map_error(
+        value = cast("Effect[object, SchemaError]", decode(text)).map_error(
             lambda error: _error(
                 "generateObject", StructuredOutputError.from_schema_error(error, text)
             )
         )
+        return value.map(Some) if allow_empty else value
 
     def _spanned(
         self,
@@ -1051,6 +1060,7 @@ def generate_object[A](
     concurrency: Concurrency = "unbounded",
     disable_tool_call_resolution: Literal[True],
     tool_call_validation: Literal["deferred"],
+    allow_empty: Literal[False] = False,
 ) -> Effect[GenerateObjectResponse[str, Never, A], AiError, LanguageModel]: ...
 @overload
 def generate_object[A](
@@ -1063,6 +1073,7 @@ def generate_object[A](
     concurrency: Concurrency = "unbounded",
     disable_tool_call_resolution: bool = False,
     tool_call_validation: Literal["strict"] = "strict",
+    allow_empty: Literal[False] = False,
 ) -> Effect[GenerateObjectResponse[Never, Never, A], AiError, LanguageModel]: ...
 @overload
 def generate_object[A, NN: LiteralString, RP, EE, RR](
@@ -1075,6 +1086,7 @@ def generate_object[A, NN: LiteralString, RP, EE, RR](
     concurrency: Concurrency = "unbounded",
     disable_tool_call_resolution: Literal[True],
     tool_call_validation: Literal["deferred"],
+    allow_empty: Literal[False] = False,
 ) -> Effect[GenerateObjectResponse[str, RP, A], AiError | EE, LanguageModel | RR]: ...
 @overload
 def generate_object[A, NN: LiteralString, RP, EE, RR](
@@ -1087,7 +1099,60 @@ def generate_object[A, NN: LiteralString, RP, EE, RR](
     concurrency: Concurrency = "unbounded",
     disable_tool_call_resolution: bool = False,
     tool_call_validation: Literal["strict"] = "strict",
+    allow_empty: Literal[False] = False,
 ) -> Effect[GenerateObjectResponse[NN, RP, A], AiError | EE, LanguageModel | RR]: ...
+@overload
+def generate_object[A](
+    prompt: P.RawInput,
+    *,
+    schema: S.Codec[A, Any, Any, Any],
+    object_name: str | None = None,
+    toolkit: None = None,
+    tool_choice: ToolChoice = "auto",
+    concurrency: Concurrency = "unbounded",
+    disable_tool_call_resolution: Literal[True],
+    tool_call_validation: Literal["deferred"],
+    allow_empty: Literal[True],
+) -> Effect[GenerateObjectResponse[str, Never, Option[A]], AiError, LanguageModel]: ...
+@overload
+def generate_object[A](
+    prompt: P.RawInput,
+    *,
+    schema: S.Codec[A, Any, Any, Any],
+    object_name: str | None = None,
+    toolkit: None = None,
+    tool_choice: ToolChoice = "auto",
+    concurrency: Concurrency = "unbounded",
+    disable_tool_call_resolution: bool = False,
+    tool_call_validation: Literal["strict"] = "strict",
+    allow_empty: Literal[True],
+) -> Effect[GenerateObjectResponse[Never, Never, Option[A]], AiError, LanguageModel]: ...
+@overload
+def generate_object[A, NN: LiteralString, RP, EE, RR](
+    prompt: P.RawInput,
+    *,
+    schema: S.Codec[A, Any, Any, Any],
+    object_name: str | None = None,
+    toolkit: _ToolkitInput[NN, RP, EE, RR],
+    tool_choice: ToolChoice = "auto",
+    concurrency: Concurrency = "unbounded",
+    disable_tool_call_resolution: Literal[True],
+    tool_call_validation: Literal["deferred"],
+    allow_empty: Literal[True],
+) -> Effect[GenerateObjectResponse[str, RP, Option[A]], AiError | EE, LanguageModel | RR]: ...
+@overload
+def generate_object[A, NN: LiteralString, RP, EE, RR](
+    prompt: P.RawInput,
+    *,
+    schema: S.Codec[A, Any, Any, Any],
+    object_name: str | None = None,
+    toolkit: _ToolkitInput[NN, RP, EE, RR],
+    tool_choice: ToolChoice = "auto",
+    concurrency: Concurrency = "unbounded",
+    disable_tool_call_resolution: bool = False,
+    tool_call_validation: Literal["strict"] = "strict",
+    allow_empty: Literal[True],
+) -> Effect[GenerateObjectResponse[NN, RP, Option[A]], AiError | EE, LanguageModel | RR]: ...
 def generate_object(
     prompt: P.RawInput,
     *,
@@ -1098,9 +1163,13 @@ def generate_object(
     concurrency: Concurrency = "unbounded",
     disable_tool_call_resolution: bool = False,
     tool_call_validation: ToolCallValidation = "strict",
+    allow_empty: bool = False,
 ) -> Effect[GenerateObjectResponse[Any, Any, Any], Any, Any]:
     """Generate a JSON object matching ``schema`` (named ``object_name``,
-    else the schema's identifier) and decode it into ``value``."""
+    else the schema's identifier) and decode it into ``value``. With
+    ``allow_empty=True`` the value is an ``Option``: ``None`` when the model
+    answers with no text or only whitespace, ``Some`` of the decoded object
+    otherwise (invalid text still fails)."""
     return LanguageModel().flat_map(
         lambda model: model.generate_object(
             prompt,
@@ -1111,6 +1180,7 @@ def generate_object(
             concurrency=concurrency,
             disable_tool_call_resolution=disable_tool_call_resolution,
             tool_call_validation=tool_call_validation,
+            allow_empty=allow_empty,
         )
     )
 

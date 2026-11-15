@@ -29,6 +29,7 @@ from pyfect.ai._mcp.subscriptions import Event, Presence
 from pyfect.context import Context
 from pyfect.deferred import Deferred
 from pyfect.duration import Duration
+from pyfect.exit import Success
 from pyfect.http.response import HttpClientResponse
 from pyfect.pubsub import PubSub
 from pyfect.queue import Queue
@@ -278,6 +279,7 @@ def _direct_listen(
             ).and_then(events.subscribe()),
             send=send,
             terminate=terminate or no_termination,
+            client_end=fx.never,
         )
     ).fork_scoped()
 
@@ -1233,6 +1235,7 @@ def _direct_listener(
             subscribe=server.subscribe_events,
             send=send,
             terminate=lambda _, __: fx.succeed(None),
+            client_end=fx.never,
         )
     ).fork(start_immediately=True)
 
@@ -1323,16 +1326,78 @@ def test_a_handler_changing_a_list_waits_for_its_own_client_to_take_it():
 
 @testing.effect
 def test_stdin_ending_ends_a_server_with_an_open_subscription():
-    """A subscription has no end of its own, so the server does not wait for it."""
+    """Every open subscription completes at stdin's end, so the server ends."""
     fixture = yield from _harness()
     yield from fixture.initialize()
+    requests: list[StartedRequest] = []
     for id in ("one", "two"):
-        yield from _listen(fixture, id, {"toolsListChanged": True})
+        requests.append((yield from _listen(fixture, id, {"toolsListChanged": True})))
         yield from fixture.take_message
     yield from fixture.close
-    for _ in range(50):
-        yield from fx.yield_now()
-    assert fixture.fiber.poll_unsafe() is not None
+    for request in requests:
+        _assert_completed((yield from request.response), request.id)
+    assert (yield from _ended_without_failure(fixture.fiber))
+
+
+def _assert_completed(response: Json, id: object) -> None:
+    result = response["result"]
+    assert result["resultType"] == "complete"
+    assert result["_meta"][SUBSCRIPTION_ID] == id
+
+
+def _ended_without_failure(fiber: fx.Fiber[Any, Any]) -> fx.Effect[bool]:
+    return fiber.await_exit().map(
+        lambda exit: isinstance(exit, Success) or exit.cause.has_interrupts_only
+    )
+
+
+@testing.effect
+def test_should_complete_an_open_subscription_and_shut_down_on_stdin_eof():
+    """Mcp Conformance / Subscriptions / should complete an open subscription and shut down on stdin EOF"""  # noqa: E501
+    fixture = yield from _harness()
+    yield from fixture.initialize()
+    id = "eof-subscription"
+    request = yield from _listen(fixture, id, {"toolsListChanged": True})
+    _assert_acknowledged((yield from fixture.take_message), id, {"toolsListChanged": True})
+
+    yield from fixture.close
+
+    _assert_completed((yield from request.response), id)
+    assert (yield from _ended_without_failure(fixture.fiber))
+
+
+@testing.effect
+def test_should_drain_an_accepted_tool_response_with_an_open_subscription_on_stdin_eof():
+    """Mcp Conformance / Subscriptions / should drain an accepted tool response with an open subscription on stdin EOF"""  # noqa: E501
+    fixture = yield from _harness()
+    started = Deferred[None]()
+    release = Deferred[None]()
+    yield from fixture.server.add_tool(
+        ToolEntry(
+            {"name": "eof-tool", "inputSchema": {"type": "object", "properties": {}}},
+            Context.empty(),
+            lambda _: (
+                started.succeed(None)
+                .and_then(release.wait())
+                .as_({"content": [{"type": "text", "text": "drained"}]})
+            ),
+        )
+    )
+    yield from fixture.initialize()
+    id = "eof-drain-subscription"
+    subscription = yield from _listen(fixture, id, {"toolsListChanged": True})
+    _assert_acknowledged((yield from fixture.take_message), id, {"toolsListChanged": True})
+    tool = yield from fixture.start_request("tools/call", {"name": "eof-tool", "arguments": {}})
+    yield from started.wait()
+
+    yield from fixture.close
+
+    # Keep the tool pending until the subscription confirms the server has observed EOF.
+    _assert_completed((yield from subscription.response), id)
+    yield from release.succeed(None)
+    result = (yield from tool.response)["result"]
+    assert result["content"] == [{"type": "text", "text": "drained"}]
+    assert (yield from _ended_without_failure(fixture.fiber))
 
 
 @testing.effect

@@ -40,9 +40,9 @@ from pyfect.ai.tool import (
     Tool,
     failure_result_schema,
 )
-from pyfect.cause import Cause, Fail, from_reasons
+from pyfect.cause import Cause, Die, Fail, from_reasons
 from pyfect.context import Context, MissingServiceError, Reference, ServiceMarker, Tag
-from pyfect.exit import Failure, Success
+from pyfect.exit import Exit, Failure, Success
 from pyfect.layer import Layer, effect_context
 from pyfect.queue import Queue
 from pyfect.schema import SchemaError
@@ -310,7 +310,7 @@ def _handle(
                     _Output(normalize(error), True, False, _origin(error))
                 )
             )
-        return source.map_effect(encode).ensuring(fiber.interrupt())
+        return source.map_effect(encode).ensuring(_stop_handler(fiber))
 
     decode = (
         S.decode_unknown_effect(tool.parameters_schema, **options)(params)
@@ -324,6 +324,20 @@ def _handle(
         )
     )
     return annotate.and_then(decode)
+
+
+def _stop_handler(fiber: Fiber[Any, Any]) -> Effect[None, Never]:
+    """Interrupts a handler the stream stopped early and dies with its finalizers' defects."""
+
+    def surface(exit: Exit[Any, Any]) -> Effect[None, Never]:
+        dies = (
+            [r for r in exit.cause.reasons if isinstance(r, Die)]
+            if isinstance(exit, Failure)
+            else []
+        )
+        return fx.fail_cause(from_reasons(dies)) if dies else fx.void
+
+    return fiber.interrupt().and_then(fiber.await_exit()).flat_map(surface)
 
 
 def _params_failure(

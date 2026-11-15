@@ -55,6 +55,12 @@ class Target:
     example: str
     """A schema the package docstring decodes."""
     client_title: str | None = None
+    patches: tuple[tuple[str, str], ...] = ()
+    """Replacements applied to the reference checkout's Generated.ts, each of a text that
+    occurs once: a fix Effect made after the release the checkout is on."""
+    required_in_types: tuple[tuple[str, str], ...] = ()
+    """``(type, key)`` pairs that decode when absent but stay required in ``types.py``: a
+    patch release can't make an exported type stricter to read, so they wait for 0.7.0."""
 
     @property
     def package(self) -> str:
@@ -65,12 +71,65 @@ class Target:
         return ROOT / "src" / "pyfect" / "ai" / self.name / "generated"
 
     def default_source(self) -> Path:
-        ref = Path(os.environ.get("PYFECT_REF", Path.home() / "pyfect-ref" / "effect"))
-        return ref / "packages" / "ai" / self.name / "src" / "Generated.ts"
+        return _reference() / self.source_path
+
+    @property
+    def source_path(self) -> str:
+        return f"packages/ai/{self.name}/src/Generated.ts"
+
+    def read_source(self) -> str:
+        """The reference checkout's Generated.ts, with ``patches`` applied."""
+        source = self.default_source().read_text()
+        for old, new in self.patches:
+            if source.count(old) != 1:
+                raise GenerateError(f"{self.name}: a patch matches {source.count(old)} times")
+            source = source.replace(old, new)
+        return source
+
+
+def _reference() -> Path:
+    return Path(os.environ.get("PYFECT_REF", Path.home() / "pyfect-ref" / "effect"))
 
 
 OPENAI = Target("openai", "OpenAI", "FunctionToolCall", "OpenAi")
-OPENROUTER = Target("openrouter", "OpenRouter", "ChatResult", "OpenRouter")
+# Effect fb998b526 (4.1.4, #10505): tool calls without an `id` and stream deltas without an
+# `index` decode. The rest of 4.1.4's regeneration changes the API, so it waits for a minor.
+_INDEX_DESCRIPTION = '{ "description": "Tool call index in the array" }'
+_ID_DESCRIPTION = '{ "description": "Tool call identifier" }'
+_OPENROUTER_PATCHES = (
+    (
+        '  readonly "id"?: string | null\n  readonly "index": number\n',
+        '  readonly "id"?: string | null\n  readonly "index"?: number\n',
+    ),
+    (
+        f'  "index": Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n'
+        '    Schema.isInt().annotate({ "expected": "an integer" })\n'
+        "  ),\n",
+        '  "index": Schema.optionalKey(\n'
+        f"    Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n"
+        '      Schema.isInt().annotate({ "expected": "an integer" })\n'
+        "    )\n"
+        "  ),\n",
+    ),
+    (
+        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+        '  readonly "id": string\n',
+        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+        '  readonly "id"?: string\n',
+    ),
+    (
+        f'  "id": Schema.String.annotate({_ID_DESCRIPTION}),\n',
+        f'  "id": Schema.optionalKey(Schema.String.annotate({_ID_DESCRIPTION})),\n',
+    ),
+)
+OPENROUTER = Target(
+    "openrouter",
+    "OpenRouter",
+    "ChatResult",
+    "OpenRouter",
+    patches=_OPENROUTER_PATCHES,
+    required_in_types=(("ChatToolCall", "id"), ("ChatStreamToolCall", "index")),
+)
 TARGETS = {target.name: target for target in (OPENAI, OPENROUTER)}
 
 
@@ -444,6 +503,8 @@ class Emitter:
     type_names: set[str] = field(default_factory=set[str])
     pending: list[str] = field(default_factory=list[str])
     refs: set[str] = field(default_factory=set[str])
+    required_in_types: frozenset[tuple[str, str]] = frozenset()
+    kept_required: set[tuple[str, str]] = field(default_factory=set[tuple[str, str]])
 
     def unique(self, name: str) -> str:
         candidate, n = name, 1
@@ -551,6 +612,7 @@ class Emitter:
         fields: list[str] = []
         annotations: list[str] = []
         optional: list[str] = []
+        kept: list[str] = []
         for key, value in entries:
             inner = value
             is_optional = False
@@ -564,7 +626,11 @@ class Emitter:
             expression, py_type = self.schema(inner, f"{type_name}__{_ident(key)}")
             key_text = json.dumps(key)
             fields.append(f"{key_text}: {expression}")
-            annotation = f"_t.NotRequired[{py_type}]" if is_optional else py_type
+            keep = is_optional and (type_name, key) in self.required_in_types
+            if keep:
+                self.kept_required.add((type_name, key))
+                kept.append(key)
+            annotation = f"_t.NotRequired[{py_type}]" if is_optional and not keep else py_type
             annotations.append(f"{key_text}: {json.dumps(annotation)}")
             if is_optional:
                 optional.append(key_text)
@@ -574,6 +640,7 @@ class Emitter:
             f"type {type_name} = _abc.Mapping[str, _t.Any]"
             if not entries
             else f"{type_name} = _t.TypedDict({json.dumps(type_name)}, {{{body}}})"
+            + (f"  # a response may omit {', '.join(kept)}; NotRequired from 0.7.0" if kept else "")
         )
         optional_text = f", optional=({', '.join(optional)},)" if optional else ""
         return f"_b.struct(_T.{type_name}, {{{', '.join(fields)}}}{optional_text})", type_name
@@ -772,12 +839,15 @@ def generate(source: str, target: Target) -> dict[str, str]:
     """The generated package's modules (file name to text) for a
     Generated.ts source."""
     package = target.package
-    emitter = Emitter(recursive_module=f"{package}._recursive")
+    required = frozenset(target.required_in_types)
+    emitter = Emitter(recursive_module=f"{package}._recursive", required_in_types=required)
     for declaration in declarations(source):
         try:
             emitter.declaration(declaration)
         except GenerateError as error:
             raise GenerateError(f"{declaration.name}: {error}") from error
+    if unused := sorted(required - emitter.kept_required):
+        raise GenerateError(f"required_in_types names no optional key: {unused}")
     if not emitter.schemas:
         raise GenerateError("no schema declarations found")
     plain = [item for item in emitter.schemas if not item.recursive]
@@ -850,8 +920,8 @@ def main(argv: list[str] | None = None) -> int:
     targets = [TARGETS[args.provider]] if args.provider else list(TARGETS.values())
     failed = False
     for target in targets:
-        source_path: Path = args.source or target.default_source()
-        files = generate(source_path.read_text(), target)
+        source = args.source.read_text() if args.source else target.read_source()
+        files = generate(source, target)
         if not args.check:
             _write(target, files)
             continue

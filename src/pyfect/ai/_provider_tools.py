@@ -7,6 +7,8 @@ structured-output codec transformer (``to_codec_anthropic``, ...)."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import pyfect as fx
@@ -127,3 +129,42 @@ def transform_params(
         S.encode_unknown_effect(schema)
     )
     return normalized.or_else_succeed(lambda _: params)
+
+
+@dataclass(frozen=True)
+class StrictTools:
+    """Whether each tool is strict, and so how it is advertised and how its
+    calls are decoded, decided in one place (Effect's ``getToolStrictMode``):
+    the tool's own strict mode, else ``strict_json_schema``, else strict. A
+    strict tool's schema and parameters go through ``transformer`` (the
+    provider's structured-output codec); a non-strict one is advertised with
+    the default codec's JSON Schema and its parameters are kept as sent.
+    Build one per request, from the request's config, and use it for both."""
+
+    transformer: T.CodecTransformer
+    strict_json_schema: bool | None
+
+    @staticmethod
+    def of(transformer: T.CodecTransformer, config: Mapping[str, Any]) -> StrictTools:
+        strict = config.get("strict_json_schema")
+        return StrictTools(transformer, strict if isinstance(strict, bool) else None)
+
+    def is_strict(self, tool: T.AnyTool) -> bool:
+        mode = T.get_strict_mode(tool)
+        if mode is not None:
+            return mode
+        return True if self.strict_json_schema is None else self.strict_json_schema
+
+    def advertised(self, tool: T.AnyTool) -> T.CodecTransformer:
+        """The transformer giving the JSON Schema the tool is sent with."""
+        return self.transformer if self.is_strict(tool) else lm.default_codec_transformer
+
+    def transform_params(
+        self, module: str, options: lm.ProviderOptions, tool_name: str, params: object
+    ) -> Effect[object, AiError, Any]:
+        """``transform_params`` with the codec the tool was advertised with:
+        a non-strict tool's parameters as sent."""
+        tool = next((t for t in options.tools if t.name == tool_name), None)
+        if tool is not None and not self.is_strict(tool):
+            return fx.succeed(params)
+        return transform_params(module, options, tool_name, params, transformer=self.transformer)

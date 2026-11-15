@@ -47,18 +47,36 @@ def json_schema(schema: Any, method: str) -> Block:
 
 
 def to_codec_lenient(schema: Top) -> tuple[Top, JsonSchema]:
-    """Anthropic's codec, or the plain JSON one for a schema Anthropic's
-    strict mode cannot express (recursion): its restrictions only apply to
-    strict tools."""
+    """Anthropic's codec, or the plain one for a schema it cannot express (recursion): a
+    provider-defined tool is not advertised with a schema, so its calls decode with the
+    first that applies."""
     try:
         return to_codec_anthropic(schema)
     except Exception:
         return lm.default_codec_transformer(schema)
 
 
-def tool_json_schema(tool: T.AnyTool, strict: bool) -> Block:
-    transformer = to_codec_anthropic if strict else to_codec_lenient
-    return PT.tool_json_schema(MODULE, tool, require_object=True, transformer=transformer)
+@dataclass(frozen=True)
+class ToolCodecs:
+    """Whether each tool is strict, and so the codec it is advertised with and its calls
+    are decoded with: one choice for both, so a call decodes with the schema the request
+    sent. Strict tools use Anthropic's codec; non-strict ones the plain JSON Schema, which
+    keeps optional properties, constraints, records and explicit nulls."""
+
+    supports_structured_output: bool
+    strict_default: bool | None
+
+    def strict(self, tool: T.AnyTool) -> bool | None:
+        """``None`` when the model takes no ``strict`` field."""
+        if not self.supports_structured_output:
+            return None
+        own = T.get_strict_mode(tool)
+        return own if own is not None else self.strict_default is not False
+
+    def transformer(self, tool: T.AnyTool) -> T.CodecTransformer:
+        if isinstance(tool, T.ProviderDefined):
+            return to_codec_lenient
+        return to_codec_anthropic if self.strict(tool) is True else lm.default_codec_transformer
 
 
 def _computer(args: Mapping[str, Any], name: str, type_: str) -> Block:
@@ -189,17 +207,14 @@ def _provider_tool(
     return build(P.obj(tool.args))
 
 
-def _user_tool(
-    tool: T.AnyTool, capabilities: Capabilities, strict_default: bool | None, betas: dict[str, None]
-) -> Block:
-    strict: bool | None = None
-    if capabilities.supports_structured_output:
-        own = T.get_strict_mode(tool)
-        strict = own if own is not None else (strict_default is not False)
-    block: Block = {"name": tool.name, "input_schema": tool_json_schema(tool, strict is True)}
+def _user_tool(tool: T.AnyTool, codecs: ToolCodecs, betas: dict[str, None]) -> Block:
+    transformer = codecs.transformer(tool)
+    schema = PT.tool_json_schema(MODULE, tool, require_object=True, transformer=transformer)
+    block: Block = {"name": tool.name, "input_schema": schema}
     description = T.get_description(tool)
     if description is not None:
         block["description"] = description
+    strict = codecs.strict(tool)
     if strict is not None:
         block["strict"] = strict
         betas["structured-outputs-2025-11-13"] = None
@@ -227,6 +242,8 @@ def prepare_tools(
     config: Mapping[str, Any],
     betas: dict[str, None],
     names: NameMapper,
+    *,
+    codecs: ToolCodecs,
 ) -> Prepared:
     """Raises ``UnsupportedInput`` for a schema or tool Anthropic cannot
     take."""
@@ -257,9 +274,7 @@ def prepare_tools(
         if isinstance(tool, T.ProviderDefined):
             provider_tools.append(_provider_tool(tool, betas))
         else:
-            user_tools.append(
-                _user_tool(tool, capabilities, config.get("strict_json_schema"), betas)
-            )
+            user_tools.append(_user_tool(tool, codecs, betas))
     choice = _tool_choice(options.tool_choice, names)
     disable = config.get("disable_parallel_tool_calls")
     if disable is not None and choice["type"] != "none":

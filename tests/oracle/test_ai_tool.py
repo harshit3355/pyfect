@@ -31,8 +31,10 @@ from pyfect.ai import language_model as lm
 from pyfect.ai import response as R
 from pyfect.ai import tool as T
 from pyfect.ai import toolkit as K
+from pyfect.cause import Die
 from pyfect.context import Tag
 from pyfect.duration import Duration
+from pyfect.exit import Failure
 from pyfect.json_schema import JsonSchema
 
 from ._ai import with_language_model
@@ -311,6 +313,29 @@ def test_interrupts_handler_when_consumer_stops():
     results = yield from stream.take(1).run_collect()
     assert len(results) == 1
     assert interrupted == [True]
+
+
+@testing.effect
+def test_dies_with_every_finalizer_defect_on_early_stop():
+    """Preliminary Results / should die with every handler finalizer defect on early stop"""
+    toolkit = K.make(_PROGRESS)
+    handler = _PROGRESS.handler(
+        lambda _, ctx: (
+            ctx.preliminary(0.0)
+            .and_then(fx.never)
+            .on_interrupt(fx.die("first"))
+            .on_interrupt(fx.die("second"))
+        )
+    )
+    handlers = yield from toolkit.pipe(fx.provide(toolkit.to_layer(handler)))
+    exit = yield from (
+        handlers.handle("Progress", {}).flat_map(lambda stream: stream.take(1).run_collect()).exit()
+    )
+    assert isinstance(exit, Failure)
+    assert [
+        reason.defect if isinstance(reason, Die) else type(reason).__name__
+        for reason in exit.cause.reasons
+    ] == ["first", "second"]
 
 
 def _progress_handler(accepted: list[int]) -> T.Handler[Any]:

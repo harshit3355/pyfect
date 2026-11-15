@@ -11,6 +11,7 @@ Omitted: none.
 
 from __future__ import annotations
 
+import itertools
 import json
 from typing import Any
 
@@ -27,6 +28,7 @@ from pyfect.ai import toolkit as TK
 from pyfect.scope import Scope
 
 from ._mcp import StdioHarness, stdio_harness
+from ._mcp_features import features_conformance
 from ._mcp_http import (
     Conformance,
     Json,
@@ -70,6 +72,31 @@ def test_should_preserve_additional_result_metadata_fields_when_decoding_a_resul
         {"contents": [], "_meta": meta}
     )
     assert result.get("_meta") == meta
+
+
+@pytest.mark.parametrize("protocol", ALL, ids=_id)
+@testing.effect
+def test_should_return_a_complete_page_and_reject_supplied_cursors(
+    protocol: P.AnyProtocolAdapter,
+):
+    """Mcp Conformance / Base Protocol > Pagination / should return a complete page and reject supplied cursors, including an empty string"""  # noqa: E501
+    test = yield from features_conformance(protocol)
+    initialized = yield from test.initialize()
+    yield from test.notify_initialized(initialized)
+    ids = itertools.count(2)
+    for method in ("tools/list", "resources/list", "resources/templates/list", "prompts/list"):
+        page = yield from test.send(
+            initialized, {"jsonrpc": "2.0", "id": next(ids), "method": method}
+        )
+        assert "nextCursor" not in (yield from test.decode_result(page))["result"], method
+        for cursor in ("unknown", ""):
+            response = yield from test.send(
+                initialized,
+                {"jsonrpc": "2.0", "id": next(ids), "method": method, "params": {"cursor": cursor}},
+            )
+            error = yield from test.decode_error(response)
+            assert error["error"]["code"] == MS.INVALID_PARAMS_ERROR_CODE, (method, cursor)
+            assert error["error"]["message"] == "Unknown cursor", (method, cursor)
 
 
 # --- statelessModernSuite -------------------------------------------------------------------

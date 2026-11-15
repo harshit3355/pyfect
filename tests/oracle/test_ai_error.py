@@ -628,3 +628,93 @@ def test_reason_union_with_tool_errors_roundtrip():
     assert decoded._tag == "ToolNotFoundError"
     param = E.ToolParameterValidationError(tool_name="Test", description="Invalid")
     assert _roundtrip(E.AI_ERROR_REASON, param)._tag == "ToolParameterValidationError"
+
+
+def test_exposes_each_reasons_tag_and_retryability():
+    """reason types / exposes each reason's _tag and retryability"""
+    cases: list[tuple[E.AiErrorReason, str, bool]] = [
+        (E.RateLimitError(), "RateLimitError", True),
+        (E.QuotaExhaustedError(), "QuotaExhaustedError", False),
+        (E.AuthenticationError(kind="InvalidKey"), "AuthenticationError", False),
+        (E.ContentPolicyError(description="violation"), "ContentPolicyError", False),
+        (E.InvalidRequestError(), "InvalidRequestError", False),
+        (E.InternalProviderError(description="Server error"), "InternalProviderError", True),
+        (E.InvalidOutputError(description="Invalid JSON"), "InvalidOutputError", True),
+        (
+            E.StructuredOutputError(description="Invalid JSON", response_text='{"invalid":}'),
+            "StructuredOutputError",
+            True,
+        ),
+        (E.UnsupportedSchemaError(description="Unions"), "UnsupportedSchemaError", False),
+        (E.UnknownError(), "UnknownError", False),
+        (E.ToolNotFoundError(tool_name="T", available_tools=[]), "ToolNotFoundError", True),
+        (
+            E.ToolParameterValidationError(tool_name="T", description="Expected string"),
+            "ToolParameterValidationError",
+            True,
+        ),
+        (
+            E.InvalidToolResultError(tool_name="T", description="missing field"),
+            "InvalidToolResultError",
+            False,
+        ),
+        (
+            E.ToolResultEncodingError(tool_name="T", tool_result={}, description="Cannot encode"),
+            "ToolResultEncodingError",
+            False,
+        ),
+        (
+            E.ToolConfigurationError(tool_name="T", description="Invalid ID"),
+            "ToolConfigurationError",
+            False,
+        ),
+    ]
+    assert [(error._tag, error.is_retryable) for error, _, _ in cases] == [
+        (tag, retryable) for _, tag, retryable in cases
+    ]
+
+
+@pytest.mark.parametrize(
+    ("reason", "expected"),
+    [
+        pytest.param(
+            E.ToolParameterValidationError(
+                tool_name="GetWeather", description="Expected string, got number"
+            ),
+            ["Invalid parameters for tool 'GetWeather'", "Expected string, got number"],
+            id="ToolParameterValidationError / should format message with tool name and "
+            "validation message",
+        ),
+        pytest.param(
+            E.InvalidToolResultError(
+                tool_name="GetWeather", description="missing 'temperature' field"
+            ),
+            ["Tool 'GetWeather' returned invalid result", "missing 'temperature' field"],
+            id="InvalidToolResultError / should format message with tool name and description",
+        ),
+        pytest.param(
+            E.ToolResultEncodingError(
+                tool_name="GetWeather",
+                tool_result={"circular": "ref"},
+                description="Cannot encode circular reference",
+            ),
+            ["Failed to encode result for tool 'GetWeather'", "Cannot encode circular reference"],
+            id="ToolResultEncodingError / should format message with tool name and description",
+        ),
+        pytest.param(
+            E.ToolConfigurationError(
+                tool_name="OpenAiWebSearch",
+                description="search_context_size must be between 1 and 10",
+            ),
+            [
+                "Invalid configuration for tool 'OpenAiWebSearch'",
+                "search_context_size must be between 1 and 10",
+            ],
+            id="ToolConfigurationError / should format message with tool name and description",
+        ),
+    ],
+)
+def test_formats_tool_name_and_description(reason: E.AiErrorReason, expected: list[str]):
+    """The consolidated message titles of Effect's 4.1.4 ``AiError.test.ts``."""
+    for text in expected:
+        assert text in reason.message

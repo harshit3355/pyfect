@@ -164,6 +164,33 @@ def _types(parts: Sequence[Any]) -> list[str]:
 # generateText --------------------------------------------------------------------------
 
 
+SearchTool = T.make("Search", parameters=S.Record(S.String, S.String))
+
+
+@testing.effect
+def test_non_strict_record_params():
+    """generateText / advertises and handles non-strict record parameters"""
+    received: list[object] = []
+    toolkit = K.make(SearchTool)
+
+    def handle(params: object, _: Any) -> Any:
+        received.append(params)
+        return fx.void
+
+    mock = mock_json(_calls(("call_1", "Search", {"status": "open"})))
+    yield from _provided(
+        lm.generate_text("Search", toolkit=toolkit),
+        mock,
+        "gpt-4o-mini",
+        {"strict_json_schema": False},
+        toolkit.to_layer(SearchTool.handler(handle)),
+    )
+    function = mock.bodies[0]["tools"][0]["function"]
+    assert function["strict"] is False
+    assert function["parameters"] == {"type": "object", "additionalProperties": {"type": "string"}}
+    assert received == [{"status": "open"}]
+
+
 @testing.effect
 def test_text_only_user_messages():
     """generateText / serializes text-only user messages and decodes text output"""
@@ -186,6 +213,33 @@ def test_text_only_user_messages():
         {"role": "user", "content": "first\nsecond"},
         {"role": "user", "content": ""},
     ]
+
+
+@pytest.mark.parametrize(
+    ("model", "role"),
+    [
+        ("o3", "developer"),
+        ("olmo-2", "system"),
+        ("openai/gpt-oss-120b", "system"),
+        ("openai/o3", "system"),
+    ],
+    ids=[
+        "sends the system prompt as a developer message for o3",
+        "sends the system prompt as a system message for olmo-2",
+        "sends the system prompt as a system message for openai/gpt-oss-120b",
+        "sends the system prompt as a system message for openai/o3",
+    ],
+)
+@testing.effect
+def test_system_prompt_role(model: str, role: str):
+    """generateText / sends the system prompt as a ${role} message for ${model}"""
+    mock = mock_json(completion())
+    prompt = [
+        {"role": "system", "content": "Be brief."},
+        {"role": "user", "content": [{"type": "text", "text": "hello"}]},
+    ]
+    yield from _provided(lm.generate_text(prompt), mock, model)
+    assert mock.bodies[0]["messages"][0] == {"role": role, "content": "Be brief."}
 
 
 @testing.effect

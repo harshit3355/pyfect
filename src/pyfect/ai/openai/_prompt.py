@@ -262,10 +262,15 @@ class _Messages:
     def _tool_call(self, part: Pr.ToolCallPart, executed: list[Any]) -> None:
         id = _item_id(part)
         status = _status(part)
+        result = _paired(part, executed, Pr.ToolResultPart) if part.provider_executed else None
+        # A stored provider-executed call and its result are one item: the
+        # result sends the single reference.
+        if self.use_item_references and result is not None:
+            return
         if self._skipped_or_referenced(id):
             return
         if part.provider_executed:
-            self._provider_call(part, executed)
+            self._provider_call(part, result)
             return
         name = self.names.get_provider_name(part.name)
         local_shell = provider_tool(self.options, "OpenAiLocalShell")
@@ -304,17 +309,9 @@ class _Messages:
             item["id"] = id
         self.items.append(_with_status(item, status))
 
-    def _provider_call(self, part: Pr.ToolCallPart, executed: list[Any]) -> None:
+    def _provider_call(self, part: Pr.ToolCallPart, result: Pr.ToolResultPart | None) -> None:
         if not self.replays_provider_items:
             return
-        result = next(
-            (
-                c
-                for c in executed
-                if isinstance(c, Pr.ToolResultPart) and c.id == part.id and c.name == part.name
-            ),
-            None,
-        )
         if result is None:
             raise _unreplayable(part.name, part.id)
         if _denied(result.result):
@@ -335,15 +332,7 @@ class _Messages:
             id = P.or_default(_item_id(part), part.id)
             self.items.append({"type": "item_reference", "id": id})
         elif part.provider_executed and self.replays_provider_items:
-            call = next(
-                (
-                    c
-                    for c in executed
-                    if isinstance(c, Pr.ToolCallPart) and c.id == part.id and c.name == part.name
-                ),
-                None,
-            )
-            if call is None:
+            if _paired(part, executed, Pr.ToolCallPart) is None:
                 raise _unreplayable(part.name, part.id)
 
     def tool(self, message: Pr.ToolMessage) -> None:
@@ -387,7 +376,7 @@ class _Messages:
                     "id": id,
                     "type": f"{kind}_call_output",
                     "call_id": part.id,
-                    "output": part.result,
+                    "output": _shell_output(part),
                 }
                 self.items.append(_with_status(item, status))
                 return
@@ -549,3 +538,19 @@ def prepare_messages(
 
 
 __all__ = ["KEY", "MODULE", "Item", "is_reasoning_model", "prepare_messages", "provider_tool"]
+
+
+def _shell_output(part: Pr.ToolResultPart) -> object:
+    """A Shell / LocalShell result as OpenAI takes it: a success is the tool's
+    ``{output}`` and is sent unwrapped; a returned failure goes as it is."""
+    return part.result if part.is_failure else P.obj(part.result).get("output")
+
+
+def _paired[K: Pr.ToolCallPart | Pr.ToolResultPart](
+    part: Pr.ToolCallPart | Pr.ToolResultPart, executed: list[Any], kind: type[K]
+) -> K | None:
+    """The provider-executed ``kind`` part paired with ``part`` (same id and name)."""
+    return next(
+        (c for c in executed if isinstance(c, kind) and c.id == part.id and c.name == part.name),
+        None,
+    )

@@ -498,3 +498,127 @@ def test_requests_still_running_end_with_the_server():
 
     yield from fx.scoped(served())
     yield from interrupted.wait().timeout("5 seconds").or_die()
+
+
+def _initialized(write: Any, transport: CustomTransport) -> fx.Effect[None]:
+    @fx.gen
+    def run():
+        yield from write(
+            1, request("initialize", "initialize", _initialize("2025-11-25", "client"))
+        )
+        yield from transport.outbound.take()
+        yield from write(1, request("", "notifications/initialized", {}, notification=True))
+
+    return run
+
+
+_PROGRESS_CALL = request(
+    "work", "tools/call", {"name": "Progress", "_meta": {"progressToken": "request"}}
+)
+
+
+@testing.effect
+def test_drops_queued_progress_after_cancellation_but_preserves_background_progress():
+    """McpServer / drops queued progress after cancellation but preserves background progress"""
+    blocked = Deferred[None]()
+    release = Deferred[None]()
+    queued = Deferred[None]()
+    cancelled = Deferred[None]()
+
+    def send(_: int, message: Message) -> fx.Effect[None]:
+        if message["_tag"] == "Request" and message["tag"] == "notifications/message":
+            return blocked.succeed(None).and_then(release.wait())
+        return fx.succeed(None)
+
+    transport = yield from custom_transport(client_ids={1}, send=send)
+    context = yield from _served(transport, [P.v2025_11_25], name="ProgressCancellation").build()
+    server = context.get(M.McpServer)
+
+    def handle(_: object) -> fx.Effect[Any, Any, Any]:
+        @fx.gen
+        def run():
+            progress: MS.JsonObject = {"progressToken": "request", "progress": 1}
+            yield from server.notify("notifications/progress", progress).fork(
+                start_immediately=True
+            )
+            yield from queued.succeed(None)
+            return (yield from fx.never)
+
+        return run.ensuring(cancelled.succeed(None).as_void())
+
+    yield from server.add_tool(_empty_tool("Progress", handle))
+    write = yield from transport.ready.wait()
+    yield from _initialized(write, transport)
+    yield from server.notify(
+        "notifications/message", {"level": "error", "data": "blocked"}
+    ).fork_scoped(start_immediately=True)
+    yield from blocked.wait()
+    yield from write(1, _PROGRESS_CALL)
+    yield from queued.wait()
+    yield from write(
+        1, request("", "notifications/cancelled", {"requestId": "work"}, notification=True)
+    )
+    yield from cancelled.wait()
+    yield from release.succeed(None)
+    # Await a later notification so the assertion cannot race the delivery chain.
+    yield from server.notify(
+        "notifications/progress", {"progressToken": "background", "progress": 1}
+    )
+    first = (yield from transport.outbound.take())[1]
+    assert first["tag"] == "notifications/message"
+    second = (yield from transport.outbound.take())[1]
+    assert second["tag"] == "notifications/progress"
+    assert second["payload"] == {"progressToken": "background", "progress": 1}
+    assert (yield from transport.outbound.size()) == 0
+
+
+@testing.effect
+def test_drops_progress_when_the_transport_disconnects_during_projection():
+    """McpServer / drops progress when the transport disconnects during projection
+
+    Adapted: pyfect projects a notification synchronously, so the progress waits behind an
+    earlier write to the client instead, and the client disconnects meanwhile."""
+    blocked = Deferred[None]()
+    release = Deferred[None]()
+    delivered = Deferred[None]()
+    cancelled = Deferred[None]()
+    client_ids = {1}
+
+    def send(_: int, message: Message) -> fx.Effect[None]:
+        if message["_tag"] == "Request" and message["tag"] == "notifications/message":
+            return blocked.succeed(None).and_then(release.wait())
+        return fx.succeed(None)
+
+    transport = yield from custom_transport(client_ids=client_ids, send=send)
+    context = yield from _served(transport, [P.v2025_11_25], name="ProgressCancellation").build()
+    server = context.get(M.McpServer)
+    scope = yield from Scope()
+
+    def handle(_: object) -> fx.Effect[Any, Any, Any]:
+        @fx.gen
+        def run():
+            progress: MS.JsonObject = {"progressToken": "request", "progress": 1}
+            yield from (
+                server.notify("notifications/progress", progress)
+                .ensuring(delivered.succeed(None).as_void())
+                .fork_in(scope, start_immediately=True)
+            )
+            return (yield from fx.never)
+
+        return run.ensuring(cancelled.succeed(None).as_void())
+
+    yield from server.add_tool(_empty_tool("Progress", handle))
+    write = yield from transport.ready.wait()
+    yield from _initialized(write, transport)
+    yield from server.notify(
+        "notifications/message", {"level": "error", "data": "blocked"}
+    ).fork_scoped(start_immediately=True)
+    yield from blocked.wait()
+    yield from write(1, _PROGRESS_CALL)
+    client_ids.discard(1)
+    yield from transport.disconnects.offer(1)
+    yield from cancelled.wait()
+    yield from release.succeed(None)
+    yield from delivered.wait()
+    assert (yield from transport.outbound.take())[1]["tag"] == "notifications/message"
+    assert (yield from transport.outbound.size()) == 0

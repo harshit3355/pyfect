@@ -39,7 +39,7 @@ from pyfect.ai.anthropic import _schema as W
 from pyfect.ai.anthropic._prompt import prepare_messages
 from pyfect.ai.anthropic._response import Part, make_response
 from pyfect.ai.anthropic._stream import make_stream_response
-from pyfect.ai.anthropic._tools import Capabilities, json_schema, prepare_tools
+from pyfect.ai.anthropic._tools import Capabilities, ToolCodecs, json_schema, prepare_tools
 from pyfect.ai.anthropic.client import AnthropicClient, MessageParams
 from pyfect.ai.anthropic.client import Service as ClientService
 from pyfect.ai.anthropic.telemetry import add_gen_ai_annotations
@@ -75,7 +75,7 @@ type Model = Literal[
 
 
 class OutputConfig(TypedDict, total=False):
-    effort: Literal["low", "medium", "high"] | None
+    effort: Literal["low", "medium", "high", "xhigh", "max"] | None
 
 
 class ConfigService(TypedDict, total=False):
@@ -169,6 +169,7 @@ def config_capabilities(config: ConfigService) -> Capabilities:
 class _Request:
     payload: dict[str, Any]
     params: MessageParams
+    codecs: ToolCodecs
 
 
 def _make_request(
@@ -176,6 +177,7 @@ def _make_request(
 ) -> Effect[_Request, AiError]:
     betas: dict[str, None] = {}
     capabilities = config_capabilities(config)
+    codecs = ToolCodecs(capabilities.supports_structured_output, config.get("strict_json_schema"))
     try:
         prepared = prepare_messages(
             options.prompt, names, betas, capabilities.supports_mid_conversation_system_messages
@@ -187,7 +189,7 @@ def _make_request(
         ):
             schema = json_schema(options.response_format.schema, "getOutputFormat")
             output_format = {"type": "json_schema", "schema": schema}
-        tools = prepare_tools(options, capabilities, config, betas, names)
+        tools = prepare_tools(options, capabilities, config, betas, names, codecs=codecs)
     except UnsupportedInput as error:
         return fx.fail(error.error)
     params: MessageParams = {}
@@ -210,7 +212,7 @@ def _make_request(
         output_config["effort"] = effort
     if output_config:
         payload["output_config"] = output_config
-    return fx.succeed(_Request(payload, params))
+    return fx.succeed(_Request(payload, params, codecs))
 
 
 # Telemetry ------------------------------------------------------------------------------
@@ -313,7 +315,7 @@ def make(
                 def respond(sent: tuple[W.Message, Any]) -> Effect[list[Part], AiError, Any]:
                     message, response = sent
                     _annotate_response(options.span, message)
-                    return make_response(options, message, response, names)
+                    return make_response(options, request.codecs, message, response, names)
 
                 return client.create_message(request.payload, request.params).flat_map(respond)
 
@@ -326,7 +328,12 @@ def make(
                 _annotate_request(options.span, request.payload)
                 return client.create_message_stream(request.payload, request.params).map(
                     lambda sent: make_stream_response(
-                        options, sent[1], sent[0], names, client.max_response_bytes
+                        options,
+                        sent[1],
+                        sent[0],
+                        names,
+                        codecs=request.codecs,
+                        max_chars=client.max_response_bytes,
                     )
                 )
 

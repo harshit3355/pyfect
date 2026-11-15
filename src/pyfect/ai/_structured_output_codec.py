@@ -229,6 +229,19 @@ def _optional_to_nullable(type: A.AST) -> A.AST:
     def encode(value: Option[object]) -> Option[object]:
         return Some(None) if value is None else value
 
-    return A.decode_to(
-        A.Union((type, A.null)), type, transform_optional(decode=decode, encode=encode)
+    from_ = (
+        A.replace_context(type, optional_key=False)
+        if _is_nullable(type)
+        else A.Union((type, A.null))
+    )
+    return A.decode_to(from_, type.to_type(), transform_optional(decode=decode, encode=encode))
+
+
+def _is_nullable(node: A.AST) -> bool:
+    """``node`` already accepts ``null`` and nothing (a check, an encoding) can
+    tell an absent key from a ``null`` one (Effect's ``isNullable``)."""
+    if node.checks is not None or node.encoding is not None:
+        return False
+    return isinstance(node, A.Null) or (
+        isinstance(node, A.Union) and any(map(_is_nullable, node.types))
     )

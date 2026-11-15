@@ -388,3 +388,40 @@ def test_every_provider_has_its_client():
     """So ``--check`` covers each provider's ``client.py``."""
     for target in gen.TARGETS.values():
         assert target.client_title is not None
+
+
+@pytest.mark.parametrize("source", ["", "a a"], ids=["missing", "twice"])
+def test_a_patch_matches_its_text_exactly_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, source: str
+):
+    """A patch whose text moved or repeats in a newer Generated.ts fails the run instead of
+    leaving the fix out or applying it where it doesn't belong."""
+    generated = tmp_path / "packages" / "ai" / "openai" / "src" / "Generated.ts"
+    generated.parent.mkdir(parents=True)
+    generated.write_text(source)
+    monkeypatch.setenv("PYFECT_REF", str(tmp_path))
+    target = gen.Target("openai", "OpenAI", "FunctionToolCall", patches=(("a", "b"),))
+    with pytest.raises(gen.GenerateError, match="a patch matches"):
+        target.read_source()
+
+
+def test_a_key_required_in_types_decodes_when_absent_and_stays_required_to_read():
+    """A patch release loosens decoding only: the exported TypedDict keeps the key required
+    (reading it stays legal under pyright) and says why on its line."""
+    target = gen.Target(
+        "openai", "OpenAI", "FunctionToolCall", required_in_types=(("Options", "max_tokens"),)
+    )
+    files = gen.generate(_STRUCT, target)
+    line = next(x for x in files["types.py"].splitlines() if x.startswith("Options = "))
+    assert '"max_tokens": "float"' in line
+    assert line.endswith("# a response may omit max_tokens; NotRequired from 0.7.0")
+    decode = S.decode_unknown_sync(_load_files(files).Options)
+    assert decode({"name": "a"}) == {"name": "a"}
+
+
+def test_a_key_required_in_types_must_name_an_optional_key():
+    target = gen.Target(
+        "openai", "OpenAI", "FunctionToolCall", required_in_types=(("Options", "name"),)
+    )
+    with pytest.raises(gen.GenerateError, match="names no optional key"):
+        gen.generate(_STRUCT, target)

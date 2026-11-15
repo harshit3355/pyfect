@@ -7511,6 +7511,35 @@ def check_ai_toolkit() -> None:
         lm.generate_object("hi", schema=S.Struct(AiWeather)),
         fx.Effect[lm.GenerateObjectResponse[Never, Never, AiWeather], AiError, lm.LanguageModel],
     )
+    # allow_empty=True wraps the value in an Option; a widened bool gives either, as in Effect.
+    allow_empty: bool = "hi".startswith("h")
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=allow_empty).map(
+            lambda response: response.value
+        ),
+        fx.Effect[Option[AiWeather], AiError, lm.LanguageModel]
+        | fx.Effect[AiWeather, AiError, lm.LanguageModel],
+    )
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=True),
+        fx.Effect[
+            lm.GenerateObjectResponse[Never, Never, Option[AiWeather]], AiError, lm.LanguageModel
+        ],
+    )
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=False),
+        fx.Effect[lm.GenerateObjectResponse[Never, Never, AiWeather], AiError, lm.LanguageModel],
+    )
+    assert_type(
+        lm.generate_object("hi", schema=S.Struct(AiWeather), toolkit=kit, allow_empty=True).map(
+            lambda response: response.value
+        ),
+        fx.Effect[
+            Option[AiWeather],
+            AiError | str,
+            lm.LanguageModel | AiDb | ai_toolkit.Handlers[Literal["Weather", "Clock"]],
+        ],
+    )
     assert_type(
         lm.stream_text("hi", toolkit=kit),
         Stream[
@@ -7546,6 +7575,12 @@ def check_ai_chat(chat: ai_chat.Service, persisted: ai_chat.PersistenceService) 
     assert_type(
         chat.generate_object("hi", schema=S.Struct(AiWeather)),
         fx.Effect[lm.GenerateObjectResponse[Never, Never, AiWeather], AiError, lm.LanguageModel],
+    )
+    assert_type(
+        chat.generate_object("hi", schema=S.Struct(AiWeather), allow_empty=True),
+        fx.Effect[
+            lm.GenerateObjectResponse[Never, Never, Option[AiWeather]], AiError, lm.LanguageModel
+        ],
     )
     assert_type(
         chat.stream_text("hi"),
@@ -7836,6 +7871,10 @@ def check_ai_providers() -> None:
         fx.Effect[lm.GenerateTextResponse[Never, Never], ai_error_module.AiError, lm.LanguageModel],
     )
     anthropic_lm.with_config_override({"max_token": 10})  # pyright: ignore[reportArgumentType]
+    # Every effort level Anthropic generates is accepted.
+    anthropic_lm.with_config_override({"output_config": {"effort": "xhigh"}})
+    anthropic_lm.with_config_override({"output_config": {"effort": "max"}})
+    anthropic_lm.with_config_override({"output_config": {"effort": "huge"}})  # pyright: ignore[reportArgumentType]
     compat_lm.with_config_override({"strict_json_schema": "yes"})  # pyright: ignore[reportArgumentType]
 
 

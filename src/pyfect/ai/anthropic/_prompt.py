@@ -14,30 +14,13 @@ from pyfect.ai import _provider as P
 from pyfect.ai import prompt as Pr
 from pyfect.ai._provider_tools import UnsupportedInput
 from pyfect.ai.ai_error import AiError, InvalidUserInputError
+from pyfect.ai.anthropic._server_tools import RESULT_BLOCKS, SERVER_CALLS, code_execution_block
 from pyfect.ai.tool import NameMapper
 
 type Block = dict[str, Any]
 
 _DATA_URL = re.compile(r"^data:[^;]+;base64,")
 _HTTP_URL = re.compile(r"^https?://", re.IGNORECASE)
-_SERVER_TOOLS = frozenset(
-    {"code_execution", "tool_search_tool_regex", "tool_search_tool_bm25", "web_fetch", "web_search"}
-)
-_CODE_EXECUTION_RESULTS = {
-    "code_execution_result": "code_execution_tool_result",
-    # Effect 4.1.2 drops this one, leaving the server_tool_use without its result.
-    "code_execution_tool_result_error": "code_execution_tool_result",
-    "bash_code_execution_result": "bash_code_execution_tool_result",
-    "bash_code_execution_tool_result_error": "bash_code_execution_tool_result",
-    "text_editor_code_execution_tool_result": "text_editor_code_execution_tool_result",
-    "text_editor_code_execution_tool_result_error": "text_editor_code_execution_tool_result",
-}
-_SERVER_RESULTS = {
-    "web_fetch": "web_fetch_tool_result",
-    "web_search": "web_search_tool_result",
-    "tool_search_tool_regex": "tool_search_tool_result",
-    "tool_search_tool_bm25": "tool_search_tool_result",
-}
 
 
 def anthropic_options(options: Pr.ProviderOptions) -> dict[str, Any]:
@@ -238,7 +221,7 @@ def _server_tool_use(part: Pr.ToolCallPart, tool_name: str) -> Block | None:
         return {"type": "server_tool_use", "id": part.id, "name": kind, "input": rest}
     if tool_name == "code_execution" and kind == "programmatic-tool-call":
         return {"type": "server_tool_use", "id": part.id, "name": tool_name, "input": rest}
-    if tool_name in _SERVER_TOOLS:
+    if tool_name in SERVER_CALLS.values():
         return {"type": "server_tool_use", "id": part.id, "name": tool_name, "input": params}
     return None
 
@@ -290,11 +273,10 @@ def _tool_result(part: Pr.ToolResultPart, names: NameMapper, mcp_ids: set[str]) 
     result = part.result
     if tool_name == "code_execution":
         kind = P.obj(result).get("type")
-        block_type = _CODE_EXECUTION_RESULTS.get(kind) if isinstance(kind, str) else None
-        if block_type is None:
+        if not isinstance(kind, str):
             return None
-        return {"type": block_type, "tool_use_id": part.id, "content": result}
-    block_type = _SERVER_RESULTS.get(tool_name)
+        return {"type": code_execution_block(kind), "tool_use_id": part.id, "content": result}
+    block_type = RESULT_BLOCKS.get(tool_name)
     if block_type is None:
         return None
     if block_type == "tool_search_tool_result" and isinstance(result, (list, tuple)):

@@ -10,7 +10,7 @@ from pyfect._catch import catch_tag
 from pyfect._concurrency import for_each
 from pyfect._core import Effect
 from pyfect._fiber import Fiber
-from pyfect.ai._mcp import batch, frames
+from pyfect.ai._mcp import batch, frames, liveness
 from pyfect.ai._mcp.core import McpServer
 from pyfect.ai._mcp.dispatch import Connection, ServerInfo, error_response
 from pyfect.ai.mcp_protocol import Registry
@@ -52,15 +52,17 @@ def serve(info: ServerInfo, registry: Registry) -> Effect[None, PlatformError, M
         io = yield from Stdio()
         # Bounded, as in Effect's stdio protocol: a client that stops reading
         # holds up writers, so a subscription's backlog can overflow.
-        lines = Queue[str, Done](_OUTPUT_BUFFER)
+        # Each line with its message, so a progress notification that waited here past
+        # its request's end is dropped (``liveness``).
+        lines = Queue[tuple[str, object], Done](_OUTPUT_BUFFER)
 
         def write(message: JsonObject) -> Effect[None]:
-            return lines.offer(_encode(message)).as_void()
+            return lines.offer((_encode(message), message)).as_void()
 
         batches: list[Fiber[None, Never]] = []
 
         def write_batch(replies: list[JsonObject]) -> Effect[None]:
-            return lines.offer(_encode(cast("Any", replies))).as_void()
+            return lines.offer((_encode(cast("Any", replies)), replies)).as_void()
 
         level = yield from CurrentLogLevel()
         connection = Connection(
@@ -93,7 +95,13 @@ def serve(info: ServerInfo, registry: Registry) -> Effect[None, PlatformError, M
                 return answered.fork_daemon().map(batches.append)
             return connection.dispatch(message, write)
 
-        writer = yield from stream.from_queue(lines).run(io.stdout()).fork()
+        writer = yield from (
+            stream.from_queue(lines)
+            .filter(lambda line: not liveness.dropped(line[1]))
+            .map(lambda line: line[0])
+            .run(io.stdout())
+            .fork()
+        )
         server.connect(connection)
         # A line past 16 MiB ends the server, as Effect's NDJSON-RPC framing does.
         reading = (
@@ -104,7 +112,7 @@ def serve(info: ServerInfo, registry: Registry) -> Effect[None, PlatformError, M
         )
         finished = suspend(lambda: for_each(list(batches), _await_batch)).as_void()
         serving = yield from (
-            reading.and_then(connection.drain())
+            reading.and_then(connection.drain(complete_subscriptions=True))
             .and_then(finished)
             .ensuring(
                 sync(lambda: server.disconnect(connection.client_id)).and_then(connection.close())

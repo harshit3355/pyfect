@@ -337,11 +337,20 @@ def _tool_handler(
 # --- resources -----------------------------------------------------------------------------
 
 
-def _resolve_content(uri: str, content: ResourceContent) -> ReadResourceResult:
-    if isinstance(content, str):
-        return {"contents": [{"uri": uri, "text": content}]}
-    if isinstance(content, bytes):
-        return {"contents": [{"uri": uri, "blob": base64.b64encode(content).decode("ascii")}]}
+def _resolve_content(
+    uri: str, content: ResourceContent, *, mime_type: str | None
+) -> ReadResourceResult:
+    """A string or bytes handler answer, as the one content of ``uri``, carrying the
+    registered MIME type; a full result is the handler's own answer and is kept as is."""
+    if isinstance(content, (str, bytes)):
+        part: dict[str, Any] = {"uri": uri}
+        if mime_type is not None:
+            part["mimeType"] = mime_type
+        if isinstance(content, str):
+            part["text"] = content
+        else:
+            part["blob"] = base64.b64encode(content).decode("ascii")
+        return cast("ReadResourceResult", {"contents": [part]})
     return content
 
 
@@ -404,7 +413,7 @@ def register_resource[E = Never, R = Never](
             annotations=_resource_annotations(audience, priority),
         )
         handle: Effect[ReadResourceResult, McpError, Any] = _internal(
-            content.map(lambda c: _resolve_content(uri, c))
+            content.map(lambda c: _resolve_content(uri, c, mime_type=mime_type))
         )
         yield from server.add_resource(
             ResourceEntry(resource, annotations or Context.empty(), handle, services)
@@ -555,7 +564,7 @@ def register_resource_template[*Ts, E = Never, R = Never](
                 .flat_map(
                     lambda decoded: _internal(
                         suspend(lambda: cast("Any", content)(uri, *decoded)).map(
-                            lambda c: _resolve_content(uri, c)
+                            lambda c: _resolve_content(uri, c, mime_type=mime_type)
                         )
                     )
                 )

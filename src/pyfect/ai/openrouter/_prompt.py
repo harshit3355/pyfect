@@ -74,6 +74,19 @@ def _b64(data: bytes) -> str:
     return base64.b64encode(data).decode()
 
 
+_URL_DATA = re.compile(r"^(data:|https?://)", re.IGNORECASE)
+
+
+def file_url(data: str | bytes | Url, media_type: str) -> str:
+    """Effect's ``getFileUrl``: a URL as is, bytes or a bare base64 string
+    as a ``data:`` URL."""
+    if isinstance(data, Url):
+        return str(data)
+    if isinstance(data, bytes):
+        return f"data:{media_type};base64,{_b64(data)}"
+    return data if _URL_DATA.match(data) else f"data:{media_type};base64,{data}"
+
+
 def _with_cache(block: Block, control: object) -> Block:
     if control is not None:
         block["cache_control"] = control
@@ -90,13 +103,8 @@ def _file(part: Pr.FilePart) -> Block:
     media_type = part.media_type
     if media_type.startswith("image/"):
         image_type = "image/jpeg" if media_type == "image/*" else media_type
-        if isinstance(data, Url):
-            url = str(data)
-        elif isinstance(data, bytes):
-            url = f"data:{image_type};base64,{_b64(data)}"
-        else:
-            url = data
-        return _with_cache({"type": "image_url", "image_url": {"url": url}}, control)
+        block = {"type": "image_url", "image_url": {"url": file_url(data, image_type)}}
+        return _with_cache(block, control)
     if media_type.startswith("audio/"):
         audio_format = AUDIO_FORMATS.get(media_type.lower())
         if audio_format is None:
@@ -114,13 +122,8 @@ def _file(part: Pr.FilePart) -> Block:
         return _with_cache(block, control)
     name = options(part).get("fileName")
     file_name = name if name is not None else P.or_default(part.file_name, "")
-    if isinstance(data, Url):
-        file_data = str(data)
-    elif isinstance(data, bytes):
-        file_data = f"data:{media_type};base64,{_b64(data)}"
-    else:
-        file_data = data
-    block = {"type": "file", "file": {"filename": file_name, "file_data": file_data}}
+    file = {"filename": file_name, "file_data": file_url(data, media_type)}
+    block = {"type": "file", "file": file}
     return _with_cache(block, control)
 
 
