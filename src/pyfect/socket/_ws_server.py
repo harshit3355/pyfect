@@ -6,6 +6,7 @@ which gets the native socket as ``WebSocket`` and the upgrade request as
 
 from __future__ import annotations
 
+import asyncio
 import inspect
 from http import HTTPStatus
 from typing import Any, Never
@@ -21,6 +22,7 @@ except ImportError as error:  # pragma: no cover - depends on the environment
 from pyfect._core import Effect
 from pyfect.effect import provide_service, succeed, sync
 from pyfect.http._authority import parse_authority
+from pyfect.http.live_server._listener import ABORT_GRACE_PERIOD
 from pyfect.http.origin import AllowedOrigins, OriginPolicy
 from pyfect.net.net_address import inet_address_from_native_unsafe
 from pyfect.scope import Scope, acquire_release
@@ -119,7 +121,14 @@ def _make(
         async def close() -> None:
             accepted.close()
             server.close()
-            await server.wait_closed()
+            # websockets waits for every connection, one still in its TLS or
+            # HTTP handshake too (up to its ``open_timeout``); Node's
+            # ``server.close`` drops those at once.
+            try:
+                await asyncio.wait_for(server.wait_closed(), ABORT_GRACE_PERIOD.to_seconds())
+            except TimeoutError:
+                server.server.abort_clients()
+                await server.wait_closed()
 
         return run(close).ignore()
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.6.7 (unreleased)
+
+### Fixed
+
+- hypercorn over TLS: shutdown is bounded by the graceful timeout.
+- `socket.server.make_web_socket`: closing is bounded by the abort grace period, as Effect's.
+
 ## 0.6.6 (2026-11-15)
 
 ### Added

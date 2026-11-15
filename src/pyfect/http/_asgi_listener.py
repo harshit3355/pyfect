@@ -222,13 +222,25 @@ class Running:
         return _wait(self.submit(started), "work")
 
     def stop(self) -> Effect[None]:
-        """Stop accepting and wait for the engine to exit (its own
-        graceful timeout cancels what is still running)."""
+        """Stop accepting and give the engine ``graceful`` seconds and the
+        abort grace period to exit."""
+        return self._stop_within(self.graceful + ABORT_GRACE_PERIOD)
+
+    def _stop_within(self, within: Duration) -> Effect[None]:
+        """Stop accepting and wait up to ``within`` for the engine to exit,
+        then cancel it. Its own timeouts do not bound its exit: hypercorn
+        waits for asyncio's ``Server.wait_closed``, which waits for every
+        connection, one still in its TLS handshake too."""
 
         def body() -> Effect[None]:
             self.server.should_exit = True
-            assert self.served is not None
-            return _wait(self.served, "event").ignore()
+            served = self.served
+            assert served is not None
+            return (
+                _wait(served, "event")
+                .ignore()
+                .timeout_or_else(within, lambda: sync(served.cancel).as_(None))
+            )
 
         return suspend(body)
 
@@ -254,7 +266,7 @@ class Running:
                 served.timeout_option(self.graceful)
                 .and_then(requests.close(exit))
                 .and_then(suspend(end_responses))
-                .and_then(self.stop())
+                .and_then(self._stop_within(ABORT_GRACE_PERIOD))
             )
 
         return suspend(body)

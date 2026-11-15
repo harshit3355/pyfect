@@ -7,6 +7,7 @@ hypercorn's shutdown that long (dogfood turnstile #2)."""
 from __future__ import annotations
 
 import datetime
+import socket
 import ssl
 import threading
 import time
@@ -30,8 +31,10 @@ from pyfect.http import (
     server_response,
     uvicorn_server,
 )
+from pyfect.http.live_server._listener import ABORT_GRACE_PERIOD
 from pyfect.net.net_address import InetAddressV4
 from pyfect.scope import scoped
+from pyfect.socket import server as socket_server
 
 GRACEFUL_SECONDS = 2.0
 SLACK_SECONDS = 1.0
@@ -80,8 +83,10 @@ type Adapter = Literal["hypercorn", "uvicorn", "live"]
 type Http = Literal["h1", "h2"]
 
 
-def _server(adapter: Adapter, pem: Pem | None) -> fx.Layer[Any, Any, Any]:
-    timeout = f"{GRACEFUL_SECONDS} seconds"
+def _server(
+    adapter: Adapter, pem: Pem | None, graceful: float = GRACEFUL_SECONDS
+) -> fx.Layer[Any, Any, Any]:
+    timeout = f"{graceful} seconds"
     host = "127.0.0.1"
     match adapter:
         case "hypercorn":
@@ -164,6 +169,113 @@ def test_an_idle_keep_alive_connection_does_not_hold_the_shutdown(
 ) -> None:
     took = _shutdown_seconds(adapter, http, pem if tls else None)
     assert took <= EFFECT_SECONDS[http] + SLACK_SECONDS, f"shutdown took {took:.2f}s"
+
+
+type Stall = Literal["silent", "partial-hello"]
+
+STALLS: dict[Stall, bytes] = {"silent": b"", "partial-hello": b"\x16\x03\x01\x02\x00\x01"}
+"""What a client that never finishes its TLS handshake sends: nothing, or the start of a
+ClientHello."""
+
+STALL_SLACK_SECONDS = 2.0
+"""As ``SLACK_SECONDS``, doubled: the stall held shutdown for the handshake timeout (10 or 60
+seconds), so a looser bound still catches it and stays clear of a loaded runner."""
+
+
+def _stalled_shutdown_seconds(adapter: Adapter, stall: Stall, pem: Pem, graceful: float) -> float:
+    """Time how long the server takes to stop while a client sits in its TLS handshake."""
+    ports: list[int] = []
+    stop, stopped, ready = threading.Event(), threading.Event(), threading.Event()
+
+    @fx.fn
+    def serving():
+        running = yield from server.HttpServer()
+        assert isinstance(running.address, InetAddressV4)
+        ports.append(running.address.port)
+        ready.set()
+        yield from fx.blocking(stop.wait)
+
+    routes = router.add("GET", "/", server_response.text("ok"))
+    app = router.serve(routes, disable_logger=True, disable_listen_log=True)
+    served = _server(adapter, pem, graceful)
+    program = scoped(serving().pipe(fx.provide(app))).pipe(fx.provide(served))
+
+    def run() -> None:
+        fx.run_blocking(program.or_die())
+        stopped.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    assert ready.wait(10)
+    with socket.create_connection(("127.0.0.1", ports[0])) as client:
+        client.sendall(STALLS[stall])
+        time.sleep(0.1)  # let the server accept it
+        started = time.monotonic()
+        stop.set()
+        assert stopped.wait(20), "the server did not stop"
+        return time.monotonic() - started
+
+
+@pytest.mark.parametrize("stall", list(STALLS))
+@pytest.mark.parametrize("adapter", sorted({case.values[0] for case in _cases()}))
+def test_a_stalled_tls_handshake_does_not_hold_the_shutdown(
+    adapter: Adapter, stall: Stall, pem: Pem
+) -> None:
+    """``NodeHttpServer`` over https stops within ``gracefulShutdownTimeout`` while a client
+    never finishes its handshake. The bound: the graceful timeout, then the abort grace
+    period every adapter gives requests interrupted at its end."""
+    graceful = 1.0
+    took = _stalled_shutdown_seconds(adapter, stall, pem, graceful)
+    bound = graceful + ABORT_GRACE_PERIOD.to_seconds() + STALL_SLACK_SECONDS
+    assert took <= bound, f"shutdown took {took:.2f}s"
+
+
+type SocketServerKind = Literal["web-socket-tls", "web-socket", "tls"]
+
+
+def _socket_server(kind: SocketServerKind, pem: Pem) -> fx.Effect[Any, Any, Any]:
+    match kind:
+        case "web-socket-tls":
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            context.load_cert_chain(pem.cert_path, pem.key_path)
+            return socket_server.make_web_socket(0, "127.0.0.1", ssl=context)
+        case "web-socket":
+            return socket_server.make_web_socket(0, "127.0.0.1")
+        case "tls":
+            return socket_server.make_tls(cert=pem.cert, key=pem.key, host="127.0.0.1")
+
+
+@pytest.mark.parametrize("stall", list(STALLS))
+@pytest.mark.parametrize("kind", ["web-socket-tls", "web-socket", "tls"])
+def test_a_connection_still_opening_does_not_hold_a_socket_servers_close(
+    kind: SocketServerKind, stall: Stall, pem: Pem
+) -> None:
+    """Effect's ``NodeSocketServer`` closes at once while a client has connected but not
+    finished opening (Node's ``server.close`` drops connections that sent no request)."""
+    ports: list[int] = []
+    stop, stopped, ready = threading.Event(), threading.Event(), threading.Event()
+
+    @fx.fn
+    def serving():
+        running = yield from _socket_server(kind, pem)
+        assert isinstance(running.address, InetAddressV4)
+        ports.append(running.address.port)
+        ready.set()
+        yield from fx.blocking(stop.wait)
+
+    def run() -> None:
+        fx.run_blocking(scoped(serving()).or_die())
+        stopped.set()
+
+    threading.Thread(target=run, daemon=True).start()
+    assert ready.wait(10)
+    with socket.create_connection(("127.0.0.1", ports[0])) as client:
+        client.sendall(STALLS[stall])
+        time.sleep(0.1)  # let the server accept it
+        started = time.monotonic()
+        stop.set()
+        assert stopped.wait(20), "the server did not stop"
+        took = time.monotonic() - started
+    assert took <= ABORT_GRACE_PERIOD.to_seconds() + STALL_SLACK_SECONDS, f"close took {took:.2f}s"
 
 
 def test_every_server_adapter_is_covered() -> None:
