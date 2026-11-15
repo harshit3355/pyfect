@@ -92,6 +92,14 @@ class TlsOptions(Options):
     ``handshakeTimeout``, 120s)."""
 
 
+def _websocket_config(options: Options) -> WebSocketConfig:
+    deflate = options.get("websocket_per_message_deflate", False)
+    return WebSocketConfig(
+        options.get("websocket_max_message_size", DEFAULT_MAX_MESSAGE_SIZE),
+        PerMessageDeflate() if deflate is True else deflate or None,
+    )
+
+
 def _serve(listener: Listener, protocol: RequestProtocol, options: Options) -> HttpServerService:
     timeout = from_input_unsafe(options.get("graceful_shutdown_timeout", "20 seconds"))
     timeouts = Timeouts(
@@ -99,11 +107,7 @@ def _serve(listener: Listener, protocol: RequestProtocol, options: Options) -> H
         headers=from_input_unsafe(options.get("headers_timeout", "60 seconds")),
         request=from_input_unsafe(options.get("request_timeout", "300 seconds")),
     )
-    deflate = options.get("websocket_per_message_deflate", False)
-    websocket = WebSocketConfig(
-        options.get("websocket_max_message_size", DEFAULT_MAX_MESSAGE_SIZE),
-        PerMessageDeflate() if deflate is True else deflate or None,
-    )
+    websocket = _websocket_config(options)
 
     def serve(app: HttpApp, middleware: Middleware | None) -> Effect[None, Any, Scope]:
         def handle(request: SourceRequest, exchange: Exchange) -> Effect[None]:

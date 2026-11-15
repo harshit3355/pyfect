@@ -63,6 +63,7 @@ from pyfect.socket.datagram._model import (
 type Family = Literal["ipv4", "ipv6"]
 
 _MAX_DATAGRAM = 65536
+_READS_PER_CALLBACK = 32
 
 
 @dataclass(frozen=True, slots=True)
@@ -482,7 +483,9 @@ class _NativeSocket:
             get_loop().add_reader(self._fd, self._readable)
 
     def _readable(self) -> None:
-        while True:
+        # At most a batch per callback, as libuv: the selector calls again
+        # while datagrams are queued, and the loop's other sockets get turns.
+        for _ in range(_READS_PER_CALLBACK):
             try:
                 payload, sender = self._sock.recvfrom(_MAX_DATAGRAM)
             except (BlockingIOError, InterruptedError):

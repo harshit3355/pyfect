@@ -9,14 +9,13 @@ callbacks, and limits (``max_parts``, ``max_total_size``,
 
 from __future__ import annotations
 
-import codecs
 import math
 import re
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import ClassVar, Literal, Protocol
 
-from pyfect import byte_size
+from pyfect import _whatwg_encoding, byte_size
 from pyfect._js import text_encode
 from pyfect.http.multipart_parser import _content_type as ct
 from pyfect.http.multipart_parser._headers import Failure, HeadersParser, Parsed, PartHeaders
@@ -333,26 +332,11 @@ _BOUNDARY = re.compile(r"[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]
 """RFC 2046 §5.1.1: ``bchars``, at most 70, not ending in a space. The
 search for it costs its length on every write, so the bound matters."""
 
-_WINDOWS_1252 = frozenset({"iso-8859-1", "latin1", "latin-1", "l1", "ascii", "us-ascii"})
-
-
-def _codec(charset: str) -> str:
-    label = charset.strip().lower()
-    if label in ("", "utf-8", "utf8"):
-        return "utf-8"
-    if label in _WINDOWS_1252:
-        # The Encoding Standard reads these labels as windows-1252.
-        return "cp1252"
-    try:
-        return codecs.lookup(label).name
-    except LookupError:
-        return "utf-8"
-
 
 def decode_field(info: PartInfo, value: bytes) -> str:
-    """A field's value decoded by its ``charset`` (UTF-8 by default or for
-    an unknown one)."""
-    return value.decode(_codec(info.content_type_parameters.get("charset", "utf-8")), "replace")
+    """A field's value decoded by its ``charset`` as ``TextDecoder`` reads the
+    label (UTF-8 by default or for one outside the Encoding Standard)."""
+    return _whatwg_encoding.decode(info.content_type_parameters.get("charset", "utf-8"), value)
 
 
 __all__ = [

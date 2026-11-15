@@ -716,7 +716,8 @@ class Connection:
             self.list_change_revision = self.server.list_change_revision
             capabilities = projection.client_capabilities(protocol, payload["capabilities"])
             self.identity = Identity(capabilities, payload["clientInfo"])
-            self.initialize_payload = dict(params)
+            # The decoded fields only: the session keeps them for its life.
+            self.initialize_payload = dict(payload)
             result: Wire = {
                 "protocolVersion": protocol.protocol_version,
                 "capabilities": cast("Any", self.capabilities_for(protocol)),

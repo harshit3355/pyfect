@@ -1,5 +1,54 @@
 # Changelog
 
+## 0.6.6 (unreleased)
+
+### Fixed
+
+- `mcp_server.layer_http` reads an `initialize` under its own `max_initialize_bytes` limit
+  (64 KiB by default; a larger one gets 413), and a session keeps only the decoded
+  `initialize` fields, not the whole message.
+- A multipart field's `charset` is read as `TextDecoder` reads it, as in Effect: only the
+  WHATWG Encoding Standard's labels name a decoder, and any other label decodes as UTF-8,
+  instead of selecting any Python codec.
+- `hypercorn_server` WebSockets decline `permessage-deflate`, as Effect's `ws` server does,
+  take messages up to the same 100 MiB as `uvicorn_server`, and close the connection after a
+  too-large message instead of keeping it and its partial message.
+- `socket.server.make_web_socket` connections queue at most one incoming frame while no
+  handler reads them (websockets' `max_queue=1`; the client too), and the server declines
+  `permessage-deflate`, as Effect's `ws` server does. Both can be set through the serve options.
+- A multipart body has at most `MaxParts` parts, now 1000 by default (it was unbounded, as in
+  Effect); more fail with `TooManyParts`. Provide `MaxParts` to change it, `None` for no limit.
+- The router (and MCP resource templates) decode a path's `%25` escapes in one pass, in
+  time linear in the path's length.
+- An HttpApi path parameter followed by a character the router does not split on
+  (`/geo/:lat,:lng`) matches up to that character, in linear time; Effect's lazy `(.*?)`
+  could let it take the character too, at polynomial cost.
+- `middleware.decompression()` answers 400 to a body with data after the end of its
+  compressed stream, as the web `DecompressionStream` Effect decodes with does, instead of
+  keeping that data.
+- The httpx client decodes a response's `gzip`, `deflate` and `br` codings itself, in pieces
+  of at most 64 KiB as the body is read, so `with_body_limit` stops a compressed body before
+  it is inflated; httpx inflated each network chunk whole, and stacked codings multiplied it.
+- `uvicorn_server` WebSockets decline `permessage-deflate` by default, as Effect's `ws`
+  server does (`config={"ws_per_message_deflate": True}` turns it back on).
+- An ASGI request's (and WebSocket upgrade's) repeated header lines are joined once, in time
+  linear in their number.
+- `cookies.parse_header` skips the segments without `=` before the next `=` at once, in time
+  linear in the header's length.
+- The client cookie jar (`cookies.merge_into_array`, `with_cookies_ref`) refuses from a
+  plain-http response a `Secure` cookie, a `__Secure-` or `__Host-` name, and a cookie that
+  would replace or shadow a held `Secure` one (RFC 6265bis strict secure cookies), as
+  browsers do; Effect's jar takes them.
+- `AllowedOrigins`' same-origin check takes the request's scheme: over `https` or `wss` a
+  plain-http page of the same host is not the server's own origin, as browsers see it
+  (`OriginPolicy.allows` takes an optional `scheme`). An https origin on a plain request
+  still is, for servers behind a proxy that ends TLS.
+- A UDP socket reads at most 32 datagrams per read callback, as libuv does, so a full
+  receive queue no longer holds the network loop the process's other sockets run on.
+- OpenAI WebSocket mode counts each response's messages against `max_response_bytes`, as the
+  HTTP transport counts a response body: past it the response fails with the same error and
+  the connection is replaced.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated

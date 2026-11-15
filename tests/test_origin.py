@@ -262,3 +262,32 @@ def test_every_server_request_upgrade_checks_the_origin() -> None:
         if cls.__module__.startswith("pyfect.") and "upgrade" in vars(cls)
     ]
     assert overridden == []
+
+
+@pytest.mark.parametrize(
+    ("sent", "scheme", "allowed"),
+    [
+        ("http://app.example", "https", False),  # an insecure page of the host
+        ("http://app.example", "wss", False),
+        ("https://app.example", "https", True),
+        ("https://app.example", "wss", True),
+        ("http://app.example", "http", True),
+        ("https://app.example", "http", True),  # behind a proxy that ends TLS
+    ],
+)
+def test_an_insecure_origin_is_not_the_secure_servers_own(
+    sent: str, scheme: str, allowed: bool
+) -> None:
+    """Browsers treat http://host and https://host as different origins: a page
+    on the plain-http one must not pass as the https server's own."""
+    own = Authority("app.example")
+    assert origin.SAME_ORIGIN.allows(sent, own, scheme) is allowed
+    assert origin.allow("http://app.example").allows(sent, own, scheme)
+
+
+def test_an_asgi_wss_upgrade_from_the_http_origin_is_refused() -> None:
+    request = WebRequest("https://app.example/ws", headers={"origin": "http://app.example"})
+    from pyfect.http.web_handler import request_from_web
+
+    allowed = fx.run_blocking(origin.origin_allowed(request_from_web(request)))
+    assert allowed is False

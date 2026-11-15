@@ -87,6 +87,9 @@ def _uvicorn(dispatch: Dispatch, options: Options) -> uvicorn.Server:
         "log_config": None,
         "server_header": False,
         "ws_max_size": DEFAULT_MAX_MESSAGE_SIZE,
+        # Off, as in Effect's ``ws`` server: an inflated message costs the
+        # peer a thousandth of its size.
+        "ws_per_message_deflate": False,
         "proxy_headers": False,
         **options.get("config", {}),
     }

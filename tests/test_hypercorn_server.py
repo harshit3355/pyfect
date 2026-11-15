@@ -1,6 +1,9 @@
 """``pyfect.http.hypercorn_server``: HTTP/2, which Effect's ``NodeHttpServer``
 serves when given ``node:http2``'s ``createServer``."""
 
+import base64
+import os
+import socket
 from typing import Any
 
 import httpx
@@ -8,8 +11,10 @@ import httpx
 import pyfect as fx
 from pyfect import effect
 from pyfect.http import hypercorn_server, router, server, server_response
+from pyfect.http.server_request import HttpServerRequest
 from pyfect.net.net_address import InetAddressV4
 from pyfect.scope import scoped
+from pyfect.socket import reader_bytes
 
 
 def _speak_http2(port: int) -> tuple[str, str]:
@@ -46,3 +51,78 @@ def test_the_server_stops_when_its_scope_closes() -> None:
         except httpx.TransportError:
             return
     raise AssertionError("the server still accepts connections")
+
+
+def _upgrade(port: int) -> tuple[socket.socket, str]:
+    conn = socket.create_connection(("127.0.0.1", port), timeout=10)
+    key = base64.b64encode(os.urandom(16)).decode()
+    conn.sendall(
+        f"GET /ws HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nUpgrade: websocket\r\n"
+        "Connection: Upgrade\r\nSec-WebSocket-Version: 13\r\n"
+        f"Sec-WebSocket-Key: {key}\r\nSec-WebSocket-Extensions: permessage-deflate\r\n\r\n".encode()
+    )
+    reply = b""
+    while b"\r\n\r\n" not in reply:
+        reply += conn.recv(4096)
+    return conn, reply.split(b"\r\n\r\n")[0].decode().lower()
+
+
+def _frame(opcode: int, payload: bytes, *, fin: bool) -> bytes:
+    size = len(payload)
+    head = bytes([(0x80 if fin else 0) | opcode])
+    if size < 126:
+        head += bytes([0x80 | size])
+    elif size < 65536:
+        head += bytes([0x80 | 126]) + size.to_bytes(2, "big")
+    else:
+        head += bytes([0x80 | 127]) + size.to_bytes(8, "big")
+    return head + b"\0\0\0\0" + payload  # a zero mask leaves the payload as it is
+
+
+def _too_large(port: int) -> tuple[str, bytes]:
+    """The handshake's reply, then what the server sends after an oversized
+    message until it closes the connection (``b"open"`` if it stays open)."""
+    conn, head = _upgrade(port)
+    with conn:
+        conn.sendall(_frame(2, b"x" * 4096, fin=False))
+        conn.settimeout(5)
+        got = b""
+        try:
+            for _ in range(8):
+                conn.sendall(_frame(0, b"x" * 4096, fin=False))
+            while chunk := conn.recv(4096):
+                got += chunk
+        except TimeoutError:
+            return head, b"open"
+        except OSError:
+            pass
+        return head, got
+
+
+def test_web_sockets_refuse_compression_and_close_after_a_too_large_message() -> None:
+    """Effect's ``ws`` server leaves permessage-deflate off and closes the
+    socket on a too-large message: an inflated frame has no size bound."""
+
+    @fx.fn
+    def hold():
+        request = yield from HttpServerRequest()
+        ws = yield from request.upgrade
+        pull = yield from reader_bytes(ws)
+        while True:
+            yield from pull
+
+    @fx.fn
+    def program():
+        running = yield from server.HttpServer()
+        assert isinstance(running.address, InetAddressV4)
+        at = running.address.port
+        return (yield from effect.blocking(lambda: _too_large(at)))
+
+    routes: fx.Layer[Any, Any, Any] = router.add("GET", "/ws", hold())
+    served = program().pipe(fx.provide(router.serve(routes, disable_logger=True)))
+    engine = hypercorn_server.layer_test(config={"websocket_max_message_size": 8192})
+    head, after = fx.run_blocking(scoped(served).pipe(fx.provide(engine)).or_die())
+    assert "101" in head.splitlines()[0]
+    assert "permessage-deflate" not in head
+    assert after != b"open"
+    assert b"\x88\x02\x03\xf1" in after  # the 1009 close

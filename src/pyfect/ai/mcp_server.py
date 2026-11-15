@@ -316,6 +316,7 @@ def layer_http[RE = Never, RR = Never](
     max_sessions: int = _sessions.DEFAULT_MAX_SESSIONS,
     session_idle_timeout: DurationInput = _sessions.DEFAULT_IDLE_TIMEOUT,
     max_message_bytes: byte_size.Input = _sessions.DEFAULT_MAX_MESSAGE_BYTES,
+    max_initialize_bytes: byte_size.Input = _sessions.DEFAULT_MAX_INITIALIZE_BYTES,
     cache_hints: CacheHints | None = None,
     registrations: Layer[Any, RE, RR | McpServer | McpServerClient] | None = None,
 ) -> Layer[McpServer, IllegalArgumentError | RE, HttpRouter | RR]:
@@ -326,7 +327,8 @@ def layer_http[RE = Never, RR = Never](
     ``allow_session_termination`` a client ends its session with DELETE.
     At most ``max_sessions`` sessions are open (an ``initialize`` past
     that gets 503); a session idle for ``session_idle_timeout`` ends;
-    a message larger than ``max_message_bytes`` gets 413. With
+    a message larger than ``max_message_bytes``, or an ``initialize``
+    larger than ``max_initialize_bytes`` (64 KiB), gets 413. With
     ``allow_subscriptions=False``, 2026-07-28 discovery advertises no list
     changes and ``subscriptions/listen`` is method not found; earlier
     revisions are unchanged. ``registrations`` are built before the routes."""
@@ -345,7 +347,9 @@ def layer_http[RE = Never, RR = Never](
 
     @gen
     def routes():
-        parsed = yield from _sessions.limits(max_sessions, session_idle_timeout, max_message_bytes)
+        parsed = yield from _sessions.limits(
+            max_sessions, session_idle_timeout, max_message_bytes, max_initialize_bytes
+        )
         registry = yield from make_registry(protocols)
         yield from _http.serve(
             (yield from info),

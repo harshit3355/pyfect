@@ -418,7 +418,9 @@ def parse_header(header: str) -> dict[str, str]:
         if eq == -1:
             break
         if eq > end:
-            pos = end + 1
+            # Skip every segment without ``=`` before ``eq`` at once (as
+            # jshttp/cookie does): one at a time rescans to ``eq`` for each.
+            pos = header.rfind(";", 0, eq) + 1
             continue
         key = trim(header[pos:eq])
         if key not in result:
@@ -445,15 +447,21 @@ def merge_into_array(
     suffix list). Without ``Path`` the cookie takes the default path of
     ``url``. ``Max-Age`` wins over ``Expires``; both become an absolute
     ``expires``. A cookie replaces the one with the same name, domain and
-    path in place; an expired one removes it. ``jar`` is returned unchanged
-    when ``url`` is not an absolute URL."""
+    path in place; an expired one removes it. A plain-http ``url`` cannot set
+    a ``Secure`` cookie, a ``__Secure-`` or ``__Host-`` name, or one that would
+    replace or shadow a held ``Secure`` cookie (RFC 6265bis 5.7), as browsers
+    refuse them. ``jar`` is returned unchanged when ``url`` is not an absolute
+    URL."""
     parsed = _parse_url(url)
     if parsed is None:
         return tuple(jar)
+    secure_url = parsed.protocol == "https:"
     stored = list(jar)
     for cookie in cookies:
         scoped = _scope_cookie(parsed, cookie, now)
         if scoped is None:
+            continue
+        if not secure_url and _secure_only(stored, scoped):
             continue
         key = (scoped.name, _cookie_domain(scoped), _cookie_path(scoped))
         index = next(
@@ -472,6 +480,25 @@ def merge_into_array(
         else:
             stored[index] = scoped
     return tuple(stored)
+
+
+def _secure_only(jar: Sequence[Cookie], cookie: Cookie) -> bool:
+    """Whether only https may set ``cookie``: it is ``Secure``, has a secure
+    prefix, or has the name of a held ``Secure`` cookie whose domain matches
+    its own either way and whose path its path matches."""
+    if (cookie.options or _NO_OPTIONS).secure or cookie.name.startswith(("__Secure-", "__Host-")):
+        return True
+    domain, path = _cookie_domain(cookie) or "", _cookie_path(cookie)
+    for held in jar:
+        held_domain = _cookie_domain(held) or ""
+        if (
+            held.name == cookie.name
+            and (held.options or _NO_OPTIONS).secure
+            and (_domain_matches(domain, held_domain) or _domain_matches(held_domain, domain))
+            and _path_matches(path, _cookie_path(held))
+        ):
+            return True
+    return False
 
 
 def to_request_cookie_header(jar: Sequence[Cookie], url: str, now: float) -> str | None:

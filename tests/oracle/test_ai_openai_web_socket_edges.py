@@ -181,3 +181,42 @@ def test_a_closed_connection_forgets_its_response_ids():
     assert len(server.sockets) == 2
     assert "previous_response_id" not in requests[1]
     assert len(requests[1]["input"]) == 3
+
+
+@testing.live
+def test_a_turn_past_max_response_bytes_fails_and_replaces_the_connection():
+    """(pyfect) WebSocket mode counts a turn's messages against
+    ``max_response_bytes``, as the HTTP transport counts a response body."""
+    server = WsServer()
+    events = ws_completed("resp_1", "msg_1", "x" * 4096)
+    big = [events[0], events[1], *[events[2]] * 64, *events[3:]]
+
+    def drive() -> Any:
+        first = yield from ws_turn(
+            server, {"model": "m", "input": "a"}, lambda _: server.send(*big)
+        )
+        second = yield from ws_turn(
+            server,
+            {"model": "m", "input": "b"},
+            lambda _: server.send(*ws_completed("resp_2", "msg_2", "ok")),
+        )
+        return first, second
+
+    program = (
+        fx.gen(drive)
+        .pipe(client.with_web_socket_mode)
+        .pipe(
+            fx.provide(
+                client.layer(api_key=redact("sk-test"), api_url=_URL, max_response_bytes="64 KiB")
+            )
+        )
+        .pipe(fx.provide(server.layer))
+        .pipe(fx.provide(unexpected().layer))
+    )
+    first, second = yield from program.timeout("5 seconds")
+    assert isinstance(first, Failure)
+    reason = _reason(first)
+    assert isinstance(reason, E.InvalidOutputError)
+    assert reason.description == "Response body exceeds 65536 bytes"
+    assert isinstance(second, Success)
+    assert len(server.sockets) == 2

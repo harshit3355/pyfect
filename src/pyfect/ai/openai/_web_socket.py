@@ -23,6 +23,7 @@ from pyfect import schema as S
 from pyfect import scope as scope_mod
 from pyfect import stream as St
 from pyfect._core import Effect, uninterruptible_mask
+from pyfect._js import text_encode
 from pyfect._json_text import parse as parse_json_text
 from pyfect._service_copy import replaced
 from pyfect.ai import _provider as P
@@ -169,13 +170,34 @@ def _event_error(error: dict[str, Any], event: dict[str, Any]) -> tuple[AiError,
     return AiError(module="OpenAiClient", method="createResponseStream", reason=reason), not_found
 
 
+def _too_large(max_bytes: int) -> AiError:
+    """As the HTTP transport fails a response body past ``max_response_bytes``."""
+    description = f"Response body exceeds {max_bytes} bytes"
+    return AiError(
+        module="OpenAiClient",
+        method="createResponseStream",
+        reason=E.InvalidOutputError(description=description),
+    )
+
+
 class _Connection:
     """One WebSocket connection and the turn streaming on it."""
 
-    def __init__(self, writer: Writer, request: _Request) -> None:
+    def __init__(self, writer: Writer, request: _Request, max_turn_bytes: int) -> None:
         self._writer = writer
         self._request = request
-        self.current: _Turn | None = None
+        self._max_turn_bytes = max_turn_bytes
+        self._turn_bytes = 0
+        self._current: _Turn | None = None
+
+    @property
+    def current(self) -> _Turn | None:
+        return self._current
+
+    @current.setter
+    def current(self, turn: _Turn | None) -> None:
+        self._current = turn
+        self._turn_bytes = 0
 
     def send(self, message: W.CreateResponse) -> Effect[None, AiError]:
         text = P.dumps({"type": "response.create", **message})
@@ -186,6 +208,15 @@ class _Connection:
     def handle(self, message: bytes | str) -> None:
         turn = self.current
         if turn is None:
+            return
+        # A turn's messages count against ``max_response_bytes``, as an HTTP
+        # response body does; past it the turn fails and, left current, the
+        # connection is replaced when the turn's scope closes.
+        self._turn_bytes += (
+            len(message) if isinstance(message, bytes) else len(text_encode(message))
+        )
+        if self._turn_bytes > self._max_turn_bytes:
+            turn.fail_cause_unsafe(cause.fail(_too_large(self._max_turn_bytes)))
             return
         read = _read_message(message)
         if read is None:
@@ -209,7 +240,7 @@ class _Connection:
 
 
 def _open(
-    request: _Request, tracker: RIT.Service, invalidate: Effect[None]
+    request: _Request, tracker: RIT.Service, invalidate: Effect[None], max_turn_bytes: int
 ) -> Effect[_Connection, Never, Any]:
     """Connect, and read messages into the current turn until the
     connection ends (which ``invalidate``s it)."""
@@ -219,7 +250,7 @@ def _open(
         scope: CloseableScope = yield from Scope()
         url = re.sub(r"^http", "ws", request.url)
         socket = yield from make_web_socket(url, headers=dict(request.headers.items()))
-        connection = _Connection((yield from socket.writer), request)
+        connection = _Connection((yield from socket.writer), request, max_turn_bytes)
 
         def on_close(_: Exit[Any, Any]) -> Effect[None]:
             return fx.sync(tracker.clear_unsafe)
@@ -264,11 +295,12 @@ def _forget(slot: weakref.ref[_RefSlot]) -> Effect[None]:
 
 
 def make(
-    http_client: Effect[HttpClientService[Any], Any, Any],
+    http_client: Effect[HttpClientService[Any], Any, Any], max_response_bytes: int
 ) -> Effect[tuple[SocketService, RIT.Service], Never, Any]:
     """WebSocket mode over the client ``http_client`` gives, primed with a
     first connection, and the response id tracker it clears when a
-    connection closes."""
+    connection closes. A turn whose messages pass ``max_response_bytes``
+    fails."""
 
     @fx.gen
     def build():
@@ -285,7 +317,9 @@ def make(
             start_immediately=True,
         ).as_(None)
         ref: RcRef[_Connection, Never] = yield from RcRef.make(
-            make_request.flat_map(lambda request: _open(request, tracker, invalidate)),
+            make_request.flat_map(
+                lambda request: _open(request, tracker, invalidate, max_response_bytes)
+            ),
             idle_time_to_live=_IDLE_TIME_TO_LIVE,
         )
         slot.ref = ref

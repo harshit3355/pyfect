@@ -142,3 +142,50 @@ def test_messages_from_a_client_gone_before_run_still_reach_the_handler() -> Non
         return (yield from received.take().timeout("5 seconds").replicate_effect(3))
 
     assert fx.run_blocking(scoped(program()).or_die()) == ["a", "b", "closed"]
+
+
+def test_a_connection_no_handler_reads_holds_about_one_message() -> None:
+    """As a paused ``ws`` socket in Effect's NodeSocketServer: websockets queues
+    16 frames by default, and permessage-deflate (off in ``ws``) would make each
+    cost a thousandth of its size on the wire."""
+    import threading
+    import time
+    import tracemalloc
+
+    size = 1024 * 1024
+
+    def flood(port: int) -> tuple[int, str | None]:
+        before = tracemalloc.get_traced_memory()[0]
+        with connect(
+            f"ws://127.0.0.1:{port}", max_size=None, compression="deflate", close_timeout=1
+        ) as client:
+
+            def send_all() -> None:
+                try:
+                    for _ in range(30):
+                        client.send(b"\0" * size)
+                except Exception:  # a server that stops reading may drop us
+                    return
+
+            sender = threading.Thread(target=send_all, daemon=True)
+            sender.start()
+            sender.join(timeout=3.0)
+            time.sleep(0.5)
+            response = client.response
+            extensions = response.headers.get("Sec-WebSocket-Extensions") if response else None
+            return tracemalloc.get_traced_memory()[0] - before, extensions
+
+    @fx.fn
+    def program():
+        srv = yield from make_web_socket(0, "127.0.0.1", max_size=size)
+        port = _port(srv.address)
+        return (yield from effect.blocking(lambda: flood(port)))
+
+    tracemalloc.start()
+    try:
+        queued, extensions = fx.run_blocking(scoped(program()).or_die())
+    finally:
+        tracemalloc.stop()
+    assert extensions is None
+    # The client's own sends count too: a few messages in flight.
+    assert queued <= 8 * size, queued / size

@@ -319,7 +319,9 @@ def _make_socket() -> Effect[
     Context[_SocketServices], Never, OpenAiClient | WebSocketConstructor | Scope
 ]:
     def build(client: Service) -> Effect[Context[_SocketServices], Never, Any]:
-        connect = WS.make(P.resolve_client(OpenAiConfig, client.http_client))
+        connect = WS.make(
+            P.resolve_client(OpenAiConfig, client.http_client), client.max_response_bytes
+        )
         return connect.map(
             lambda made: Context.make(OpenAiSocket, made[0]).add(RIT.ResponseIdTracker, made[1])
         )

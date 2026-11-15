@@ -24,6 +24,7 @@ from pyfect._fiber import Fiber
 from pyfect.context import Context
 from pyfect.effect import fail, from_async, succeed, sync, try_async, void
 from pyfect.exit import Exit
+from pyfect.http import _header_lines
 from pyfect.http.asgi import _scope
 from pyfect.http.asgi._http import encode_headers
 from pyfect.http.asgi._types import Message, Receive, Scope, Send
@@ -264,9 +265,7 @@ async def _send_response(send: Send, scope: Scope, response: WebResponse) -> Non
 
 def _request(ws: AsgiWebSocket, scope: Scope, url: str) -> SourceRequest:
     lines = _scope.header_lines(scope)
-    joined: dict[str, str] = {}
-    for name, value in lines:
-        joined[name] = f"{joined[name]}, {value}" if name in joined else value
+    joined = _header_lines.joined(lines)
     socket = _socket(ws, scope)
 
     def upgrade(headers: Headers) -> Effect[SocketService, object]:

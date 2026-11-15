@@ -62,8 +62,10 @@ def to_router_path(path: str, schema: Top | None) -> str:
                 out.append(path[i : end + 1])
                 i = end + 1
             elif following and following not in "/.-?":
-                # find-my-way needs a regex to end the parameter name here.
-                out.append("(.*?)")
+                # find-my-way needs a regex to end the parameter name here. It
+                # cannot cross ``following``: Effect's ``(.*?)``, next to another
+                # lazy group, backtracks in time polynomial in the segment.
+                out.append(f"([^{re.escape(following)}\\n]*?)")
         else:
             out.append("::")
             i += 1

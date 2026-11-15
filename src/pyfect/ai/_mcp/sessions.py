@@ -3,7 +3,7 @@
 Any peer the Origin check admits can open a session, so the table is
 capped, a session idle past its timeout is dropped (each request renews
 it; one serving a request is kept), and the message that opens it is read
-under a size limit. Effect's table has none of these (see PARITY.md).
+under a smaller size limit. Effect's table has none of these (see PARITY.md).
 """
 
 from __future__ import annotations
@@ -23,6 +23,7 @@ from pyfect.errors import IllegalArgumentError
 DEFAULT_MAX_SESSIONS = 1000
 DEFAULT_IDLE_TIMEOUT: DurationInput = "30 minutes"
 DEFAULT_MAX_MESSAGE_BYTES: byte_size.Input = "4 MiB"
+DEFAULT_MAX_INITIALIZE_BYTES: byte_size.Input = "64 KiB"
 
 
 @dataclass(frozen=True)
@@ -32,10 +33,23 @@ class Limits:
     max_sessions: int
     idle_timeout: Duration
     max_message_bytes: ByteSize
+    max_initialize_bytes: ByteSize
+    """The ``initialize`` that opens a session: the session keeps what it
+    decodes to for its whole life."""
+
+
+def _positive_size(name: str, value: byte_size.Input) -> ByteSize | IllegalArgumentError:
+    size = byte_size.from_input(value)
+    if size is None or byte_size.is_zero(size):
+        return IllegalArgumentError(f"{name} must be a positive byte size, got {value!r}")
+    return size
 
 
 def limits(
-    max_sessions: int, idle_timeout: DurationInput, max_message_bytes: byte_size.Input
+    max_sessions: int,
+    idle_timeout: DurationInput,
+    max_message_bytes: byte_size.Input,
+    max_initialize_bytes: byte_size.Input = DEFAULT_MAX_INITIALIZE_BYTES,
 ) -> Effect[Limits, IllegalArgumentError]:
     if isinstance(max_sessions, bool) or max_sessions < 1:
         return fail(IllegalArgumentError(f"max_sessions must be at least 1, got {max_sessions!r}"))
@@ -44,14 +58,13 @@ def limits(
         return fail(
             IllegalArgumentError(f"session_idle_timeout must be positive, got {idle_timeout!r}")
         )
-    size = byte_size.from_input(max_message_bytes)
-    if size is None or byte_size.is_zero(size):
-        return fail(
-            IllegalArgumentError(
-                f"max_message_bytes must be a positive byte size, got {max_message_bytes!r}"
-            )
-        )
-    return succeed(Limits(max_sessions, timeout, size))
+    size = _positive_size("max_message_bytes", max_message_bytes)
+    if isinstance(size, IllegalArgumentError):
+        return fail(size)
+    initialize = _positive_size("max_initialize_bytes", max_initialize_bytes)
+    if isinstance(initialize, IllegalArgumentError):
+        return fail(initialize)
+    return succeed(Limits(max_sessions, timeout, size, initialize))
 
 
 @dataclass

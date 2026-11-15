@@ -55,6 +55,12 @@ class _TooLarge(Exception):
     pass
 
 
+def _after_end() -> zlib.error:
+    """As the web ``DecompressionStream`` fails it: kept, input after the end
+    would sit outside every limit."""
+    return zlib.error("data after the end of the compressed body")
+
+
 class _Decoders:
     """Stacked decoders that inflate at most ``_PIECE`` bytes per call, each
     coding's total output counted against ``limit``: a bomb fails before
@@ -83,7 +89,11 @@ class _Decoders:
     def _run(self, level: int, data: bytes, output: list[bytes]) -> None:
         decoder = self._decoders[level]
         while True:
+            if decoder.eof and data:
+                raise _after_end()
             piece = decoder.decompress(data, _PIECE)
+            if decoder.unused_data:
+                raise _after_end()
             data = decoder.unconsumed_tail
             self._emit(level, piece, output)
             if not data and len(piece) < _PIECE:
