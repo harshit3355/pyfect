@@ -70,6 +70,11 @@
   `errors="all"` failure of a deep value made a message (failing leaves x depth) long, which
   the MCP server sent back for invalid tool arguments. Paths are built only for the leaves
   written.
+- `key_value_store.layer_file_system` escapes upper-case ASCII letters and a trailing `.` in
+  file names (`user:Alice` is `user%3A%41lice`), so keys that differ only in letter case or
+  by a trailing `.` no longer share one file on macOS or Windows file systems. Keys without
+  either keep their file names; an entry whose key has an upper-case letter was written under
+  the old name, which `get` no longer reads (`keys` still lists it): set it again to move it.
 
 ## 0.6.5 (2026-11-14)
 

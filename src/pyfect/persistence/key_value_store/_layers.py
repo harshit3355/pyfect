@@ -215,16 +215,30 @@ def layer_file_system(
     return layer_effect(KeyValueStore, gen(build))
 
 
+_UPPER = re.compile(r"%[0-9A-F]{2}|[A-Z]")
+"""An upper-case letter, or an escape ``quote`` wrote (kept as is)."""
+_TRAILING_DOT = re.compile(r"\.$")
+
+
+def _escape(match: re.Match[str]) -> str:
+    text = match[0]
+    return text if len(text) == 3 else f"%{ord(text):02X}"
+
+
 def _file_name(key: str) -> str | None:
-    """``key`` as JavaScript's ``encodeURIComponent`` writes it, or ``None``
-    for a key that names no file of its own (``""``, ``"."``, ``".."``) or
-    holds a lone surrogate (which ``encodeURIComponent`` rejects)."""
+    """``key`` as JavaScript's ``encodeURIComponent`` writes it, with every
+    upper-case ASCII letter and a trailing ``.`` escaped too, or ``None`` for
+    a key that names no file of its own (``""``, ``"."``, ``".."``) or holds a
+    lone surrogate (which ``encodeURIComponent`` rejects). The escapes keep
+    keys apart on file systems that ignore letter case (macOS, Windows) or
+    drop a trailing ``.`` (Windows), where Effect's names share one file."""
     if key in ("", ".", ".."):
         return None
     try:
-        return urllib.parse.quote(key, safe="-_.!~*'()", errors="strict")
+        encoded = urllib.parse.quote(key, safe="-_.!~*'()", errors="strict")
     except UnicodeEncodeError:
         return None
+    return _TRAILING_DOT.sub(_escape, _UPPER.sub(_escape, encoded))
 
 
 _PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")
