@@ -8,6 +8,7 @@ from typing import Literal as _L
 from typing import TypeIs
 
 from pyfect.json_schema import JsonSchema
+from pyfect.json_schema._model import subschemas
 from pyfect.schema.ast import is_json
 from pyfect.schema.issue import Path
 from pyfect.schema.representation._from import error_with_path
@@ -177,8 +178,14 @@ def annotations_of(
     for keyword, key in _BOOLEAN_ANNOTATIONS.items():
         if isinstance(schema.get(keyword), bool):
             annotations[key] = schema[keyword]
-    if "contentSchema" in schema and is_json(schema["contentSchema"]):
-        annotations["content_schema"] = schema["contentSchema"]
+    content_schema = schema.get("contentSchema")
+    # The annotation keeps no definitions, so a reference in it would dangle.
+    if (
+        "contentSchema" in schema
+        and is_json(content_schema)
+        and not _has_references(content_schema)
+    ):
+        annotations["content_schema"] = content_schema
     return N.ImportedAnnotations(
         annotations=_ordered(annotations) or None,
         custom_annotations=_custom(schema, include_annotation_key),
@@ -217,6 +224,14 @@ def _custom(
         and is_json(value)
     }
     return selected or None
+
+
+def _has_references(schema: object) -> bool:
+    if not is_object(schema):
+        return False
+    if isinstance(schema.get("$ref"), str) or isinstance(schema.get("$dynamicRef"), str):
+        return True
+    return any(_has_references(child) for child in subschemas(schema))
 
 
 def strings_of(value: object) -> tuple[str, ...]:

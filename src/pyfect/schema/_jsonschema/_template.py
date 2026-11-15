@@ -57,6 +57,8 @@ class _TemplatePattern:
         match node:
             case ast.Literal():
                 return escape(to_string(node.literal))
+            case ast.Enum():
+                return _alternation([escape(to_string(member.value)) for member in node.enum])
             case ast.String():
                 return ast.STRING_PATTERN
             case ast.Number():
@@ -66,10 +68,14 @@ class _TemplatePattern:
             case ast.TemplateLiteral():
                 return "".join(map(self.part, node.parts))
             case ast.Union():
-                if not node.types:
-                    return "(?!)"
-                if node.mode == "one_of":
+                # Regex alternatives do not enforce that exactly one branch matches.
+                if node.types and node.mode == "one_of":
                     self.exact = False
-                return f"(?:{'|'.join(map(self.part, node.types))})"
+                return _alternation(list(map(self.part, node.types)))
             case _:
                 raise ValueError(f"Invalid TemplateLiteral part {node.tag}")
+
+
+def _alternation(patterns: list[str]) -> str:
+    """Any of ``patterns``; none matches nothing."""
+    return f"(?:{'|'.join(patterns)})" if patterns else "(?!)"

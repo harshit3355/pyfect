@@ -198,8 +198,9 @@ def xml_event(event: Any) -> dict[str, Any]:  # noqa: PLR0911
             if system_id is not None:
                 out["systemId"] = system_id
             return out
-        case xml.StartElement(name, attributes):
-            return {"_tag": "StartElement", "name": name, "attributes": dict(attributes)}
+        case xml.StartElement(name, attributes, line, column):
+            position = {} if line is None else {"line": line, "column": column}
+            return {"_tag": "StartElement", "name": name, "attributes": dict(attributes)} | position
         case xml.EndElement(name):
             return {"_tag": "EndElement", "name": name}
         case xml.Text(text):
@@ -258,13 +259,15 @@ def decode_xml(source: Any, channel: Any) -> dict[str, Any]:
     return finish(effect, {"items": items, "error": None})
 
 
-def xml_options(case: dict[str, Any]) -> dict[str, int]:
+def xml_options(case: dict[str, Any]) -> dict[str, Any]:
     options = case.get("options", {})
-    out: dict[str, int] = {}
+    out: dict[str, Any] = {}
     if "maxDepth" in options:
         out["max_depth"] = options["maxDepth"]
     if "maxTokenSize" in options:
         out["max_token_size"] = options["maxTokenSize"]
+    if "positions" in options:
+        out["positions"] = options["positions"]
     return out
 
 

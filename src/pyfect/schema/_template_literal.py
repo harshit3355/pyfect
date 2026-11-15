@@ -28,6 +28,7 @@ from pyfect.schema._codec_links import (
     BIG_INT_TO_STRING,
     FINITE_TO_STRING,
     NUMBER_TO_STRING,
+    enum_to_string,
     is_finite_number,
     literal_to_string,
 )
@@ -117,10 +118,10 @@ def TemplateLiteralParser(*parts: Any) -> TemplateLiteralParserSchema[Any, Any]:
 # ------------------------------------------------------------------ the AST
 
 
-def part_from_string(node: ast.AST) -> ast.AST:
-    """``node`` read from its segment's text: a number, bigint or
-    non-string literal at its most encoded end decodes from its text
-    (Effect's ``partFromString``)."""
+def part_from_string(node: ast.AST) -> ast.AST:  # noqa: PLR0911
+    """``node`` read from its segment's text: a number, bigint, non-string
+    literal or enum with a number value at its most encoded end decodes from
+    its text (Effect's ``partFromString``)."""
     if node.encoding is not None:
         *init, last = node.encoding
         to = part_from_string(last.to)
@@ -137,6 +138,8 @@ def part_from_string(node: ast.AST) -> ast.AST:
             return replace(node, encoding=(BIG_INT_TO_STRING,))
         case ast.Literal() if not isinstance(node.literal, str):
             return literal_to_string(node)
+        case ast.Enum() if not all(isinstance(member.value, str) for member in node.enum):
+            return enum_to_string(node)
         case ast.Union():
             types = tuple(map(part_from_string, node.types))
             same = all(a is b for a, b in zip(types, node.types, strict=True))

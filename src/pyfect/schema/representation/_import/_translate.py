@@ -11,6 +11,7 @@ from pyfect import schema as S
 from pyfect._digits import parse_digits
 from pyfect.json_pointer import escape_token, parse_uri_fragment
 from pyfect.json_schema import JsonSchema, get_reference_key
+from pyfect.json_schema._model import subschema_kind
 from pyfect.logger._text import json_quote
 from pyfect.schema import ast
 from pyfect.schema._ecma_pattern import EcmaPatternError, is_ecma_pattern
@@ -33,30 +34,29 @@ _UNSUPPORTED_KEYWORDS = frozenset(
     }
 )
 
-_MAP_KEYWORDS = frozenset({"$defs", "properties", "patternProperties", "dependentSchemas"})
-_ARRAY_KEYWORDS = frozenset({"allOf", "anyOf", "oneOf", "prefixItems"})
-_SCHEMA_KEYWORDS = frozenset(
-    {
-        "not",
-        "additionalProperties",
-        "propertyNames",
-        "unevaluatedProperties",
-        "items",
-        "contains",
-        "unevaluatedItems",
-        "if",
-        "then",
-        "else",
-        "contentSchema",
-    }
-)
-
 
 @dataclass(frozen=True, slots=True)
 class Options:
     on_enter: Callable[[JsonSchema], JsonSchema] | None
     patterns: K.PatternMode
     include_annotation_key: Callable[[str], bool] | None
+    close_objects: bool
+
+
+@dataclass(slots=True)
+class _Translating:
+    """A definition being read. ``alias_path`` is where an intersection of it
+    with itself was met: its aliases are checked there once it is ready."""
+
+    alias_path: Path | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _Ready:
+    node: N.Node
+
+
+type _DefinitionState = _Translating | _Ready
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,7 +84,7 @@ class Translator:
     def __init__(self, definitions: Mapping[str, JsonSchema], options: Options) -> None:
         self.definitions = definitions
         self.options = options
-        self.cache: dict[str, N.Node | None] = {}
+        self.cache: dict[str, _DefinitionState] = {}
         self.validated_aliases: set[str] = set()
         self.resolving_choices: set[str] = set()
         self.pointers: dict[str, _Pointer] = {}
@@ -94,27 +94,50 @@ class Translator:
     # ----------------------------------------------------------- definitions
 
     def definition(self, key: str, path: Path, recursive_error: str | None = None) -> N.Node:
-        """The node of definition ``key``. ``None`` in the cache marks one
-        being read: reaching it again is a cycle no value consumes."""
-        if key in self.cache:
-            cached = self.cache[key]
-            if cached is None:
-                message = recursive_error or f"Definition {json_quote(key)} is a circular alias."
-                raise error_with_path(message, (*path, "$ref"))
-            return cached
-        self.cache[key] = None
+        """The node of definition ``key``. Reaching a definition while it is
+        being read is a cycle that normalization cannot resolve."""
+        cached = self.cache.get(key)
+        if isinstance(cached, _Ready):
+            return cached.node
+        if cached is not None:
+            message = (
+                recursive_error
+                or f"Cannot resolve recursive definition {json_quote(key)} during normalization."
+            )
+            raise error_with_path(message, (*path, "$ref"))
+        state = self.cache[key] = _Translating()
         pointer = self.pointers.get(key)
         was_nested = self.in_nested_resource
-        if pointer is None:
-            node = self.schema(self.definitions[key], ("definitions", key))
-        else:
-            self.in_nested_resource = pointer.crosses_resource
-            node = self.schema(pointer.target, ("definitions", *pointer.tokens))
-        self.in_nested_resource = was_nested
-        self.cache[key] = node
-        if pointer is not None:
-            self._validate_pointer_aliases(node, path, recursive_error, set())
+        try:
+            if pointer is None:
+                node = self.schema(self.definitions[key], ("definitions", key))
+            else:
+                self.in_nested_resource = pointer.crosses_resource
+                node = self.schema(pointer.target, ("definitions", *pointer.tokens))
+            self.cache[key] = _Ready(node)
+            if pointer is not None or state.alias_path is not None:
+                alias_path = path if state.alias_path is None else state.alias_path
+                self._validate_pointer_aliases(node, alias_path, recursive_error, set())
+        except BaseException:
+            del self.cache[key]
+            self.validated_aliases.discard(key)
+            raise
+        finally:
+            self.in_nested_resource = was_nested
         return node
+
+    def is_translating(self, key: str) -> bool:
+        return isinstance(self.cache.get(key), _Translating)
+
+    def intersect_same_reference(self, reference: N.Reference, path: Path) -> None:
+        """Checks the aliases of a definition intersected with itself, which
+        needs no body: now, or once a definition being read is ready."""
+        state = self.cache.get(reference.ref)
+        if isinstance(state, _Translating):
+            if state.alias_path is None:
+                state.alias_path = path
+        else:
+            self._validate_pointer_aliases(reference, path, None, set())
 
     def _validate_pointer_aliases(
         self, node: N.Node, path: Path, recursive_error: str | None, visiting: set[str]
@@ -160,14 +183,15 @@ class Translator:
 
     def has_choices_in(self, reference: N.Reference) -> bool:
         key = reference.ref
-        if self.cache.get(key, reference) is None or key in self.resolving_choices:
+        cached = self.cache.get(key)
+        if isinstance(cached, _Translating) or key in self.resolving_choices:
             return True
         self.resolving_choices.add(key)
-        cached = self.cache.get(key)
-        node = self.definition(key, reference.path) if cached is None else cached
-        out = self.intersector.has_choices(node)
-        self.resolving_choices.discard(key)
-        return out
+        try:
+            node = self.definition(key, reference.path) if cached is None else cached.node
+            return self.intersector.has_choices(node)
+        finally:
+            self.resolving_choices.discard(key)
 
     def _resolve_pointer(self, ref: str, path: Path) -> str:
         """The key of the definition a ``$ref`` below ``$defs`` stands for:
@@ -197,11 +221,13 @@ class Translator:
                 if self.options.on_enter is not None:
                     node = self.options.on_enter(cast("JsonSchema", node))
                 crosses_resource |= K.is_object(node) and isinstance(node.get("$id"), str)
-                if token in _SCHEMA_KEYWORDS:
-                    position = "schema"
-                else:
-                    known = token in _MAP_KEYWORDS or token in _ARRAY_KEYWORDS
-                    position = "container" if known else "value"
+                match subschema_kind(token):
+                    case "schema":
+                        position = "schema"
+                    case "map" | "array":
+                        position = "container"
+                    case None:
+                        position = "value"
             else:
                 position = "value"
             node = _child(node, token)
@@ -409,6 +435,7 @@ class Translator:
             for name in dict.fromkeys((*source, *required))
         }
         has_properties = bool(source)
+        implicit = "additionalProperties" not in schema
         patterns: list[N.ObjectPattern] = []
         declared_patterns = schema.get("patternProperties")
         if K.is_object(declared_patterns):
@@ -416,7 +443,7 @@ class Translator:
                 at = (*path, "patternProperties", pattern)
                 check = self._pattern(pattern, at)
                 if check is None:
-                    return N.ObjectScope(properties, has_properties, (), N.UNKNOWN)
+                    return N.ObjectScope(properties, has_properties, False, (), N.UNKNOWN)
                 parameter = N.String(checks=(check,))
                 patterns.append(N.ObjectPattern(pattern, parameter, self.schema(value, at)))
         additional = schema.get("additionalProperties")
@@ -425,7 +452,7 @@ class Translator:
             additional_node = N.NEVER
         elif K.is_object(additional):
             additional_node = self.schema(additional, (*path, "additionalProperties"))
-        return N.ObjectScope(properties, has_properties, tuple(patterns), additional_node)
+        return N.ObjectScope(properties, has_properties, implicit, tuple(patterns), additional_node)
 
     def _object_checks(self, schema: JsonSchema, path: Path) -> tuple[N.Check, ...]:
         checks: list[N.Check] = []

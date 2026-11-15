@@ -15,7 +15,9 @@ import pyfect as fx
 from pyfect import schema as S
 from pyfect import testing
 from pyfect.deferred import Deferred
+from pyfect.schema import getter as G
 from pyfect.schema import jit_compiler
+from pyfect.schema import transformation as T
 
 from ._schema_binary import struct
 from ._schema_compiler import Getters, fresh_registry
@@ -95,5 +97,68 @@ def test_preserves_bounded_concurrency_and_runs_defaults_once(product: str):
     yield from releases[1].succeed(None)
     yield from releases[2].succeed(None)
     expected = {"a": 0, "b": 1, "c": 2} if product == "Struct" else (0, 1, 2)
+    assert (yield from fiber.join()) == expected
+    assert calls == [1, 1, 1]
+
+
+_BOUNDED_CASES: dict[str, tuple[str, Any, Any]] = {
+    # name: (operation, input, expected)
+    "Struct make": ("make", {}, {"a": 0, "b": 1, "c": 2}),
+    "Tuple make": ("make", (), (0, 1, 2)),
+    "Struct decode": ("decode", {"a": 0, "b": 1, "c": 2}, {"a": 0, "b": 1, "c": 2}),
+    "Array decode": ("decode", (0, 1, 2), (0, 1, 2)),
+}
+
+
+def _bounded_schema(name: str, step: Any) -> Any:
+    defaults = [S.Number.pipe(S.with_constructor_default(step(i))) for i in range(3)]
+    item = S.Number.pipe(
+        S.decode(T.Transformation(G.transform_effect(lambda i, _: step(i)), G.passthrough()))
+    )
+    match name:
+        case "Struct make":
+            return struct(a=defaults[0], b=defaults[1], c=defaults[2])
+        case "Tuple make":
+            return S.Tuple(*defaults)
+        case "Struct decode":
+            return struct(a=item, b=item, c=item)
+        case _:
+            return S.Array(item)
+
+
+@pytest.mark.parametrize("name", list(_BOUNDED_CASES))
+@testing.effect
+def test_preserves_bounded_concurrency_and_runs_each_element_once(name: str):
+    """${name} preserves bounded concurrency and runs each element once"""
+    operation, input, expected = _BOUNDED_CASES[name]
+    started = yield from fx.for_each(range(3), lambda _: Deferred[None].make())
+    releases = yield from fx.for_each(range(3), lambda _: Deferred[None].make())
+    calls = [0, 0, 0]
+
+    def step(index: int) -> Any:
+        def run() -> Any:
+            calls[index] += 1
+            yield from started[index].succeed(None)
+            yield from releases[index].wait()
+            return index
+
+        return fx.gen(run)
+
+    schema = _bounded_schema(name, step)
+    jit_compiler.enable(schema.ast)
+    parse: fx.Effect[Any, Any] = (
+        S.make_effect(schema)(input, concurrency=2)
+        if operation == "make"
+        else S.decode_unknown_effect(schema)(input, concurrency=2)
+    )
+    fiber = yield from parse.fork()
+    yield from started[0].wait()
+    yield from started[1].wait()
+    yield from fx.yield_now()
+    assert not (yield from started[2].is_done())
+    yield from releases[0].succeed(None)
+    yield from started[2].wait()
+    yield from releases[1].succeed(None)
+    yield from releases[2].succeed(None)
     assert (yield from fiber.join()) == expected
     assert calls == [1, 1, 1]

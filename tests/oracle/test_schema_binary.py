@@ -6,6 +6,10 @@ The rest of the file is in ``test_schema_binary_declarations.py``,
 Omitted (one line each):
 - "includes non-enumerable fields in row presence masks": a Python mapping has
   no non-enumerable keys.
+- "reads large payloads when the encode call returns" and "fails with a schema error when a
+  large payload's buffer shrinks or detaches during the encode" (Effect main): Effect reads a
+  large ``Uint8Array`` when the encode returns, so a getter may change it first; ``S.Bytes``
+  is immutable ``bytes``, read once, with no getters or resizable buffers.
 
 Adapted:
 - Symbols and ``2n`` literals have no Python schema; those lines are dropped from their
@@ -44,6 +48,7 @@ from ._schema_binary import (
     schema_error,
     struct,
     struct_of,
+    uvarint,
     varying,
 )
 
@@ -178,6 +183,69 @@ def test_keeps_concurrent_fiber_results_readable_after_their_producing_turn():
     return program
 
 
+# --- large byte payloads ---------------------------------------------------------------
+
+
+def _payload(length: int, seed: int = 1) -> bytes:
+    return bytes((i * 31 + seed) & 0xFF for i in range(length))
+
+
+def _sized(*chunks: bytes) -> bytes:
+    body = b"".join(chunks)
+    return bytes(uvarint(len(body))) + body
+
+
+def _field(tag: int, *chunks: bytes) -> bytes:
+    return bytes((tag,)) + _sized(*chunks)
+
+
+_ENVELOPE = struct(
+    head=S.Bytes.pipe(B.field_id(1)),
+    body=struct(data=S.Bytes.pipe(B.field_id(1)), name=S.String.pipe(B.field_id(2))).pipe(
+        B.field_id(2)
+    ),
+)
+_HEAD, _DATA, _NAME = (
+    _payload(20_000),
+    _payload(300_000, 7),
+    "n" * 70_000,
+)  # name outgrows Effect's buffer
+_ENVELOPE_VALUE: dict[str, object] = {"head": _HEAD, "body": {"data": _DATA, "name": _NAME}}
+
+
+def test_writes_large_nested_payloads_with_minimal_length_prefixes() -> None:
+    """writes large nested payloads with minimal length prefixes"""
+    assert encode(_ENVELOPE, _ENVELOPE_VALUE) == _sized(
+        bytes((0x20,)), _field(8, _HEAD), _field(16, _field(8, _DATA), _field(16, _NAME.encode()))
+    )
+
+
+def test_batches_row_runs_that_end_in_large_payloads() -> None:
+    """batches row runs that end in large payloads"""
+    rows = S.Array(struct(id=S.Number, data=S.Bytes))
+    values = [
+        [{"id": 1, "data": _payload(10)}, {"id": 2, "data": _payload(300_000)}],
+        [{"id": 3, "data": _payload(40_000, 3)}, {"id": 4, "data": _payload(10, 5)}],
+    ]
+    parser = B.parser(rows)
+    decoded = parser.feed_sync(B.encode_many_unknown_sync(rows)(values))
+    assert decoded == [tuple(rows_) for rows_ in values]
+    parser.end_sync()
+
+
+def test_leaves_later_and_earlier_frames_intact_after_a_failure_behind_a_large_payload() -> None:
+    """leaves later and earlier frames intact after a failure behind a large payload"""
+    encode_envelope = S.encode_unknown_sync(B.to_codec(_ENVELOPE))
+    earlier = encode(S.String, "earlier")
+    earlier_bytes = bytes(earlier)
+    expected = encode_envelope(_ENVELOPE_VALUE)
+    broken = {"head": _HEAD, "body": {"data": _DATA, "name": 1}}
+    with pytest.raises(S.SchemaError):
+        encode_envelope(broken)
+    assert encode_envelope(_ENVELOPE_VALUE) == expected
+    assert earlier == earlier_bytes
+
+
 # --- numbers --------------------------------------------------------------------------
 
 
@@ -281,9 +349,11 @@ def test_packs_a_uniform_number_array_behind_one_mode_byte() -> None:
 def test_rejects_non_number_elements_in_uniform_number_arrays() -> None:
     """rejects non-number elements in uniform number arrays"""
     for value in ("x", None, True):
-        text = message_of(lambda: encode(Numbers, [1, value, 3]))  # noqa: B023
-        assert "Expected a number" in text
-        assert "at [1]" in text
+        # a leading math.pi settles the run on f64 before value is reached
+        for first in (1, math.pi):
+            text = message_of(lambda: encode(Numbers, [first, value, 3]))  # noqa: B023
+            assert "Expected a number" in text
+            assert "at [1]" in text
 
 
 def test_length_prefixes_each_number_slot_of_a_tuple() -> None:

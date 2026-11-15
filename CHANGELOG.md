@@ -33,6 +33,17 @@
   warn when called on a thread whose asyncio loop is running (in a coroutine or a notebook
   cell), which they block until the effect is done. The effect still runs as before; use
   `await fx.run_async(eff)` there. pyfect's own tests turn the warning into an error.
+- `encoding.base64.encode_unpadded`, standard Base64 without the `=` padding, and
+  `encoding.base64.decode_lenient`, which reads either Base64 alphabet, padded or not (CR and
+  LF ignored, other whitespace rejected), as on Effect main (#10557).
+- `encoding.xml.decode` and `decode_string` take `positions=True`, which sets the one-based
+  `line` and `column` of each start tag's `<` on its `StartElement`, counted as for
+  `XmlError`, as in Effect 4.1.4 (#10406).
+- `representation.from_json_schema_document` and `from_json_schema_multi_document` take an
+  experimental `close_objects` option: objects with declared properties are closed when every
+  object schema they combine omits `additionalProperties` (after `allOf` is merged, so
+  inherited properties stay valid), and decoding strips other keys, or rejects them under
+  `on_excess_property="error"`, as in Effect 4.1.4 (#10521).
 
 ### Fixed
 
@@ -371,6 +382,72 @@
 - The README's links and images are absolute, so they work on PyPI, which shows the README
   without the repository around it; `tests/test_readme.py` keeps them that way and runs the
   quick look, which now prints its greeting.
+- `encoding.base64`, `base64_url` and `hex`'s `decode_string` keep a leading U+FEFF, as in
+  Effect 4.1.4 (#10350); they dropped it as a byte-order mark, so `decode_string(encode(s))`
+  lost the first character of a string starting with one. The shared UTF-8 helper now takes
+  `ignore_bom` with no default, and `tests/properties/test_encoding_properties.py` round-trips
+  generated text through every module.
+- Schema: a struct reading an instance treats a field named after a member every instance
+  inherits from `object` (`__doc__`, `__str__`, `__class__`, `__module__`, ...) as present only
+  when it is the instance's own attribute (its `__dict__` or a slot), as Effect 4.1.4 does for
+  `Object.prototype` members (#9612). An optional `__doc__` field failed with "Expected string"
+  on a plain instance, and a required one read the class's docstring. Other inherited
+  attributes, such as properties, are still read. `tests/oracle/test_schema_object_members.py`
+  checks every such name, interpreted and compiled.
+- Schema: `to_equivalence` and `to_formatter` select a Record's keys by its key's decoded
+  side, as in Effect 4.1.4 (#10453). With a transformed key (lowercase encoded, uppercase
+  decoded) the equivalence found `{"A": 1}` equal to `{"A": 2}` and to `{}`, and the formatter
+  wrote `{}`. `ast.IndexSignature.selects_decoded` is the decoded-side test, beside `selects`
+  for keys of an input to decode.
+- `encoding.xml.decode` fails with a `Syntax` error rather than `Unsupported` on an encoding
+  declaration the bytes contradict (UTF-16, UTF-32, UCS-2 and UCS-4, or US-ASCII and
+  ISO-8859-1 after a UTF-8 byte order mark), and no longer reads a document starting with a
+  byte order mark as US-ASCII, as on Effect main (#10574). One function classifies a
+  declaration against the bytes, and `tests/test_xml_encoding_declarations.py` checks every
+  spelling with and without a byte order mark.
+- Schema: `TemplateLiteral` and `TemplateLiteralParser` accept `S.Enum` parts, matched by the
+  text of the enum's values (a parser decodes the member), and their JSON Schema pattern is
+  the alternation of those values, as on Effect main (#10576). They raised `ValueError:
+  Invalid TemplateLiteral part Enum`, though the part's type accepted them. An enum without
+  members matches no string. `ast._template_literal.PART_KINDS` lists the part kinds, and
+  `tests/test_template_literal_parts.py` runs one part of each kind through matching, the
+  parser, the strategy, the JSON Schema pattern and representations.
+- `representation.from_json_schema_document` and `from_json_schema_multi_document` drop a
+  `contentSchema` annotation holding a `$ref` or `$dynamicRef`, which pointed at a definition
+  the annotation doesn't carry; reference-like data under `const`, `enum`, `examples` or
+  property names is kept, as in Effect 4.1.4 (#10426). One walk over a schema's subschema
+  positions (`json_schema._model.subschemas`), built from the keyword classification, serves
+  this check and the importer's pointer walk.
+- The JSON Schema importer intersects unions whose alternatives differ by a required literal
+  property (referenced objects included), accepts a typed `additionalProperties` that covers
+  the declared properties, keeps a union's `oneOf` mode when it resolves a reference inside
+  it, keeps examples on the whole intersection instead of each distributed branch, imports a
+  recursive definition intersected with itself, and rejects other recursive intersections
+  with an error instead of failing, as in Effect 4.1.4 (#10521). A recursive definition that
+  can't be resolved fails with "Cannot resolve recursive definition ... during normalization."
+- Schema code generation (`representation.to_code_document`) prints an annotation value only
+  when it and every value inside it is exactly a `None`, `bool`, `int`, `float`, `str`,
+  `list`, `tuple` or `dict`, as Effect 4.1.4 prints only plain objects and arrays (#10532).
+  An `IntEnum` member printed as `<C.A: 1>`, which isn't Python, and a `namedtuple`,
+  `OrderedDict`, `Counter` or `MappingProxyType` printed as a plain list or dict; such
+  annotations are now omitted. `tests/properties/test_code_value_literals.py` checks that
+  whatever is printed evaluates back to the value.
+- `date_time.zone_named` keeps the id it is given, a renamed zone's new or old name included
+  (`Europe/Kyiv`, `Asia/Kolkata`, `Etc/UTC`), as Effect 4.1.4 does (#10439); the casing still
+  comes from ICU when the two differ only in case (`europe/london` is `Europe/London`). It
+  named the zone with the id ICU resolves it to (`Europe/Kiev`, `Asia/Calcutta`, `UTC`), so
+  `zone_to_string`, `format_iso_zoned` and the zone schemas wrote another name than the one
+  given. Zones ICU resolves to the same id are equal and hash alike (`Europe/Kyiv` equals
+  `Europe/Kiev`), and the local zone is still named by ICU's id, as in Effect.
+  `tests/oracle/test_icu_zones.py` checks every id ICU knows.
+- `date_time.make` and the other parsers of a `DateTime.Input` string read a string ending in
+  `UT`, `UTC` or a US zone abbreviation (`EST`, `pdt`, any case) in that zone, as on Effect
+  main (#10562); they added a `Z` after it, so the string failed to parse. The trailing-zone
+  check is now built from the date parser's own zone words.
+- The `encoding.csv` decoders emit the records completed before an error in the same chunk,
+  then fail, as in Effect 4.1.4 (#10456); they dropped them, so the records seen depended on
+  how the input was split into chunks. A property test now checks that every split gives the
+  same records and error.
 
 ### Performance
 

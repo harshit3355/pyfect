@@ -4,7 +4,7 @@ the dialect converters."""
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Generic, Literal, TypeIs, TypeVar, cast
 
@@ -132,6 +132,24 @@ _SUBSCHEMA_KINDS: dict[str, SubschemaKind] = {
 def subschema_kind(keyword: str) -> SubschemaKind | None:
     """How a Draft 2020-12 keyword holds subschemas, if it does."""
     return _SUBSCHEMA_KINDS.get(keyword)
+
+
+def subschemas(schema: Mapping[str, object]) -> Iterator[object]:
+    """The subschemas ``schema`` holds directly, read from its subschema
+    keywords (``subschema_kind``); data such as a ``const``, an ``enum`` or a
+    ``properties`` name is never one."""
+    for keyword, value in schema.items():
+        match subschema_kind(keyword):
+            case "schema":
+                yield value
+            case "array":
+                if is_array(value):
+                    yield from as_array(value)
+            case "map":
+                if is_object(value):
+                    yield from as_object(value).values()
+            case None:
+                pass
 
 
 def map_object(

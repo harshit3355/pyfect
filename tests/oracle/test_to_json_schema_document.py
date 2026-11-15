@@ -1727,6 +1727,24 @@ def test_template_literal_with_big_int():
     _check(S.TemplateLiteral(S.BigInt), {"type": "string", "pattern": "^-?\\d+$"})
 
 
+class _DottedOrOne(enum.Enum):
+    A = "a.b"
+    One = 1
+
+
+class _NoMembers(enum.Enum):
+    pass
+
+
+def test_template_literal_with_enum():
+    """TemplateLiteral with Enum"""
+    _check(
+        S.TemplateLiteral(S.Enum(_DottedOrOne), "_"),
+        {"type": "string", "pattern": "^(?:a\\.b|1)_$"},
+    )
+    _check(S.TemplateLiteral(S.Enum(_NoMembers), "_"), {"type": "string", "pattern": "^(?!)_$"})
+
+
 _SEGMENT = S.String.check(S.make_filter(lambda s: s == "abc"))
 _TEMPLATES: list[tuple[str, Any]] = [
     ("direct", S.TemplateLiteral("item.", _SEGMENT)),

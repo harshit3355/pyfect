@@ -68,20 +68,22 @@ def decode_records(
 
 class _RecordsPull:
     """``decode_records``' pull: a state object rather than closures over the
-    pull itself, so a finished run does not keep its input alive."""
+    pull itself, so a finished run does not keep its input alive. A chunk's
+    records completed before an error are emitted first; ``after`` holds the
+    error (or the end) for the next pull, as in Effect."""
 
-    __slots__ = ("done", "headers", "names", "parser", "upstream")
+    __slots__ = ("after", "headers", "names", "parser", "upstream")
 
     def __init__(self, upstream: AnyPull, parser: Parser, headers: bool) -> None:
         self.upstream = upstream
         self.parser = parser
         self.headers = headers
         self.names: list[Row] = []  # the header row, once read
-        self.done: list[object] = []
+        self.after: list[AnyPull] = []
 
     def next(self) -> AnyPull:
-        if self.done:
-            return end_with(self.done[0])
+        if self.after:
+            return self.after[0]
         return match_effect(
             self.upstream, on_success=self.feed, on_failure=_FailCause, on_done=self.ended
         )
@@ -92,17 +94,20 @@ class _RecordsPull:
             for text in texts:
                 self.parser.feed(text, rows)
         except CsvError as error:
-            return _FailCause(fail_cause(error))
+            self.fail_next(error)
         return self.emit(rows)
 
     def ended(self, leftover: object) -> AnyPull:
-        self.done.append(leftover)
+        self.after[:] = [end_with(leftover)]
         rows: list[Parsed] = []
         try:
             self.parser.end(rows)
         except CsvError as error:
-            return _FailCause(fail_cause(error))
+            self.fail_next(error)
         return self.emit(rows)
+
+    def fail_next(self, error: CsvError) -> None:
+        self.after[:] = [_FailCause(fail_cause(error))]
 
     def emit(self, rows: list[Parsed]) -> AnyPull:
         out: list[Decoded] = []
@@ -115,7 +120,8 @@ class _RecordsPull:
                 else:
                     out.append(self.to_record(row))
         except CsvError as error:
-            return _FailCause(fail_cause(error))
+            # The failing row precedes any parser error in the input.
+            self.fail_next(error)
         return _Succeed(tuple(out)) if out else _Suspend(self.next)
 
     def to_record(self, row: Parsed) -> Decoded:

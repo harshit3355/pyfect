@@ -2,8 +2,8 @@
 ``TemplateLiteral``), as TypeScript's `` `user_${string}` `` types.
 
 A part is a ``String``, ``Number`` or ``BigInt`` node (its checks kept), a
-``Literal`` (its text) or, unchecked, a nested ``TemplateLiteral`` or a
-``Union`` of parts; no part may have an encoding. A string matches when it
+``Literal`` (its text), an ``Enum`` (its values' text) or, unchecked, a nested
+``TemplateLiteral`` or a ``Union`` of parts; no part may have an encoding. A string matches when it
 splits into one segment per part, each matching its part: the split is
 greedy (a segment takes as much as it can) and backtracks, as Effect's.
 A number part matches finite decimal text (``"+1"``, ``"1e5"``), a bigint
@@ -28,7 +28,7 @@ from pyfect.schema.ast._base import AST, SHARED_BY_COPY, invalid_type, issue_of
 from pyfect.schema.ast._check import collect_issues
 from pyfect.schema.ast._encoding import to_encoded
 from pyfect.schema.ast._keywords import BigInt, Number, String
-from pyfect.schema.ast._literal import Literal
+from pyfect.schema.ast._literal import Enum, Literal
 from pyfect.schema.ast._result import ParseResult, run_now
 from pyfect.schema.ast._union import Union
 from pyfect.schema.getter._coerce import to_string
@@ -58,10 +58,12 @@ def _validate(node: AST, path: str | int, validated: set[int]) -> bool:
         return True
     if node.encoding is not None:
         raise ValueError(f"TemplateLiteral parts cannot have an encoding at {_part_path(path)}")
+    if not isinstance(node, PART_KINDS):
+        return False
     match node:
         case String() | Number() | BigInt():
             valid = True
-        case Literal():
+        case Literal() | Enum():
             valid = node.checks is None
         case TemplateLiteral():
             # Its own parts were validated when it was made.
@@ -73,7 +75,7 @@ def _validate(node: AST, path: str | int, validated: set[int]) -> bool:
                 for i, member in enumerate(node.types)
             )
         case _:
-            return False
+            raise AssertionError(f"PART_KINDS has {node.tag}, which _validate doesn't check")
     if valid:
         validated.add(id(node))
     return valid
@@ -115,6 +117,9 @@ def _match_span(node: AST, input: str, start: int, end: int, options: ParseOptio
         case Literal():
             text = to_string(node.literal)
             return end - start == len(text) and input.startswith(text, start)
+        case Enum():
+            span = input[start:end]
+            return any(span == to_string(member.value) for member in node.enum)
         case TemplateLiteral():
             return segment(node, input[start:end], options) is not None
         case Union():
@@ -184,6 +189,11 @@ class TemplateLiteral(AST):
 
     def _flip(self) -> AST:
         return self
+
+
+PART_KINDS: tuple[type[AST], ...] = (String, Number, BigInt, Literal, Enum, TemplateLiteral, Union)
+"""The kinds of node a part may be. Every derivation over parts handles each one
+(``tests/test_template_literal_parts.py``)."""
 
 
 def segment(node: TemplateLiteral, input: str, options: ParseOptions) -> list[str] | None:

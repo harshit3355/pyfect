@@ -160,10 +160,11 @@ def test_a_zoned_string_parses_back_to_its_instant_and_zone(dt: datetime, zone: 
     assert parsed is not None
     assert parsed == zoned + (offset - _offset_to_the_minute(offset))
     if isinstance(zone, ZoneInfo):
-        # Read back under ICU's canonical id, as Effect's Intl does (Asia/Kolkata is Asia/Calcutta).
-        canonical = date_time.zone_named(zone.key)
-        assert canonical is not None
-        assert date_time.zone_to_string(parsed.tzinfo or UTC) == canonical.key
+        # Read back under the id written, equal to ICU's resolved zone, as in Effect 4.1.4.
+        named = date_time.zone_named(zone.key)
+        assert named is not None
+        assert date_time.zone_to_string(parsed.tzinfo or UTC) == named.key
+        assert parsed.tzinfo == named
     else:
         assert parsed.utcoffset() == offset
 

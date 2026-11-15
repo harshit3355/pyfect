@@ -2,7 +2,7 @@
 them, below both ``pyfect.encoding`` and the schema getters (which
 ``pyfect.encoding`` imports). Text input is encoded as UTF-8 first
 (``TextEncoder``); decoded text is UTF-8 with bad bytes replaced and a
-leading byte-order mark dropped (``TextDecoder``)."""
+leading U+FEFF kept (``new TextDecoder("utf-8", { ignoreBOM: true })``)."""
 
 from __future__ import annotations
 
@@ -38,9 +38,11 @@ def _bytes(value: Binary) -> bytes:
     return text_encode(value) if isinstance(value, str) else bytes(value)
 
 
-def utf8_text(data: bytes) -> str:
-    """``new TextDecoder().decode(data)``."""
-    return data.decode("utf-8-sig", errors="replace")
+def utf8_text(data: bytes, *, ignore_bom: bool) -> str:
+    """``new TextDecoder("utf-8", { ignoreBOM }).decode(data)``: bad bytes become U+FFFD,
+    and a leading U+FEFF is text with ``ignore_bom``, or dropped as a byte-order mark
+    without it. Each Effect decoder picks one, so there is no default."""
+    return data.decode("utf-8" if ignore_bom else "utf-8-sig", errors="replace")
 
 
 def _fail(module: str, text: str, message: str) -> Err[EncodingError]:
@@ -49,6 +51,12 @@ def _fail(module: str, text: str, message: str) -> Err[EncodingError]:
 
 def _strip_crlf(text: str) -> str:
     return text.replace("\r", "").replace("\n", "")
+
+
+def decoded_text(result: Result[bytes, EncodingError]) -> Result[str, EncodingError]:
+    """A ``decode_string``: Effect's Base64, Base64Url and Hex decode with
+    ``new TextDecoder("utf-8", { ignoreBOM: true })``, so a leading U+FEFF stays."""
+    return result.map(lambda data: utf8_text(data, ignore_bom=True))
 
 
 # --- Base64 ---------------------------------------------------------------------------
@@ -76,6 +84,34 @@ def base64_decode(text: str) -> Result[bytes, EncodingError]:
         bad = next(c for c in stripped if not _BASE64_CHAR.fullmatch(c))
         return _fail("Base64", stripped, f"Invalid character {bad}")
     return Ok(binascii.a2b_base64(stripped))
+
+
+def base64_encode_unpadded(value: Binary) -> str:
+    """``encode`` without the ``=`` padding."""
+    return base64_encode(value).rstrip("=")
+
+
+def base64_decode_lenient(text: str) -> Result[bytes, EncodingError]:
+    """Either alphabet, padded or not; CR and LF are ignored, other whitespace is
+    rejected. One input uses one alphabet; a failure names ``Base64`` and holds
+    ``text`` as given."""
+    if "-" in text or "_" in text:
+        decoded = base64_url_decode(text)
+    else:
+        decoded = base64_decode(_add_padding(_strip_crlf(text)))
+    return decoded.map_error(
+        lambda error: EncodingError(
+            kind="Decode", module="Base64", input=text, message=error.message
+        )
+    )
+
+
+def _add_padding(stripped: str) -> str:
+    """Lengths that can't be valid are left for ``base64_decode`` to reject."""
+    remainder = len(stripped) % 4
+    if remainder < 2 or stripped.endswith("="):
+        return stripped
+    return stripped + ("==" if remainder == 2 else "=")
 
 
 # --- Base64Url ------------------------------------------------------------------------
