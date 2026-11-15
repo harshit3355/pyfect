@@ -257,7 +257,7 @@ def buffer(self: AnyChannel, capacity: Capacity, strategy: Strategy, *, array: b
             offer: Callable[[Any], Effect[Any]] = queue.offer_all if array else queue.offer
             run = pull.flat_map(offer).forever(disable_yield=True).on_error(queue.fail_cause)
             yield fork_in(run, scope)
-            return queue.take_all().map(tuple) if array else queue.take()
+            return queue._take_chunk() if array else queue.take()
 
         return _Gen(body)
 

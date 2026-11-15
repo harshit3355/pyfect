@@ -30,6 +30,13 @@
   and queues no task, as Effect's `failCauseUnsafe` does. The stray task sat in the
   dispatcher of the fiber that made the queue, so that fiber's later forks ran ahead of
   tasks other fibers had queued since.
+- `provide_service` and the other effects that run with a changed context restore it as
+  Effect's `updateContext` does, uninterruptibly, so an interrupt that arrives while the
+  fiber is paused there lands one step later, as in Effect. Before, a repeated effect
+  interrupted at that point finished a step early.
+- `Stream.buffer`, `group_by`, `partition`, `callback` and `Channel.callback_array` hand each
+  chunk on in the step that takes it from their queue, as Effect's `Queue.takeAll` does,
+  without a further step to convert it.
 
 ## 0.6.6 (2026-11-15)
 

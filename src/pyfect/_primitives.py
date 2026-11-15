@@ -22,7 +22,7 @@ from pyfect.cause import die as die_cause
 from pyfect.exit import Exit, Failure, Success
 
 if TYPE_CHECKING:
-    from pyfect._fiber import Fiber, Uninterruptible, _RunView
+    from pyfect._fiber import Fiber, Uninterruptible
     from pyfect.context import Context
 
 
@@ -368,7 +368,9 @@ class _OnExit(Effect[Any, Any, Any]):
 
 @final
 class _Locally[A, E, R](Effect[A, E, R]):
-    """Run ``inner`` with a modified context, restoring it afterwards."""
+    """Run ``inner`` with a modified context, restoring it afterwards
+    (Effect's ``updateContext``: its finalizer is an ``OnExit`` frame, run
+    uninterruptibly, that hands the exit back to the loop, an op of its own)."""
 
     __slots__ = ("f", "inner")
 
@@ -377,29 +379,15 @@ class _Locally[A, E, R](Effect[A, E, R]):
         self.f = f
 
     def _step(self, fiber: Fiber[Any, Any]) -> Step:
-        fiber._push(_RestoreContext(fiber._view))
+        view = fiber._view
+
+        def restore(ex: Exit[Any, Any]) -> Step:
+            fiber._use_view(view)
+            return _FromExit(ex)
+
+        fiber._push(_OnExit(self.inner, restore))
         fiber._set_context(self.f(fiber._context))
         return self.inner
-
-
-@final
-class _RestoreContext(Frame):
-    """Effect's ``updateContext`` finalizer, an ``OnExit`` frame: it hands
-    the exit back to the loop, an op of its own. It puts back the view of
-    the context it saved, which needs no lookup."""
-
-    __slots__ = ("view",)
-
-    def __init__(self, view: _RunView) -> None:
-        self.view = view
-
-    def _on_success(self, value: Any, fiber: Fiber[Any, Any]) -> Step:
-        fiber._use_view(self.view)
-        return _Succeed(value)
-
-    def _on_failure(self, cause: Cause[Any], fiber: Fiber[Any, Any]) -> Step:
-        fiber._use_view(self.view)
-        return _FailCause(cause)
 
 
 @final
