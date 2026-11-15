@@ -8,7 +8,7 @@ import pytest
 
 from pyfect.schema.compiler import _registry
 
-pytest_plugins = ["pytester", "_timeout", "_asyncio_reports", "_shards", "_skips"]
+pytest_plugins = ["pytester", "_timeout", "_asyncio_reports", "_shards", "_skips", "_parallel"]
 
 # pytest imports readline before this file loads, and GNU readline (Linux) exports COLUMNS and
 # LINES into the C environment behind os.environ's back; children would inherit an 80-column
@@ -42,3 +42,11 @@ def no_schema_compiler_left_installed() -> Iterator[None]:
     if _registry.active():
         _registry.reset()
         pytest.fail(f"this test left {_COMPILER_LEFT}")
+
+
+@pytest.fixture
+def pytester(pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch) -> pytest.Pytester:
+    """Pytester whose inner runs keep their files' order: pytest-randomly loads in every
+    session from its entry point, and the inner tests here are written as sequences."""
+    monkeypatch.setenv("PYTEST_ADDOPTS", "-p no:randomly")
+    return pytester
