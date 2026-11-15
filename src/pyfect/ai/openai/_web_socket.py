@@ -23,6 +23,7 @@ from pyfect import schema as S
 from pyfect import scope as scope_mod
 from pyfect import stream as St
 from pyfect._core import Effect, uninterruptible_mask
+from pyfect._js import text_encode
 from pyfect._json_text import parse as parse_json_text
 from pyfect._service_copy import replaced
 from pyfect.ai import _provider as P
@@ -211,7 +212,9 @@ class _Connection:
         # A turn's messages count against ``max_response_bytes``, as an HTTP
         # response body does; past it the turn fails and, left current, the
         # connection is replaced when the turn's scope closes.
-        self._turn_bytes += len(message) if isinstance(message, bytes) else len(message.encode())
+        self._turn_bytes += (
+            len(message) if isinstance(message, bytes) else len(text_encode(message))
+        )
         if self._turn_bytes > self._max_turn_bytes:
             turn.fail_cause_unsafe(cause.fail(_too_large(self._max_turn_bytes)))
             return

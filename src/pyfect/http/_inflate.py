@@ -4,7 +4,7 @@ httpx's decoders inflate a whole network chunk in one call, so a body limit
 applied to their output sees a bomb only after it is in memory. Here each
 piece is produced when the reader asks for it, so a limit stops the decoding
 after about the limit. Codings are read as httpx reads them: ``gzip``,
-``deflate`` (zlib, or raw deflate), ``br`` when brotli is installed;
+``deflate`` (zlib, or raw deflate), ``br`` with the ``brotli`` extra (``Unsupported`` without it);
 ``identity`` and unknown codings pass the bytes through.
 """
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import zlib
 from collections.abc import Iterator, Sequence
+from importlib.util import find_spec
 from typing import Any, Protocol
 
 PIECE = 64 * 1024
@@ -61,22 +62,17 @@ class _Zlib:
 
 
 class _Brotli:
-    def __init__(self, library: Any) -> None:
-        self._decoder: Any = library.Decompressor()
+    def __init__(self) -> None:
+        from pyfect.http._brotli import decompressor  # the brotli extra
+
+        self._decoder: Any = decompressor()
 
     def pieces(self, data: bytes) -> Iterator[bytes]:
         decoder = self._decoder
         try:
-            try:
-                piece = decoder.process(data, output_buffer_limit=PIECE)
-            except TypeError:  # an older brotli without an output limit
-                yield decoder.process(data)
-                return
-            yield piece
+            yield decoder.process(data, output_buffer_limit=PIECE)
             while not decoder.can_accept_more_data():
                 yield decoder.process(b"", output_buffer_limit=PIECE)
-        except DecodingError:
-            raise
         except Exception as error:
             raise DecodingError(str(error)) from error
 
@@ -84,16 +80,8 @@ class _Brotli:
         return iter(())
 
 
-def _brotli_library() -> Any:
-    try:
-        import brotlicffi  # pyright: ignore[reportMissingTypeStubs]
-    except ImportError:
-        try:
-            import brotli  # pyright: ignore[reportMissingImports]
-        except ImportError:
-            return None
-        return brotli
-    return brotlicffi
+class Unsupported(Exception):
+    """A coding httpx decodes that pyfect cannot decode in bounded pieces here."""
 
 
 def _stage(coding: str) -> _Stage | None:
@@ -101,8 +89,11 @@ def _stage(coding: str) -> _Stage | None:
         return _Zlib(zlib.MAX_WBITS | 16, raw_fallback=False)
     if coding == "deflate":
         return _Zlib(zlib.MAX_WBITS, raw_fallback=True)
-    if coding == "br" and (library := _brotli_library()) is not None:
-        return _Brotli(library)
+    if coding == "br":
+        # The brotli extra; without it httpx may still decode ``br`` (``brotli``).
+        if find_spec("brotlicffi") is None:
+            raise Unsupported(coding)
+        return _Brotli()
     return None
 
 

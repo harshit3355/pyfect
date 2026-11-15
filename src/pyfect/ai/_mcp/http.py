@@ -349,7 +349,7 @@ def _post(sessions: _Sessions, request: ServerRequest) -> Effect[HttpServerRespo
         if classified.kind == "invalid_params":
             return response.json_unsafe(invalid_params_response(classified.id), headers=headers)
         if classified.request is not None and classified.request.method == "initialize":
-            if text is not None and len(text.encode()) > table.limits.max_initialize_bytes:
+            if text is not None and len(text_encode(text)) > table.limits.max_initialize_bytes:
                 return _empty(413)
             return (yield from _open_session(sessions, classified.request, now))
         if connection is None:

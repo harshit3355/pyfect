@@ -36,7 +36,7 @@ from pyfect.http import _form_data
 from pyfect.http import body as _body
 from pyfect.http import url as _url
 from pyfect.http._httpx_options import RequestDefaults, import_httpx, split_options
-from pyfect.http._inflate import DecodingError, Inflater
+from pyfect.http._inflate import DecodingError, Inflater, Unsupported
 from pyfect.http.abort import AbortSignal
 from pyfect.http.client import HttpClient, HttpClientService
 from pyfect.http.client import make as make_client
@@ -363,13 +363,17 @@ class _Backend:
 
     def _body(self, response: httpx.Response) -> Stream[bytes, object]:
         # Decoded here, a bounded piece per pull, so a body limit stops a bomb
-        # (a response httpx has read already, as a mock transport's, is decoded).
+        # (a response httpx has read already, as a mock transport's, is decoded;
+        # a coding pyfect cannot decode here is left to httpx).
         codings = (
             []
             if response.is_stream_consumed
             else response.headers.get_list("content-encoding", split_commas=True)
         )
-        inflater = Inflater(codings)
+        try:
+            inflater = Inflater(codings)
+        except Unsupported:
+            inflater = Inflater([])
         chunks = response.aiter_bytes() if inflater.is_identity else response.aiter_raw()
         pending: Iterator[bytes] = iter(())
         ended = False

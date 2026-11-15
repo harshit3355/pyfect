@@ -145,15 +145,11 @@ def test_messages_from_a_client_gone_before_run_still_reach_the_handler() -> Non
 
 
 def _queued_frame_bytes() -> int:
-    import gc
-
+    from _gc_census import tracked_of
     from websockets.asyncio.messages import Assembler
 
     return sum(
-        len(frame.data)
-        for assembler in gc.get_objects()
-        if type(assembler) is Assembler  # a dead weakref proxy raises on isinstance
-        for frame in assembler.frames.queue
+        len(frame.data) for assembler in tracked_of(Assembler) for frame in assembler.frames.queue
     )
 
 

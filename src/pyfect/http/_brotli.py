@@ -26,3 +26,9 @@ class Brotli:
 
     def finish(self) -> bytes:
         return self._compressor.finish()
+
+
+def decompressor() -> Any:
+    """A brotlicffi ``Decompressor`` (``process(data, output_buffer_limit=)``)."""
+    library: Any = _library
+    return library.Decompressor()
