@@ -16,6 +16,8 @@
 - `socket.server.make_web_socket` connections queue at most one incoming frame while no
   handler reads them (websockets' `max_queue=1`; the client too), and the server declines
   `permessage-deflate`, as Effect's `ws` server does. Both can be set through the serve options.
+- A multipart body has at most `MaxParts` parts, now 1000 by default (it was unbounded, as in
+  Effect); more fail with `TooManyParts`. Provide `MaxParts` to change it, `None` for no limit.
 
 ## 0.6.5 (2026-11-14)
 

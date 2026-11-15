@@ -5,7 +5,7 @@
 scoped temporary directory and collects the form as a ``Persisted``
 mapping (a field's value, or the values of a repeated field; a file key's
 ``PersistedFile`` list). The limits are references the parse reads:
-``MaxParts``, ``MaxFieldSize`` (10 MiB), ``MaxFileSize``,
+``MaxParts`` (1000), ``MaxFieldSize`` (10 MiB), ``MaxFileSize``,
 ``MaxBodySize`` (``incoming_message``) and ``FieldMimeTypes`` (parts of
 these types are fields even with a file name).
 """
@@ -205,12 +205,17 @@ def is_persisted_file(value: object) -> bool:
     return isinstance(value, PersistedFile)
 
 
+_DEFAULT_MAX_PARTS = 1000
+
+
 class MaxParts(Reference[int | None]):
-    """At most this many parts (``None``: no limit)."""
+    """At most this many parts (1000; ``None``: no limit). Effect has no
+    default limit, but a buffered form writes a file per file part before its
+    schema runs."""
 
     @classmethod
     def default(cls) -> int | None:
-        return None
+        return _DEFAULT_MAX_PARTS
 
 
 class MaxFieldSize(Reference[ByteSize]):

@@ -176,8 +176,8 @@ app needs more room.
   at most two stacked codings. `router.cors(credentials=True)` needs a list of origins
   without `*`. A multipart boundary must follow RFC 2046 (1 to 70 characters). A multipart
   field is at most `MaxFieldSize` (10 MiB) and a file `MaxFileSize` (no limit but the body's);
-  `MaxParts` is unbounded by default, as in Effect, so set it where a form has a known number
-  of parts. A response
+  a body has at most `MaxParts` (1000) parts (Effect has no default limit; set `None` for
+  none). A response
   header with a control character is never sent.
 - In [HttpApi](/docs/http-api), a body without a `Content-Type` gets a 415 instead of being
   read as JSON, and `security_set_cookie` sets `Secure`, `HttpOnly` and `SameSite=Lax`.
