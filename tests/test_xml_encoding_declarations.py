@@ -24,11 +24,11 @@ _OTHER = ["utf8", "utf-7", "utf-16x", "ucs-8", "windows-1252", "shift_jis", "unk
 
 # Declared encoding -> (result without a BOM, result after a UTF-8 BOM)
 _EXPECTED: dict[str, tuple[str, str]] = {
-    **{name: ("Syntax", "Syntax") for name in _WIDE},
+    **dict.fromkeys(_WIDE, ("Syntax", "Syntax")),
     "utf-8": ("ok", "ok"),
     "us-ascii": ("ok", "Syntax"),
     "iso-8859-1": ("Unsupported", "Syntax"),
-    **{name: ("Unsupported", "Unsupported") for name in _OTHER},
+    **dict.fromkeys(_OTHER, ("Unsupported", "Unsupported")),
 }
 
 

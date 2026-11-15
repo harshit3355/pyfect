@@ -102,20 +102,28 @@ _OPENROUTER_PATCHES = (
         '  readonly "id"?: string | null\n  readonly "index"?: number\n',
     ),
     (
-        f'  "index": Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n'
-        '    Schema.isInt().annotate({ "expected": "an integer" })\n'
-        "  ),\n",
-        '  "index": Schema.optionalKey(\n'
-        f"    Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n"
-        '      Schema.isInt().annotate({ "expected": "an integer" })\n'
-        "    )\n"
-        "  ),\n",
+        (
+            f'  "index": Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n'
+            '    Schema.isInt().annotate({ "expected": "an integer" })\n'
+            "  ),\n"
+        ),
+        (
+            '  "index": Schema.optionalKey(\n'
+            f"    Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n"
+            '      Schema.isInt().annotate({ "expected": "an integer" })\n'
+            "    )\n"
+            "  ),\n"
+        ),
     ),
     (
-        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
-        '  readonly "id": string\n',
-        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
-        '  readonly "id"?: string\n',
+        (
+            '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+            '  readonly "id": string\n'
+        ),
+        (
+            '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+            '  readonly "id"?: string\n'
+        ),
     ),
     (
         f'  "id": Schema.String.annotate({_ID_DESCRIPTION}),\n',

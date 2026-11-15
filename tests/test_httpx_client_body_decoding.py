@@ -112,3 +112,9 @@ def test_a_brotli_response_decodes():
 def test_a_corrupt_body_fails():
     outcome, _peak = _get(b"not gzip", "gzip", None)
     assert isinstance(outcome, Err)
+
+
+def test_a_corrupt_body_fails_with_httpx_decoding_error():
+    outcome, _peak = _get(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xffnot deflate", "gzip", None)
+    assert isinstance(outcome, Err)
+    assert isinstance(outcome.error.cause, httpx.DecodingError), repr(outcome.error.cause)

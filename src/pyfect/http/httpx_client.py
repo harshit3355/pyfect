@@ -386,7 +386,7 @@ class _Backend:
                         if piece:
                             return piece
                 except DecodingError as error:
-                    raise httpx.DecodingError(str(error)) from error
+                    raise import_httpx().DecodingError(str(error)) from error
                 if ended:
                     raise StopAsyncIteration
                 try:
