@@ -50,12 +50,11 @@ def _dead_pid() -> int:
 
 
 def test_reaps_containers_of_processes_that_are_gone():
-    image = _mssql.image()
     try:
         _docker.require_docker()
     except RuntimeError as error:
         pytest.skip(f"no Docker: {error}")
-    _docker.pull(image)
+    _docker.pull(_docker.PLACEHOLDER_IMAGE)
     created = subprocess.run(
         [
             "docker",
@@ -64,7 +63,7 @@ def test_reaps_containers_of_processes_that_are_gone():
             _mssql.LABEL,
             "--label",
             f"{_docker.OWNER}={_dead_pid()}",
-            image,
+            _docker.PLACEHOLDER_IMAGE,
         ],
         capture_output=True,
         text=True,
@@ -72,8 +71,9 @@ def test_reaps_containers_of_processes_that_are_gone():
     )
     container = created.stdout.strip()
     try:
-        reaped = _docker.reap_stale(_mssql.LABEL)
-        assert any(container.startswith(r) or r.startswith(container[:12]) for r in reaped)
+        # Any process starting a server reaps it too (another xdist worker, another run), so
+        # the test checks that it is gone, not which call removed it.
+        _docker.reap_stale(_mssql.LABEL)
         left = subprocess.run(
             ["docker", "ps", "-a", "-q", "--no-trunc", "--filter", f"id={container}"],
             capture_output=True,

@@ -11,6 +11,9 @@ import subprocess
 OWNER = "pyfect.test.owner"
 """The label holding the pid of the process that started a container."""
 
+PLACEHOLDER_IMAGE = "busybox:1.37"
+"""A few megabytes: what a test of the labels creates (never starts) a container from."""
+
 
 def docker(*args: str, timeout: float = 60) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
@@ -77,4 +80,13 @@ def pull(image: str, *platform: str) -> None:
         raise RuntimeError(f"cannot pull {image}: {pulled.stderr.strip()}")
 
 
-__all__ = ["OWNER", "alive", "docker", "published_port", "pull", "reap_stale", "remove"]
+__all__ = [
+    "OWNER",
+    "PLACEHOLDER_IMAGE",
+    "alive",
+    "docker",
+    "published_port",
+    "pull",
+    "reap_stale",
+    "remove",
+]
