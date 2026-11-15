@@ -30,6 +30,7 @@ from __future__ import annotations
 from collections.abc import Callable, Generator, Iterable
 from typing import TYPE_CHECKING, Any, Literal, Never, Self, TypeIs, cast, overload
 
+from pyfect import _effect_misuse
 from pyfect._effect_args import require_effect
 from pyfect._effect_base import SUSPEND, A_co, E_co, EffectBase, Frame, R_co, Step
 from pyfect._effect_concurrency import ConcurrencyMethods
@@ -341,6 +342,8 @@ from pyfect._primitives import (  # noqa: E402
 )
 
 _VOID: Effect[None] = _Succeed(None)
+
+_effect_misuse.install(Effect)
 
 __all__ = [
     "SUSPEND",

@@ -9,6 +9,8 @@ it is checked when it runs. Printed by Effect 4.0.7 under Node:
 gives ``[1, "traced"]``, and ``Effect.fn("bad")(() => 1)()`` dies with a
 ``TypeError``."""
 
+import gc
+import warnings
 from collections.abc import Callable, Generator
 from typing import Any
 
@@ -112,3 +114,30 @@ def test_a_generic_body_must_annotate_its_return_type(decorate: Callable[[Any], 
 def test_an_annotated_generic_body_runs():
     with_annotation = fx.fn(_generic_annotated)
     assert fx.run_blocking(with_annotation(fx.succeed(2))) == 2
+
+
+async def _coroutine_body() -> int:
+    return 1
+
+
+@pytest.mark.parametrize(
+    "decorate",
+    [fx.fn, fx.fn_untraced, fx.gen, fx.fn("named")],
+    ids=["fn", "fn_untraced", "gen", "fn_named"],
+)
+def test_an_async_def_body_dies_saying_to_use_def_and_from_async(
+    decorate: Callable[[Any], object],
+):
+    made = decorate(_coroutine_body)
+    eff: Any = made() if callable(made) else made
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        exit = fx.run_blocking_exit(eff)
+        gc.collect()
+    assert isinstance(exit, fx.Failure)
+    defect = exit.cause.defects[0]
+    assert isinstance(defect, TypeError)
+    assert "_coroutine_body is an async def" in str(defect)
+    assert "fx.from_async" in str(defect)
+    # The coroutine is closed, so Python does not warn that it was never awaited.
+    assert [str(w.message) for w in caught] == []

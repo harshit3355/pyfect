@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Never, Protocol, cast, final
 
 from pyfect._cause_election import finalizer_cause
 from pyfect._core import Effect, Frame, Step
+from pyfect._effect_args import not_a_generator
 from pyfect._effect_base import Decided, succeed_with
 from pyfect.cause import Cause
 from pyfect.cause import die as die_cause
@@ -469,7 +470,9 @@ class _Gen[A, E, R](Effect[A, E, R]):
         gen = cast(object, self.factory())  # a lambda may return anything
         if not isinstance(gen, Generator):
             return Failure(
-                die_cause(TypeError(f"gen expected a generator, got {type(gen).__name__}"))
+                die_cause(
+                    not_a_generator(f"gen expected a generator, got {type(gen).__name__}", gen)
+                )
             )
         return _GenFrame(cast("Generator[Effect[Any, Any, Any], Any, Any]", gen))
 
