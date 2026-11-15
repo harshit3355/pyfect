@@ -3,8 +3,10 @@ test files of shard K of N.
 
 Files are packed by their recorded duration (``tests/shard_durations.json``, written by
 ``scripts/test_shards.py update``), longest first onto the lightest shard, so every runner
-finishes at about the same time. A file with no recorded duration goes to the shard its path
-hashes to. Either way every file lands in exactly one shard. ``--shard-manifest PATH`` writes
+finishes at about the same time. A file longer than a shard's even share would leave its shard
+behind the others, so its tests are spread instead: each test goes to the shard its id
+hashes to. A file with no recorded duration goes to the shard its path hashes to. Either way
+every test lands in exactly one shard. ``--shard-manifest PATH`` writes
 the collected test ids, which CI's ``check`` job compares with a full collection
 (``scripts/test_shards.py verify``), so no test is skipped or run twice.
 """
@@ -34,31 +36,57 @@ def parse_shard(text: str) -> Shard:
     return Shard(int(index), int(count))
 
 
-def assign(durations: Mapping[str, float], count: int) -> dict[str, int]:
-    """Each file's 1-based shard: longest file first onto the shard with the least time."""
-    loads = [0.0] * count
+@dataclass(frozen=True)
+class Plan:
+    shards: Mapping[str, int]
+    """Each packed file's 1-based shard."""
+    spread: frozenset[str]
+    """Files whose tests are spread over every shard by test id."""
+    loads: tuple[float, ...]
+    """Each shard's recorded seconds, a spread file's split evenly."""
+
+
+def assign(durations: Mapping[str, float], count: int) -> Plan:
+    """Spread the files too long for one shard, then pack the rest longest first onto the shard
+    with the least time."""
+    share = sum(durations.values()) / count
+    spread = frozenset(path for path, s in durations.items() if s > share)
+    loads = [sum(durations[path] for path in spread) / count] * count
     shards: dict[str, int] = {}
-    for path, seconds in sorted(durations.items(), key=lambda item: (-item[1], item[0])):
+    packed = (item for item in durations.items() if item[0] not in spread)
+    for path, seconds in sorted(packed, key=lambda item: (-item[1], item[0])):
         lightest = min(range(count), key=lambda shard: (loads[shard], shard))
         loads[lightest] += seconds
         shards[path] = lightest + 1
-    return shards
+    return Plan(shards, spread, tuple(loads))
 
 
-def shard_of(path: str, shards: Mapping[str, int], count: int) -> int:
-    known = shards.get(path)
-    return known if known is not None else zlib.crc32(path.encode()) % count + 1
+def _hashed(text: str, count: int) -> int:
+    return zlib.crc32(text.encode()) % count + 1
 
 
-def load_durations() -> dict[str, float]:
-    recorded: dict[str, float] = json.loads(DURATIONS.read_text(encoding="utf-8"))
+def shard_of(path: str, plan: Plan, count: int) -> int | None:
+    """The shard that collects ``path``; None when its tests are spread over every shard."""
+    if path in plan.spread:
+        return None
+    known = plan.shards.get(path)
+    return known if known is not None else _hashed(path, count)
+
+
+def shard_of_test(nodeid: str, count: int) -> int:
+    """The shard that runs a test of a spread file."""
+    return _hashed(nodeid, count)
+
+
+def load_durations(path: Path) -> dict[str, float]:
+    recorded: dict[str, float] = json.loads(path.read_text(encoding="utf-8"))
     return recorded
 
 
 @dataclass(eq=False)  # a plugin: pluggy hashes it
 class _Selection:
     shard: Shard
-    shards: dict[str, int]
+    plan: Plan
     patterns: list[str]
     root: Path
 
@@ -70,7 +98,24 @@ class _Selection:
         if not is_test_file:
             return None
         path = collection_path.relative_to(self.root).as_posix()
-        return True if shard_of(path, self.shards, self.shard.count) != self.shard.index else None
+        owner = shard_of(path, self.plan, self.shard.count)
+        return True if owner is not None and owner != self.shard.index else None
+
+    @pytest.hookimpl
+    def pytest_collection_modifyitems(
+        self, config: pytest.Config, items: list[pytest.Item]
+    ) -> None:
+        if not self.plan.spread:
+            return
+        keep: list[pytest.Item] = []
+        drop: list[pytest.Item] = []
+        for item in items:
+            spread = item.nodeid.partition("::")[0] in self.plan.spread
+            mine = not spread or shard_of_test(item.nodeid, self.shard.count) == self.shard.index
+            (keep if mine else drop).append(item)
+        if drop:
+            config.hook.pytest_deselected(items=drop)
+            items[:] = keep
 
 
 @dataclass(eq=False)  # a plugin: pluggy hashes it
@@ -105,6 +150,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     group.addoption("--shard", type=parse_shard, help="collect only shard K of N (K/N)")
     group.addoption("--shard-manifest", type=Path, help="write the collected test ids here")
     group.addoption("--shard-durations", type=Path, help="write each file's seconds here (JSON)")
+    group.addoption("--shard-recorded", type=Path, help="pack by these durations (JSON)")
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -113,8 +159,9 @@ def pytest_configure(config: pytest.Config) -> None:
     timings: Path | None = config.getoption("shard_durations")
     if shard is not None:
         patterns: list[str] = config.getini("python_files")
-        shards = assign(load_durations(), shard.count)
-        config.pluginmanager.register(_Selection(shard, shards, patterns, config.rootpath))
+        recorded: Path | None = config.getoption("shard_recorded")
+        plan = assign(load_durations(recorded or DURATIONS), shard.count)
+        config.pluginmanager.register(_Selection(shard, plan, patterns, config.rootpath))
     if manifest is not None:
         config.pluginmanager.register(_Manifest(manifest))
     if timings is not None:
