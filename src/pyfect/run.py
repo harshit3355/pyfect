@@ -46,7 +46,7 @@ from pyfect._core import Effect, _Succeed
 from pyfect._effect_args import require_effect
 from pyfect._fiber import Fiber
 from pyfect._root import ambient_run, new_root, start_root
-from pyfect.cause import Cause
+from pyfect.cause import Cause, _raised_tagged_error_hint
 from pyfect.context import Context
 from pyfect.errors import AsyncFiberError
 from pyfect.exit import Exit, Success
@@ -397,6 +397,13 @@ def unwrap[A](ex: Exit[A, Any]) -> A:
     if isinstance(ex, Success):
         return ex.value
     error = ex.cause.raisable()
+    hint = _raised_tagged_error_hint(error)
+    if (
+        hint is not None
+        and any(d is error for d in ex.cause.defects)
+        and hint not in (getattr(error, "__notes__", None) or ())
+    ):
+        error.add_note(hint)
     if len(ex.cause.reasons) > 1:
         error.add_note("Full cause:\n" + ex.cause.pretty())
     raise error
