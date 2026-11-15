@@ -19,7 +19,6 @@ _ALLOWED: dict[tuple[str, str], str] = {
     ("scheduler.py", "current"): "AsyncioScheduler.current, called by run_async",
     ("_fiber_collections.py", "future_of"): "the run_promise APIs, called from a coroutine",
     ("managed_runtime.py", "_loop_scheduler"): "called once a loop is known to run here",
-    ("run.py", "_interrupt_on_signals"): "run_main's own loop",
     ("http/web_handler.py", "_handle"): "the web handler, called by the server's coroutine",
     ("http/wire.py", "_cancel"): "closes a body on the loop if there is one, else runs it",
     ("http/asgi/_http.py", "__init__"): "made by the ASGI coroutine on the server's loop",
