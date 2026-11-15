@@ -90,8 +90,10 @@ class _CreationExpiry:
 def usage_ttl(ttl: Duration) -> Effect[Strategy[Any, Any]]:
     """While the pool is above its target size, invalidate an unreserved
     item ``ttl`` after its last release, longest idle first. An item that
-    becomes excess or unreserved only after that is retired within ``ttl``
-    (Effect 4.1.4's loop: sleep until the earliest deadline)."""
+    becomes excess or unreserved only after that is retired within ``ttl``.
+    This is Effect main's loop (#10543: sleep until the earliest deadline);
+    Effect 4.1.4 checked once per ``ttl``, so an item stayed idle up to twice
+    ``ttl``."""
     ttl_nanos = nanos_or_infinite(ttl)
 
     def make(fiber: Fiber[Any, Any]) -> Effect[Strategy[Any, Any]]:
