@@ -64,6 +64,12 @@
 - Schema: `TemplateLiteral` tries each split point without copying the text on both sides, so
   a long string that does not match (`"-" * n + "a"` against `${string}-${number}`) fails in
   linear time.
+- Schema: `format_issue` (the `message` of a `SchemaError`) writes at most
+  `issue.DEFAULT_MAX_FORMATTED_ISSUES` (100) leaves and ends with `... and N more issues`;
+  pass `max_issues=None` for all of them. Every line repeats its whole path, so an
+  `errors="all"` failure of a deep value made a message (failing leaves x depth) long, which
+  the MCP server sent back for invalid tool arguments. Paths are built only for the leaves
+  written.
 
 ## 0.6.5 (2026-11-14)
 
