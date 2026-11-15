@@ -117,3 +117,47 @@ def test_limits_are_validated():
         result = yield from _http(**options).result()
         assert isinstance(result, Err), options
         assert isinstance(result.error, IllegalArgumentError), options
+
+
+@testing.effect
+def test_initialize_is_bounded_more_tightly_than_other_messages():
+    http = yield from _http()
+    assert (yield from _post(http, _initialize(pad="A" * (65 * 1024)))).status == 413
+    assert (yield from _post(http, _initialize(pad="A" * (60 * 1024)))).status == 200
+
+
+@testing.effect
+def test_initialize_limit_is_configurable():
+    http = yield from _http(max_initialize_bytes="1 MiB")
+    assert (yield from _post(http, _initialize(pad="A" * (512 * 1024)))).status == 200
+    result = yield from _http(max_initialize_bytes=0).result()
+    assert isinstance(result, Err)
+    assert isinstance(result.error, IllegalArgumentError)
+
+
+@testing.effect
+def test_a_session_keeps_only_the_decoded_initialize_fields():
+    """Parsed JSON is far larger than its text, so keeping the whole message
+    would let one small request pin many times its size for the session's life."""
+    import gc
+    import tracemalloc
+
+    http = yield from _http(max_initialize_bytes="4 MiB")
+    body = json.dumps(_initialize(pad=[[] for _ in range(300_000)]), separators=(",", ":"))
+    request = (
+        R.post(URL)
+        .set_headers({"accept": "application/json, text/event-stream"})
+        .body_text(body, "application/json")
+    )
+    tracemalloc.start()
+    try:
+        gc.collect()
+        before = tracemalloc.get_traced_memory()[0]
+        response = yield from http.execute(request)
+        yield from response.text
+        gc.collect()
+        retained = tracemalloc.get_traced_memory()[0] - before
+    finally:
+        tracemalloc.stop()
+    assert response.status == 200
+    assert retained < len(body), (retained, len(body))

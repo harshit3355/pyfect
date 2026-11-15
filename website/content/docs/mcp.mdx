@@ -335,7 +335,8 @@ the same for everyone.
 - `mcp_server.layer_http` keeps at most `max_sessions` (1000) sessions and answers 503 when
   they are all in use; a session idle for `session_idle_timeout` (30 minutes) expires. A
   message larger than `max_message_bytes` (4 MiB, and never more than the app's
-  `MaxBodySize`) gets a 413.
+  `MaxBodySize`) gets a 413, and so does an `initialize` larger than `max_initialize_bytes`
+  (64 KiB). A session keeps only the decoded `initialize` fields.
 - A defect in a tool, resource, prompt or completion handler, or in middleware, is logged and
   reported, and the client gets "Internal error" (code -32603); a tool call gets a generic
   tool error instead. A declared failure with a message sends only its message; one without a

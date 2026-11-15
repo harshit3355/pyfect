@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.6.6 (unreleased)
+
+### Fixed
+
+- `mcp_server.layer_http` reads an `initialize` under its own `max_initialize_bytes` limit
+  (64 KiB by default; a larger one gets 413), and a session keeps only the decoded
+  `initialize` fields, not the whole message.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated
