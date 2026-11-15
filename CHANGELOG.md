@@ -247,6 +247,11 @@
   a batch with more responses than `stream_buffer_size` hung, and a dispatch that failed (a
   payload decode defect, a reused request id) left the response waiting forever. Such a
   response now fails with the dispatch's cause and its requests are interrupted.
+- `--wizard` replaces the flags and arguments typed for the selected command with its answers
+  and keeps inherited flags, short clusters included (a numeric alias is written `--4`), as in
+  Effect 4.1.4 (#10529). The typed ones were repeated before the answers. The wizard puts `--`
+  before a leaf command's arguments, so an answer such as `false` is not read as the value of
+  a boolean flag before it; `command.wizard` returns that `--` too.
 
 ### Performance
 

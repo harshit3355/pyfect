@@ -45,6 +45,19 @@ class LexResult:
 _NEGATIVE_NUMBER = re.compile(r"-(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?")
 
 
+def format_token(token: Token) -> str:
+    """``token`` as an argument again; a short option cluster gives one argument per flag."""
+    match token:
+        case Value(value=value):
+            return value
+        case LongOption(raw=raw):
+            return raw
+        case ShortOption(flag=flag, raw=raw, value=value):
+            # A numeric alias needs the long syntax, or it reads as a negative number.
+            written = f"--{flag}" if _NEGATIVE_NUMBER.fullmatch(raw) else raw
+            return written if value is None else f"{written}={value}"
+
+
 def lex(argv: Sequence[str]) -> LexResult:
     try:
         end = list(argv).index("--")

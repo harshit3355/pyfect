@@ -462,6 +462,15 @@ def parse_args(lexed: LexResult, command: AnyCommand, path: tuple[str, ...] = ()
     )
 
 
+def selected_command_tokens(tokens: tuple[Token, ...], command: AnyCommand) -> tuple[Token, ...]:
+    """The part of ``tokens`` left for the selected command once its ancestors have taken the
+    subcommand names and inherited flags."""
+    result = _LevelScan(command, ()).scan(tokens)
+    if result.sub is None:
+        return tokens
+    return selected_command_tokens(result.child_tokens, result.sub)
+
+
 __all__ = [
     "FlagRegistry",
     "consume_global_flags",
@@ -471,4 +480,5 @@ __all__ = [
     "get_command_path",
     "negated_name",
     "parse_args",
+    "selected_command_tokens",
 ]

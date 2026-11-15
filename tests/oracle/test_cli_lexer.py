@@ -1,6 +1,9 @@
 """Effect's ``test/cli/Lexer.test.ts``."""
 
-from pyfect.cli._lexer import LongOption, ShortOption, Value, lex
+from hypothesis import assume, given
+from hypothesis import strategies as st
+
+from pyfect.cli._lexer import LongOption, ShortOption, Token, Value, format_token, lex
 
 
 def test_preserves_every_equals_sign_in_a_long_options_inline_value():
@@ -42,3 +45,31 @@ def test_still_lexes_short_options_that_are_not_negative_numbers():
         ShortOption("a", "-a"),
         ShortOption("e", "-e"),
     )
+
+
+_ARG = st.one_of(
+    st.sampled_from(
+        ["-", "--x", "-3", "-3.5", "-a", "-ab", "-4", "-s4", "-n=3", "--name=v", "--="]
+    ),
+    st.text(alphabet="-ab4=.x", min_size=1, max_size=6),
+)
+
+
+def _meaning(token: Token) -> tuple[str, str, str | None]:
+    """What the parser reads from a token: a value, or a flag's name and value."""
+    match token:
+        case Value(value=value):
+            return ("value", value, None)
+        case LongOption(name=name, value=value) | ShortOption(flag=name, value=value):
+            return ("flag", name, value)
+
+
+@given(st.lists(_ARG, max_size=6))
+def test_formatted_tokens_lex_back_to_the_same_flags_and_values(argv: list[str]) -> None:
+    """The wizard rebuilds a command line from tokens (Effect #10529); re-lexing what
+    ``format_token`` writes must read the same flags and values, cluster or not."""
+    tokens = lex(argv).tokens
+    # A cluster such as ``-4-`` names a flag ``-``, which no command can declare.
+    assume(not any(isinstance(t, ShortOption) and t.flag == "-" for t in tokens))
+    again = lex([format_token(token) for token in tokens]).tokens
+    assert [_meaning(t) for t in again] == [_meaning(t) for t in tokens]

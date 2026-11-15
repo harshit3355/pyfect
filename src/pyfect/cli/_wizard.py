@@ -102,6 +102,9 @@ def _prompt_command(
                 yield from _log_current(line, colors)
         if config.arguments:
             yield from console.log(_section(section, "ARGUMENTS", colors))
+            # Keep positional answers from binding to a boolean flag before them.
+            if not visible:
+                line.append(_arg("--"))
             for param in config.arguments:
                 line.extend((yield from _prompt_param(param)))
             if visible:
