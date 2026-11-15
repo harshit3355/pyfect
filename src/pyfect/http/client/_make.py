@@ -31,7 +31,7 @@ from pyfect.http.request import HttpClientRequest
 from pyfect.http.response import HttpClientResponse, _InterruptibleResponse
 from pyfect.result import Err, Ok
 from pyfect.scope import CloseableScope, Scope
-from pyfect.tracer import DisablePropagation, Span, TracerTimingEnabled
+from pyfect.tracer import DisablePropagation, Span, TracerEnabled, TracerTimingEnabled
 from pyfect.tracer._spans import in_parent_span, use_span
 
 type Phase = Literal["request", "response"]
@@ -206,7 +206,11 @@ def _send(
             return fail(HttpClientError(InvalidUrlError(request, error)))
         case Ok(url):
             pass
-    if fiber.get_ref(DisablePropagation) or fiber.get_ref(TracerDisabledWhen)(request):
+    if (
+        not fiber.get_ref(TracerEnabled)
+        or fiber.get_ref(DisablePropagation)
+        or fiber.get_ref(TracerDisabledWhen)(request)
+    ):
         return _exchange(send, request, url, fiber, lambda _response: None)
 
     def traced(span: Span) -> Effect[HttpClientResponse, HttpClientError]:

@@ -64,7 +64,7 @@ from pyfect.http.error import (
 )
 from pyfect.redacted import Redacted
 from pyfect.schedule import spaced
-from pyfect.tracer import NativeSpan, SpanRequest, Tracer
+from pyfect.tracer import NativeSpan, SpanRequest, Tracer, TracerEnabled
 
 type Handler = Callable[[req.HttpClientRequest], res.HttpClientResponse]
 
@@ -345,6 +345,15 @@ def test_sends_trace_headers():
     yield from client.get("http://test/")
     assert isinstance(sent[0].headers.get("b3"), str)
     assert isinstance(sent[0].headers.get("traceparent"), str)
+
+
+@testing.effect
+def test_omits_trace_headers_when_tracing_is_disabled():
+    """omits trace headers when tracing is disabled"""
+    sent, client = _capturing_client()
+    yield from client.get("http://test/").pipe(fx.provide_service(TracerEnabled, False))
+    assert sent[0].headers.get("b3") is None
+    assert sent[0].headers.get("traceparent") is None
 
 
 @testing.effect

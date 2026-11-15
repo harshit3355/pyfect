@@ -252,6 +252,8 @@
   Effect 4.1.4 (#10529). The typed ones were repeated before the answers. The wizard puts `--`
   before a leaf command's arguments, so an answer such as `false` is not read as the value of
   a boolean flag before it; `command.wizard` returns that `--` too.
+- The HTTP client sends no trace headers and makes no span when `TracerEnabled` is off, as in
+  Effect main (#10627). It sent the no-op span's `noop` ids.
 
 ### Performance
 

@@ -12,7 +12,7 @@ import pytest
 from _threads import live_threads
 
 import pyfect as fx
-from pyfect import testing
+from pyfect import testing, tracer
 from pyfect.http import client as c
 from pyfect.http import cookies
 from pyfect.http import request as req
@@ -305,3 +305,31 @@ def test_every_error_reason_keeps_the_redaction_of_the_fiber_that_made_it() -> N
     for reason in reasons:
         rendered = f"{reason.message} {reason.to_json()} {e.HttpClientError(reason).to_json()}"
         assert "token-secret" not in rendered, type(reason).__name__
+
+
+_TRACING_OFF: dict[str, Callable[[fx.Effect[Any, Any, Any]], fx.Effect[Any, Any, Any]]] = {
+    "TracerEnabled": lambda eff: eff.pipe(fx.provide_service(tracer.TracerEnabled, False)),
+    "DisablePropagation": lambda eff: eff.pipe(fx.provide_service(tracer.DisablePropagation, True)),
+    "TracerDisabledWhen": lambda eff: eff.pipe(
+        fx.provide_service(c.TracerDisabledWhen, lambda _request: True)
+    ),
+    "TracerPropagationEnabled": lambda eff: eff.pipe(
+        fx.provide_service(c.TracerPropagationEnabled, False)
+    ),
+}
+
+
+@pytest.mark.parametrize("switch", list(_TRACING_OFF))
+def test_no_trace_headers_leave_the_client_when_tracing_is_off(switch: str) -> None:
+    """Effect #10627: with the tracer off, the client sent a no-op span's ``noop`` ids. Every
+    way of turning tracing or propagation off sends no trace header."""
+    sent: list[req.HttpClientRequest] = []
+
+    def send(
+        request: req.HttpClientRequest, _url: fx.Url, _signal: AbortSignal, _fiber: Any
+    ) -> fx.Effect[res.HttpClientResponse, HttpClientError]:
+        sent.append(request)
+        return fx.succeed(res.make(request))
+
+    _run(_TRACING_OFF[switch](c.make(send).get("http://test/")))
+    assert [name for name in ("b3", "traceparent") if sent[0].headers.get(name) is not None] == []
