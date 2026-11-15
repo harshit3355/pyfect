@@ -332,6 +332,7 @@ _BOUNDARY = re.compile(r"[0-9A-Za-z'()+_,\-./:=? ]{0,69}[0-9A-Za-z'()+_,\-./:=?]
 """RFC 2046 §5.1.1: ``bchars``, at most 70, not ending in a space. The
 search for it costs its length on every write, so the bound matters."""
 
+
 def decode_field(info: PartInfo, value: bytes) -> str:
     """A field's value decoded by its ``charset`` as ``TextDecoder`` reads the
     label (UTF-8 by default or for one outside the Encoding Standard)."""

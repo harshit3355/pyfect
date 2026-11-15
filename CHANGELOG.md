@@ -29,6 +29,8 @@
 - The httpx client decodes a response's `gzip`, `deflate` and `br` codings itself, in pieces
   of at most 64 KiB as the body is read, so `with_body_limit` stops a compressed body before
   it is inflated; httpx inflated each network chunk whole, and stacked codings multiplied it.
+- `uvicorn_server` WebSockets decline `permessage-deflate` by default, as Effect's `ws`
+  server does (`config={"ws_per_message_deflate": True}` turns it back on).
 
 ## 0.6.5 (2026-11-14)
 

@@ -78,19 +78,19 @@ def make_web_socket(
     return AllowedOrigins().flat_map(lambda policy: _make(port, host, policy, serve_options))
 
 
+def _serve_options(options: dict[str, Any]) -> dict[str, Any]:
+    """``websockets.serve``'s options: as a paused ``ws`` socket, an unread
+    connection holds about one message (websockets queues 16 frames by
+    default, each up to ``max_size``), and no permessage-deflate, which
+    ``ws`` servers leave off."""
+    return {"max_size": DEFAULT_MAX_MESSAGE_SIZE, "max_queue": 1, "compression": None, **options}
+
+
 def _make(
     port: int, host: str | None, policy: OriginPolicy, serve_options: dict[str, Any]
 ) -> Effect[SocketServerService, SocketServerError, Scope]:
     accepted = Accepted()
-    # As a paused ``ws`` socket: an unread connection holds about one message
-    # (websockets queues 16 frames by default, each up to ``max_size``), and no
-    # permessage-deflate, which ``ws`` servers leave off.
-    serve_options = {
-        "max_size": DEFAULT_MAX_MESSAGE_SIZE,
-        "max_queue": 1,
-        "compression": None,
-        **serve_options,
-    }
+    serve_options = _serve_options(serve_options)
     then = serve_options.pop("process_request", None)
 
     async def process_request(connection: ServerConnection, request: Request) -> Any:
