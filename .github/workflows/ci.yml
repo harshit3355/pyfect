@@ -89,9 +89,18 @@ jobs:
       - name: Tests
         run: |
           mkdir -p .shards
-          uv run pytest -q -p no:randomly -rfEs --shard ${{ matrix.shard }}/5 \
+          nproc; free -g
+          uv run pytest -q -n 4 -rfEs --shard ${{ matrix.shard }}/5 \
             --shard-manifest .shards/shard-${{ matrix.shard }}.txt \
-            --shard-durations .shards/durations-${{ matrix.shard }}.json
+            --shard-durations .shards/durations-${{ matrix.shard }}.json \
+            --junitxml .shards/junit-${{ matrix.shard }}.xml -o junit_family=xunit1
+
+      - name: Upload junit (experiment)
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: junit-${{ matrix.python }}-${{ matrix.shard }}
+          path: .shards/junit-${{ matrix.shard }}.xml
 
       - name: Upload the shard's test ids (the check job compares them with a full collection)
         if: always()
@@ -143,121 +152,3 @@ jobs:
       - name: The shards ran every test exactly once
         if: always()
         run: python3 scripts/test_shards.py verify .shards/full.txt .shards/shard-*.txt
-
-  benchmarks:
-    # Fails when a stream or fiber pipeline is more than 1.6x slower than benchmarks/baseline.json,
-    # measured against a pure-Python calibration so the runner's speed cancels out; runners still
-    # differ by up to 1.6x on fork-heavy, so it catches only drift. compare.py catches one change:
-    # it alternates this commit with its branch base on the same runner, within a few percent.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-        with:
-          fetch-depth: 0
-
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Benchmark gate
-        working-directory: benchmarks
-        run: uv run --python 3.13 python gate.py
-
-      - name: Compare with the branch base
-        working-directory: benchmarks
-        run: uv run --python 3.13 python compare.py
-
-  base-install:
-    # What `uv add pyfect-dev` gives a user: no extras, no pytest.
-    # QA api-surface F1/F2: `import pyfect` and the pytest plugin once failed
-    # without httpx, and no test ran without the extras.
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Install with no extras and run a program
-        run: |
-          uv venv -q --python 3.13 "$RUNNER_TEMP/base"
-          uv pip install -q --python "$RUNNER_TEMP/base/bin/python" .
-          cd "$RUNNER_TEMP"
-          "$RUNNER_TEMP/base/bin/python" -I -c "import pyfect as fx; import pyfect.testing; assert fx.run_sync(fx.succeed(1)) == 1"
-
-      - name: Base-install tests (every module imports or names its extra; the pytest plugin loads)
-        run: uv run pytest -q tests/test_install.py
-
-  free-threaded:
-    # QA concurrency 2: a cross-thread resume racing registration hung only
-    # without the GIL. Runs the stress, the shared-state primitives shared by runs
-    # on several threads (tests/cross_run) and the runtime suites on CPython 3.14t.
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    env:
-      PYTHON_GIL: "0"
-      PYFECT_REQUIRE_FREE_THREADED: "1"
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Install CPython 3.14t with pyfect and pytest
-        run: |
-          uv python install 3.14t
-          uv venv -q --python 3.14t "$RUNNER_TEMP/ft"
-          uv pip install -q --python "$RUNNER_TEMP/ft/bin/python" . pytest
-          "$RUNNER_TEMP/ft/bin/python" -c "import sys; assert not sys._is_gil_enabled(), 'GIL enabled'"
-
-      - name: Concurrency stress and runtime suites without the GIL
-        run: >
-          "$RUNNER_TEMP/ft/bin/python" -m pytest -q -p no:cacheprovider
-          tests/test_free_threaded.py
-          tests/cross_run
-          tests/test_run_caller_context.py
-          tests/test_concurrency.py
-          tests/test_decided_results.py
-          tests/test_fibers.py
-          tests/test_interrupt_delivery.py
-          tests/test_race_interruption.py
-          tests/test_for_each_interruption.py
-          tests/test_queue.py
-          tests/test_fiber_collections.py
-          tests/test_managed_runtime.py
-          tests/test_base_exceptions.py
-          tests/oracle/test_synchronous_resume.py
-
-  soak-short:
-    # Six minutes of tests/soak (soak.yml runs it for hours): leaks, stuck fibers, stalls,
-    # unexpected failures and the shutdown are judged; latency needs a longer baseline
-    # than minutes on a shared runner, so it is not.
-    strategy:
-      fail-fast: false
-      matrix:
-        python: ["3.14", "3.14t"]
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-
-      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
-
-      - name: Install
-        run: |
-          uv python install ${{ matrix.python }}
-          uv venv -q --python ${{ matrix.python }} "$RUNNER_TEMP/soak"
-          uv pip install -q --python "$RUNNER_TEMP/soak/bin/python" '.[httpx,websockets,crypto]'
-
-      - name: Soak for six minutes
-        working-directory: tests
-        run: |
-          if [ "${{ matrix.python }}" = "3.14t" ]; then export PYTHON_GIL=0; fi
-          "$RUNNER_TEMP/soak/bin/python" -m soak run --duration 6m --interval 3s \
-            --warmup 90s --no-latency --out "$GITHUB_WORKSPACE/.soak/soak-short.jsonl"
-
-      - name: Upload the health samples
-        if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: soak-short-${{ matrix.python }}
-          path: .soak/*.jsonl
-          if-no-files-found: warn

@@ -1,8 +1,9 @@
 name: docs
 
 on:
+  workflow_dispatch:
   push:
-    branches: ["**"]
+    branches-ignore: [ci-exp]
   pull_request:
   workflow_call:
 

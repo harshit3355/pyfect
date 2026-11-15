@@ -6,7 +6,7 @@ name: audit
 
 on:
   push:
-    branches: ["**"]
+    branches-ignore: [ci-exp]
   pull_request:
   schedule:
     - cron: "41 6 * * 1"
