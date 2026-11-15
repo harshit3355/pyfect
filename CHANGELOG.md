@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.6.6 (unreleased)
+
+### Fixed
+
+- Parsers and decoders take time linear in their input where some inputs cost quadratic time:
+  URL hosts with non-ASCII labels (Punycode encoding and the joiner checks of IDNA), XML
+  decoding (text split by CDATA sections or comments, chunks holding non-ASCII characters,
+  markup in a chunk past `max_token_size`) and XML encoding of many events, TOML table headers
+  of many dotted keys, YAML flow collections over many lines, `json_patch.apply` with many
+  operations on one container, tar archives with global PAX records before many entries, and
+  the `flags` of a JSON `RegExp`. The tar decoder's `Header.pax` is now a read-only mapping.
+- A URL host whose non-ASCII domain is over 16 KiB of UTF-8 is invalid, as in Node's `URL`.
+- Streamed AI responses fold their deltas in linear time: text and reasoning deltas into a
+  prompt (`Prompt.from_response_parts`), OpenAI code interpreter code, and OpenRouter tool
+  call arguments, which were parsed again after every delta.
+- `big_decimal.from_string` (and `S.BigDecimalFromString`) reads at most
+  `big_decimal.MAX_DIGITS` (30,000) significant digits by default, set with `max_digits`, and
+  refuses an exponent past the safe integers before converting it.
+- Integers past 1000 digits in YAML, and hexadecimal or octal integer text past 1000 digits
+  in `S.Number` and `S.BigInt` coercion, read as infinities (or are no `BigInt`), as
+  JavaScript's `Number` reads them; JSON integers past 4300 digits read as infinities, as
+  `JSON.parse` reads them. A long hexadecimal text in `Number` coercion raised
+  `OverflowError`.
+- `S.RegExp` decoding refuses a pattern whose character classes span more than 2**20 code
+  points, or that nests too deeply to compile (a defect before), and no longer fills `re`'s
+  cache with decoded patterns.
+- The CLI's file prompt escapes control characters in file names, the target line and the
+  submitted value, with the helper CLI output already escaped them with.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated
