@@ -1,7 +1,8 @@
 name: check setup
 description: >
-  What ci.yml's lint and test jobs both need: uv, Node, the Effect checkout the oracle tests
-  read (at $EFFECT_COMMIT into $PYFECT_EFFECT_REF), and the project synced on one Python.
+  What ci.yml's lint and test jobs both need: uv, Node (.node-version), the Effect checkout the
+  oracle tests read (at $EFFECT_COMMIT into $PYFECT_EFFECT_REF), the project synced on one
+  Python, and the free-threaded CPython 3.14t.
 inputs:
   python:
     description: The Python to sync and check, as in the job's matrix.
@@ -13,7 +14,7 @@ runs:
 
     - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
       with:
-        node-version: 24
+        node-version-file: .node-version
 
     - name: Check out Effect 4.1.2
       shell: bash
@@ -28,4 +29,6 @@ runs:
         PYTHON: ${{ inputs.python }}
       run: |
         uv sync --locked --python "$PYTHON"
+        # tests/test_free_threaded.py runs programs on the free-threaded build.
+        uv python install -q 3.14t
         uv run python -c "import sys; assert f'{sys.version_info.major}.{sys.version_info.minor}' == '$PYTHON', sys.version"
