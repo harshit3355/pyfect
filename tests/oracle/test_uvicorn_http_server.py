@@ -183,7 +183,7 @@ def test_logs_and_traces_status_101_after_an_upgraded_websocket_closes() -> None
     def record(options: Any) -> None:
         annotations = options.fiber.get_ref(CurrentLogAnnotations)
         if annotations.get("http.url") == "/ws":
-            fx.run_blocking(logged.succeed(annotations.get("http.status")))
+            fx.run_sync(logged.succeed(annotations.get("http.status")))
 
     spans = _Spans()
 
