@@ -144,6 +144,8 @@ filterwarnings = [
     "error:client\\[Group\\]:DeprecationWarning",
     # A file, socket or pipe left for the garbage collector to close.
     "error::ResourceWarning",
+    # run_blocking freezing a running asyncio loop; a test doing it on purpose says so.
+    "error::pyfect.run.RunBlockingInEventLoopWarning",
 ]
 
 [tool.pyright]

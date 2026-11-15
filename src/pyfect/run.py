@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import signal
 import threading
+import warnings
 from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any, Never, Protocol, overload
@@ -45,7 +46,7 @@ from typing import Any, Never, Protocol, overload
 from pyfect._core import Effect, _Succeed
 from pyfect._effect_args import require_effect
 from pyfect._fiber import Fiber
-from pyfect._root import ambient_run, new_root, start_root
+from pyfect._root import ambient_run, loop_running_here, new_root, start_root
 from pyfect.cause import Cause, _raised_tagged_error_hint
 from pyfect.context import Context
 from pyfect.errors import AsyncFiberError
@@ -109,7 +110,28 @@ def run_blocking_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]: ...
 def run_blocking_exit[A, E, R](eff: Effect[A, E, R], *, context: Context[R]) -> Exit[A, E]: ...
 def run_blocking_exit(eff: Effect[Any, Any, Any], *, context: Context = _EMPTY) -> Exit[Any, Any]:
     """The effect's ``Exit``, blocking this thread until it is done; sleeps,
-    forks and ``blocking`` work, ``from_async`` does not (no asyncio loop)."""
+    forks and ``blocking`` work, ``from_async`` does not (no asyncio loop).
+    Warns with ``RunBlockingInEventLoopWarning`` on a thread whose asyncio loop
+    is running."""
+    return _run_blocking_exit(eff, context)
+
+
+class RunBlockingInEventLoopWarning(RuntimeWarning):
+    """``run_blocking`` or ``run_blocking_exit`` was called on a thread whose asyncio
+    loop is running (in a coroutine, or a Jupyter cell): the loop is blocked until
+    the effect is done. Use ``await run_async(eff)`` there."""
+
+
+def _run_blocking_exit(eff: Effect[Any, Any, Any], context: Context) -> Exit[Any, Any]:
+    if loop_running_here():
+        warnings.warn(
+            RunBlockingInEventLoopWarning(
+                "run_blocking blocks this thread's running asyncio loop until the effect is "
+                "done (and from_async in it dies with AsyncioRequiredError); in a coroutine "
+                "or a notebook, use `await fx.run_async(eff)`"
+            ),
+            stacklevel=3,
+        )
     require_effect(eff, "eff")
     scheduler = SyncScheduler()
     fiber: Fiber[Any, Any] = new_root(scheduler, context)
@@ -126,7 +148,7 @@ def run_blocking(eff: Effect[Any, Never, Any], *, context: Context = _EMPTY) -> 
     interruption is raised. Sleeps, forks and ``blocking`` work,
     ``from_async`` does not (no asyncio loop). Use ``run_blocking_exit``
     for an effect that can fail, ``run_async`` inside a coroutine."""
-    return unwrap(run_blocking_exit(eff, context=context))
+    return unwrap(_run_blocking_exit(eff, context))
 
 
 def drive[A, E](scheduler: SyncScheduler, fiber: Fiber[A, E]) -> Exit[A, E]:
@@ -411,6 +433,7 @@ def unwrap[A](ex: Exit[A, Any]) -> A:
 
 __all__ = [
     "Interruptor",
+    "RunBlockingInEventLoopWarning",
     "Teardown",
     "await_fiber",
     "default_teardown",

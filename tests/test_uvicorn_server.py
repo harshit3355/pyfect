@@ -367,6 +367,7 @@ def test_closing_the_serving_scope_stops_the_server() -> None:
     assert _run(program()) == ((200, "ok"), False)
 
 
+@pytest.mark.filterwarnings("ignore::pyfect.RunBlockingInEventLoopWarning")  # on purpose
 def test_under_run_blocking_inside_a_running_loop_the_server_runs_on_a_loop_of_its_own() -> None:
     # run_blocking blocks the coroutine's loop, so uvicorn must not be put on it.
     routes = router.add("GET", "/", server_response.text("ok"))

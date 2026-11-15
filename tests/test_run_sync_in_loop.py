@@ -9,6 +9,9 @@ import pytest
 import pyfect as fx
 from pyfect.effect import AsyncioRequiredError
 
+# Every test here calls run_blocking inside a running loop on purpose.
+pytestmark = pytest.mark.filterwarnings("ignore::pyfect.RunBlockingInEventLoopWarning")
+
 
 async def _value() -> str:
     await asyncio.sleep(0)
