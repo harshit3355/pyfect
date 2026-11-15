@@ -40,6 +40,10 @@
 - `Stream.buffer`, `group_by`, `partition`, `callback` and `Channel.callback_array` hand each
   chunk on in the step that takes it from their queue, as Effect's `Queue.takeAll` does,
   without a further step to convert it.
+- The httpx `HttpClient` raises `httpx.DecodingError` again when a response body fails to
+  decode (a corrupt gzip, deflate or brotli body); since 0.6.6 it raised `NameError: name
+  'httpx' is not defined` instead. Lint now enables ruff's TC004, which catches a runtime use
+  of a name imported only for type checking.
 
 ## 0.6.6 (2026-11-15)
 
