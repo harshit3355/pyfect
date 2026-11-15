@@ -387,6 +387,24 @@ def test_normalizes_duplicate_path_slashes_without_changing_query_slashes() -> N
     assert result.search_params == {"u": "https://x.com/y"}
 
 
+def test_decodes_percent_heavy_parameters_exactly_once_without_changing_query_boundaries() -> None:
+    """decodes percent-heavy parameters exactly once without changing query boundaries"""
+    router = Router[bool](RouterConfig(max_param_length=200_000))
+    router.on("GET", "/test/:id", True)
+    encoded = "%25" * 50_000 + "%252F%2f%C3%A9%20%25"
+    decoded = "%" * 50_000 + "%2F/é %"
+    for delimiter in ("?", "#", ";"):
+        result = router.find("GET", "/test/" + encoded + delimiter + "value=%2525")
+        assert result is not None
+        assert result.handler is True
+        assert result.params == {"id": decoded}
+        assert result.search_params == {"value": "%25"}
+    found = router.find("GET", "/test/" + encoded)
+    assert found is not None
+    assert found.params == {"id": decoded}
+    assert router.find("GET", "/test/" + encoded + "%zz") is None
+
+
 # --- regex ---------------------------------------------------------------------------
 
 

@@ -263,6 +263,9 @@
   releasing and leaving stop scanning once no queued request can fit in the free permits, as
   on Effect main (#10595). Queueing 2,000 requests that cannot fit visited 4,000,000 waiters;
   it now visits 2,001.
+- `find_my_way` escapes each `%25` in a request path by appending, as in Effect main
+  (#10619): it copied the whole path for every one, so a path of many `%25` took quadratic
+  time (about 500 ms for 50,000 of them, now about 30 ms).
 
 ## 0.6.4 (2026-11-14)
 

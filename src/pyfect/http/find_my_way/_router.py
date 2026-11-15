@@ -78,6 +78,11 @@ def _safe_decode_uri(path: str) -> tuple[str, str, bool]:
     ``?``, ``;`` or ``#``, and whether parameters must still be decoded."""
     should_decode = should_decode_param = False
     query = ""
+    # Each ``%25`` is escaped once more (so decoding leaves it encoded) by appending to
+    # ``escaped``, not by rewriting ``path``, which copied the whole path per escape (#10619).
+    escaped: list[str] = []
+    escaped_end = 0
+    end = len(path)
     i = 1
     while i < len(path):
         char = path[i]
@@ -88,14 +93,16 @@ def _safe_decode_uri(path: str) -> tuple[str, str, bool]:
                 should_decode_param = True
                 if path[i + 1 : i + 3] == "25":
                     should_decode = True
-                    path = path[: i + 1] + "25" + path[i + 1 :]
-                    i += 2
+                    escaped.append(path[escaped_end:i])
+                    escaped.append("%2525")
+                    escaped_end = i + 3
                 i += 2
         elif char in "?;#":
             query = path[i + 1 :]
-            path = path[:i]
+            end = i
             break
         i += 1
+    path = "".join(escaped) + path[escaped_end:end]
     return (decode_uri(path) if should_decode else path), query, should_decode_param
 
 
