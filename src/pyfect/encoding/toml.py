@@ -90,6 +90,11 @@ def _number(token: str) -> int | float | None:
     return float(normalized) if _FLOAT.fullmatch(token) else None
 
 
+def _redefined(path: list[str], index: int) -> str:
+    # Built only on failure: built for each key, it made a long header quadratic.
+    return f"Cannot redefine existing key '{'.'.join(path[: index + 1])}'"
+
+
 class _Parser:
     __slots__ = (
         "_column",
@@ -155,15 +160,14 @@ class _Parser:
         table = self.root
         for index, key in enumerate(path):
             value = table.get(key)
-            redefined = f"Cannot redefine existing key '{'.'.join(path[: index + 1])}'"
             last = index == len(path) - 1
             if value is not None and id(value) in self._inline:
-                self._fail(redefined)
+                self._fail(_redefined(path, index))
             if last and array:
                 if value is None:
                     value = table[key] = []
                 if not isinstance(value, list):
-                    self._fail(redefined)
+                    self._fail(_redefined(path, index))
                 following: _Table = {}
                 cast("list[object]", value).append(following)
                 return following
@@ -173,7 +177,7 @@ class _Parser:
                 entries = cast("list[object]", value)
                 value = entries[-1] if entries else None
             if not isinstance(value, dict):
-                self._fail(redefined)
+                self._fail(_redefined(path, index))
             table = cast("_Table", value)
         return table
 

@@ -4,6 +4,8 @@ replays them; these tests name the behaviour each fix restored."""
 
 from __future__ import annotations
 
+import math
+
 import pytest
 
 import pyfect as fx
@@ -142,7 +144,6 @@ def test_a_number_from_json_string_past_the_floats_is_an_infinity_written_null(t
 
 _DIGITS = "7" * 6578
 """More digits than Python's ``int`` reads or ``str`` prints (4300)."""
-_VALUE = int(_DIGITS[:4000]) * 10**2578 + int(_DIGITS[4000:])
 
 
 def test_a_big_decimal_past_4300_digits_formats_and_parses_back() -> None:
@@ -165,11 +166,15 @@ def test_an_iso_duration_past_4300_digits_is_read_and_written_in_full() -> None:
     assert duration.from_iso(iso) == found
 
 
-def test_yaml_and_json_integers_past_4300_digits_are_read_in_full() -> None:
+def test_yaml_and_json_integers_past_4300_digits_are_read_as_infinities() -> None:
+    """As JavaScript's ``Number`` reads them, in time linear in their length."""
     from pyfect import _json_text
 
-    assert yaml.parse("a: " + _DIGITS) == {"a": _VALUE}
-    assert _json_text.parse("[-" + _DIGITS + "]") == [-_VALUE]
+    assert yaml.parse("a: " + _DIGITS) == {"a": math.inf}
+    assert _json_text.parse("[-" + _DIGITS + ", " + _DIGITS[:4300] + "]") == [
+        -math.inf,
+        int(_DIGITS[:4300]),
+    ]
 
 
 def test_digit_runs_past_4300_in_schemas_fail_as_schema_errors() -> None:

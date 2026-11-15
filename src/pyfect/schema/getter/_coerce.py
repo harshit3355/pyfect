@@ -11,7 +11,7 @@ from typing import Any, overload
 
 from pyfect import _js_date as js_date
 from pyfect import _json_text as _json
-from pyfect._digits import parse_signed_digits
+from pyfect._digits import MAX_DIGITS, parse_signed_digits
 from pyfect._js import js_string
 from pyfect._js import trim as js_trim
 from pyfect.date_time._epoch import from_epoch_millis
@@ -27,14 +27,26 @@ _RADIX = re.compile(r"0([xXoObB])([0-9a-fA-F]+)")
 _BASES = {"x": 16, "o": 8, "b": 2}
 
 
-def _radix(text: str) -> int | None:
+_MAX_BIG_INT = 10**MAX_DIGITS
+"""Radix text is read up to the value of ``MAX_DIGITS`` decimal digits, as decimal text is:
+an int of any size costs superlinear time to print."""
+
+
+def _radix(text: str) -> int | float | None:
+    """``0x`` / ``0o`` / ``0b`` text as an int; ``math.inf`` past ``_MAX_BIG_INT``."""
     match = _RADIX.fullmatch(text)
     if match is None:
         return None
+    base = _BASES[match[1].lower()]
+    digits = match[2].lstrip("0") or "0"
+    bits = base.bit_length() - 1
+    if (len(digits) - 1) * bits > _MAX_BIG_INT.bit_length():
+        return None if any(int(d, 16) >= base for d in set(digits)) else math.inf
     try:
-        return int(match[2], _BASES[match[1].lower()])
+        value = int(digits, base)
     except ValueError:
         return None
+    return math.inf if value >= _MAX_BIG_INT else value
 
 
 _INFINITIES = {"Infinity": math.inf, "+Infinity": math.inf, "-Infinity": -math.inf}
@@ -57,7 +69,12 @@ def _text_number(text: str) -> float:
     if _DECIMAL.fullmatch(text):
         return float(text)
     radix = _radix(text)
-    return math.nan if radix is None else float(radix)
+    if radix is None:
+        return math.nan
+    try:
+        return float(radix)
+    except OverflowError:
+        return math.inf
 
 
 def to_string(value: object) -> str:
@@ -85,7 +102,10 @@ def to_big_int(value: object) -> int | None:
         return 0
     # Unlike JavaScript, a BigInt of more than MAX_DIGITS digits is invalid.
     signed = parse_signed_digits(text)
-    return signed if signed is not None else _radix(text)
+    if signed is not None:
+        return signed
+    radix = _radix(text)
+    return radix if isinstance(radix, int) else None
 
 
 def string() -> Getter[str, object]:

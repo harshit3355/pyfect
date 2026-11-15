@@ -20,7 +20,6 @@ from collections.abc import Callable, Mapping
 from json.encoder import encode_basestring as _encode_string
 from typing import Never, cast
 
-from pyfect._digits import to_int
 from pyfect._js import int_text, js_number
 from pyfect._nesting import parse_nested
 from pyfect._redaction import NO_FORM, json_form
@@ -51,12 +50,18 @@ def parse(text: str | bytes | bytearray) -> Json:
     except ValueError as error:
         if isinstance(error, json.JSONDecodeError) or error.__cause__ is not None:
             raise
-        # An integer past the 4300 digits ``int`` reads: read again through
-        # ``to_int``, which reads any length (slower, so only when needed).
-        return _loads(text, to_int)
+        # An integer past the digits ``int`` reads is past the largest float,
+        # so ``JSON.parse`` reads it as an infinity.
+        return _loads(text, _int_or_infinity)
 
 
-def _loads(text: str | bytes | bytearray, parse_int: Callable[[str], int]) -> Json:
+def _int_or_infinity(digits: str) -> int | float:
+    if len(digits.lstrip("-")) <= _INT_DIGITS:
+        return int(digits)
+    return -math.inf if digits.startswith("-") else math.inf
+
+
+def _loads(text: str | bytes | bytearray, parse_int: Callable[[str], int | float]) -> Json:
     value: Json = parse_nested(
         lambda: json.loads(text, parse_constant=_reject_constant, parse_int=parse_int)
     )
@@ -64,6 +69,9 @@ def _loads(text: str | bytes | bytearray, parse_int: Callable[[str], int]) -> Js
 
 
 _SAFE_INTEGER = 2**53 - 1
+_INT_DIGITS = 4300
+"""The most digits ``int`` reads (``sys.get_int_max_str_digits()``'s default); a JSON
+integer this long is already far past the largest float."""
 
 
 def whole_numbers_as_ints(value: Json) -> Json:
