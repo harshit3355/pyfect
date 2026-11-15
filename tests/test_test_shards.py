@@ -1,0 +1,91 @@
+"""CI splits the suite across runners (tests/_shards.py) and its ``check`` job fails unless the
+shards together ran every test exactly once (scripts/test_shards.py verify)."""
+
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType
+
+import pytest
+from _shards import assign, shard_of
+from _subprocess import SUBPROCESS_TIMEOUT
+
+ROOT = Path(__file__).resolve().parent.parent
+
+
+def _script() -> ModuleType:
+    spec = importlib.util.spec_from_file_location(
+        "test_shards", ROOT / "scripts" / "test_shards.py"
+    )
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["test_shards"] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_longest_files_first_keeps_the_shards_level():
+    durations = {"a.py": 10.0, "b.py": 9.0, "c.py": 6.0, "d.py": 5.0, "e.py": 4.0, "f.py": 2.0}
+    shards = assign(durations, 3)
+    assert shards.keys() == durations.keys()
+    loads = [sum(s for path, s in durations.items() if shards[path] == k) for k in (1, 2, 3)]
+    # Longest-first packing is within 4/3 of the best split, whatever the durations.
+    assert max(loads) <= 4 / 3 * sum(durations.values()) / 3
+    assert assign(dict(reversed(durations.items())), 3) == shards
+
+
+def test_a_file_with_no_recorded_duration_still_lands_in_one_shard():
+    for path in ("tests/test_new.py", "tests/oracle/test_other.py"):
+        assert 1 <= shard_of(path, {}, 4) <= 4
+        assert shard_of(path, {}, 4) == shard_of(path, {}, 4)
+    assert shard_of("tests/test_new.py", {"tests/test_new.py": 3}, 4) == 3
+
+
+def test_the_shards_together_collect_every_test_once(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parent))
+    for n in range(7):
+        pytester.makepyfile(**{f"test_f{n}": "\n".join(f"def test_{t}(): pass" for t in range(n))})
+    pytester.mkpydir("sub").joinpath("test_nested.py").write_text("def test_x(): pass\n")
+
+    def collect(*shard: str) -> list[str]:
+        manifest = pytester.path / f"manifest{''.join(shard).replace('/', 'of')}.txt"
+        result = pytester.runpytest_subprocess(
+            "-p", "_shards", "--collect-only", "--shard-manifest", str(manifest),
+            *(["--shard", *shard] if shard else []), timeout=SUBPROCESS_TIMEOUT,
+        )  # fmt: skip
+        assert result.ret == 0, result.stdout.str()
+        return manifest.read_text().splitlines()
+
+    full = collect()
+    shards = [collect(f"{k}/3") for k in (1, 2, 3)]
+    assert len(full) == sum(range(7)) + 1
+    assert sorted(test for shard in shards for test in shard) == sorted(full)
+    assert all(shards), "a shard collected nothing; pick files so each gets one"
+
+
+def test_verify_names_the_missing_and_the_repeated(tmp_path: Path):
+    verify = _script().verify
+    full = tmp_path / "full.txt"
+    full.write_text("a::1\na::2\nb::1\n")
+    one, two = tmp_path / "1.txt", tmp_path / "2.txt"
+    one.write_text("a::1\na::2\n")
+    two.write_text("b::1\n")
+    assert verify(full, [one, two]) == []
+    two.write_text("a::2\n")
+    assert verify(full, [one, two]) == ["run 2 times: a::2", "in no shard: b::1"]
+    full.write_text("")
+    one.write_text("")
+    two.write_text("")
+    assert verify(full, [one, two]) == [f"{full} lists no tests"]
+
+
+def test_update_keeps_the_slower_pythons_time(tmp_path: Path):
+    update = _script().update
+    (tmp_path / "313.json").write_text('{"tests/test_a.py": 2.0, "tests/test_b.py": 5.0}')
+    (tmp_path / "314.json").write_text('{"tests/test_a.py": 3.0}')
+    assert update([tmp_path / "313.json", tmp_path / "314.json"]) == {
+        "tests/test_a.py": 3.0,
+        "tests/test_b.py": 5.0,
+    }

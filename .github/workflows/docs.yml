@@ -9,8 +9,22 @@ on:
 permissions:
   contents: read
 
+# `snippets` and `site` run side by side; `build`, the job branch protection requires, passes
+# only if both did.
 jobs:
-  build:
+  snippets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+
+      - name: Check the guides' snippets (pyright, pytest)
+        run: |
+          uv run pyright website/snippets
+          uv run pytest -q tests/test_doc_snippets.py
+
+  site:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
@@ -20,11 +34,6 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: 1.4.2
-
-      - name: Check the guides' snippets (pyright, pytest)
-        run: |
-          uv run pyright website/snippets
-          uv run pytest -q tests/test_doc_snippets.py
 
       - name: Install site dependencies
         working-directory: website
@@ -48,3 +57,17 @@ jobs:
       - name: Check that every page uses the same frame and nothing shifts
         working-directory: website
         run: bun run check:layout
+
+  build:
+    needs: [snippets, site]
+    # Runs when one failed too: a skipped required check would count as passed.
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: The snippets and the site passed
+        env:
+          SNIPPETS: ${{ needs.snippets.result }}
+          SITE: ${{ needs.site.result }}
+        run: |
+          echo "snippets: $SNIPPETS, site: $SITE"
+          [ "$SNIPPETS" = success ] && [ "$SITE" = success ]

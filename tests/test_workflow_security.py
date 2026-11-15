@@ -9,7 +9,11 @@ no `run:` script interpolates text a pull request author controls.
 import re
 from pathlib import Path
 
-WORKFLOWS = sorted((Path(__file__).resolve().parent.parent / ".github" / "workflows").glob("*.yml"))
+GITHUB = Path(__file__).resolve().parent.parent / ".github"
+WORKFLOWS = sorted((GITHUB / "workflows").glob("*.yml"))
+# Composite actions the workflows use (`uses: ./.github/actions/...`): their steps run in the
+# workflow's job, so they keep the same rules.
+ACTIONS = sorted((GITHUB / "actions").glob("*/action.yml"))
 
 # Text an outside contributor chooses: interpolated into a shell script it runs as code.
 _ATTACKER_CONTEXTS = re.compile(
@@ -20,10 +24,11 @@ _ATTACKER_CONTEXTS = re.compile(
 
 def test_there_are_workflows():
     assert {path.name for path in WORKFLOWS} >= {"ci.yml", "release.yml", "audit.yml"}
+    assert {path.parent.name for path in ACTIONS} >= {"check-setup"}
 
 
 def test_every_action_is_pinned_to_a_commit():
-    for path in WORKFLOWS:
+    for path in [*WORKFLOWS, *ACTIONS]:
         for line in path.read_text(encoding="utf-8").splitlines():
             match = re.match(r"\s*(?:-\s+)?uses:\s*(\S+)", line)
             if match is None or match.group(1).startswith("./"):
@@ -58,7 +63,7 @@ def test_only_the_publish_job_mints_an_oidc_token():
 
 
 def test_no_script_interpolates_pull_request_text():
-    for path in WORKFLOWS:
+    for path in [*WORKFLOWS, *ACTIONS]:
         text = path.read_text(encoding="utf-8")
         found = _ATTACKER_CONTEXTS.search(text)
         assert found is None, f"{path.name} interpolates {found.group(0)}...; pass it via env"
