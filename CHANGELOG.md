@@ -45,6 +45,9 @@
   still is, for servers behind a proxy that ends TLS.
 - A UDP socket reads at most 32 datagrams per read callback, as libuv does, so a full
   receive queue no longer holds the network loop the process's other sockets run on.
+- OpenAI WebSocket mode counts each response's messages against `max_response_bytes`, as the
+  HTTP transport counts a response body: past it the response fails with the same error and
+  the connection is replaced.
 
 ## 0.6.5 (2026-11-14)
 
