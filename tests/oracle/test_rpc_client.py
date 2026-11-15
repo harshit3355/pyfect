@@ -40,6 +40,7 @@ from pyfect.http import client as http_client
 from pyfect.http import response as http_response
 from pyfect.http import router, uvicorn_server
 from pyfect.http.client import HttpClient
+from pyfect.http.error import HttpClientError, HttpClientErrorSchema, TransportError
 from pyfect.latch import Latch
 from pyfect.option import Some
 from pyfect.queue import Queue
@@ -393,6 +394,31 @@ def test_fails_request_on_empty_http_response(serialization: Any, body: str) -> 
         assert isinstance(error, RpcClientError)
         assert isinstance(error.reason, RpcClientDefect)
         assert error.reason.message == "Received empty HTTP response from RPC server"
+
+    _run(program)
+
+
+def test_includes_the_http_failure_in_the_error_message() -> None:
+    """RpcClient / includes the HTTP failure in the error message"""
+
+    def send(request: Any, *_: object) -> Effect[Any, HttpClientError]:
+        reason = TransportError(request, description="connect ECONNREFUSED")
+        return effect.fail(HttpClientError(reason))
+
+    protocol = (
+        rpc_client.layer_protocol_http("http://localhost/rpc/")
+        .pipe(layer.provide_merge(rs.layer_json))
+        .pipe(layer.provide_merge(layer.succeed(HttpClient, http_client.make(send))))
+    )
+
+    def program():
+        client = yield from rpc_client.make(TestGroup, layer=protocol)
+        error = yield from client.ping().flip()
+        assert isinstance(error, RpcClientError)
+        assert isinstance(error.reason, HttpClientErrorSchema)
+        assert error.message == (
+            "HttpError: Transport: connect ECONNREFUSED (POST http://localhost/rpc/)"
+        )
 
     _run(program)
 

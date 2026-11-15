@@ -58,6 +58,7 @@ from pyfect.http.error import (
     DecodeError,
     EncodeError,
     HttpClientError,
+    HttpClientErrorSchema,
     StatusCodeError,
     TransportError,
 )
@@ -405,6 +406,31 @@ def test_error_current_redacted_names():
 
     text = yield from fx.sync(message).pipe(fx.provide_service(up.CurrentRedactedNames, ("token",)))
     assert text == "Transport error (GET http://test/path?token=REDACTED&sig=sig-visible)"
+
+
+# HttpClientErrorSchema
+
+
+@pytest.mark.parametrize("cause", [None, {}, {"message": ""}], ids=["absent", "empty", "blank"])
+def test_error_schema_falls_back_to_the_kind_when_the_cause_message_is_missing_or_empty(
+    cause: object,
+) -> None:
+    """falls back to the kind when the cause message is missing or empty"""
+    error = HttpClientErrorSchema(kind="TransportError", cause=cause)
+    assert error.message == "TransportError"
+
+
+def test_error_schema_preserves_the_encoded_fields_without_adding_a_message_field() -> None:
+    """preserves the encoded fields without adding a message field"""
+    error = HttpClientErrorSchema(kind="TransportError", cause={"message": "connection refused"})
+    assert error.message == "connection refused"
+    encoded = S.encode_sync(HttpClientErrorSchema)(error)
+    assert encoded == {
+        "_tag": "HttpError",
+        "kind": "TransportError",
+        "cause": {"message": "connection refused"},
+    }
+    assert S.decode_sync(HttpClientErrorSchema)(encoded).message == "connection refused"
 
 
 def _failing_off_fiber() -> c.HttpClientService[HttpClientError]:

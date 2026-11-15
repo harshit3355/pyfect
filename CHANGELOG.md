@@ -240,6 +240,9 @@
   (#10006). A logger or exporter rendering the error later, on another fiber, showed the
   secret query values. Rendering still adds the rendering fiber's names; equality ignores
   them.
+- `HttpClientErrorSchema.message` is its cause's message, or its kind when the cause has none,
+  as in Effect 4.1.4 (#10496), so an `RpcClientError` for an HTTP failure says what failed. It
+  was empty.
 
 ### Performance
 

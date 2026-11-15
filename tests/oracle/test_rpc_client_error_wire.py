@@ -8,7 +8,8 @@ exception class named ``Error``)."""
 from __future__ import annotations
 
 import json
-from typing import Any
+from collections.abc import Callable
+from typing import Any, TypeAliasType, cast, get_args
 
 import pytest
 
@@ -23,12 +24,14 @@ from pyfect.http.error import HttpClientError, HttpClientErrorSchema, TransportE
 from pyfect.rpc import RpcClientDefect, RpcClientError, RpcGroup, make
 from pyfect.rpc import client as rpc_client
 from pyfect.rpc import serialization as rs
+from pyfect.rpc.client_error import RpcClientErrorReason
 from pyfect.socket import (
     SocketCloseError,
     SocketError,
     SocketOpenError,
     SocketReadError,
     SocketUpgradeError,
+    SocketWriteError,
 )
 from pyfect.workers.worker_error import WorkerSpawnError
 
@@ -134,7 +137,9 @@ def test_decodes_what_effect_encodes(expected: object) -> None:
 
 def test_messages_are_effects() -> None:
     assert RpcClientError(reason=SocketCloseError(code=1006)).message == "SocketCloseError: 1006"
-    assert HttpClientErrorSchema.from_http_client_error(_http()).message == ""
+    assert HttpClientErrorSchema.from_http_client_error(_http()).message == (
+        "Transport error (GET http://x)"
+    )
     assert RpcClientError(reason=RpcClientDefect(message="bad")).message == "RpcClientDefect: bad"
 
 
@@ -184,3 +189,43 @@ def test_an_http_protocol_fails_with_the_http_error_as_its_schema() -> None:
     assert exit.cause.squash() == RpcClientError(
         reason=HttpClientErrorSchema(kind="TransportError", cause=transport)
     )
+
+
+def _reason_classes() -> list[type[Any]]:
+    def flat(t: object) -> list[type[Any]]:
+        value = t.__value__ if isinstance(t, TypeAliasType) else t
+        args = get_args(value)
+        return [c for arg in args for c in flat(arg)] if args else [cast("type[Any]", value)]
+
+    return flat(RpcClientErrorReason)
+
+
+# Reasons whose message is a field the caller fills.
+_MESSAGE_GIVEN = {
+    "WorkerSpawnError",
+    "WorkerSendError",
+    "WorkerReceiveError",
+    "WorkerUnknownError",
+    "RpcClientDefect",
+}
+
+# The least each other reason can be made with.
+_MINIMAL: dict[str, Callable[[], Any]] = {
+    "SocketReadError": lambda: SocketReadError(cause=None),
+    "SocketWriteError": lambda: SocketWriteError(cause=None),
+    "SocketOpenError": lambda: SocketOpenError(kind="Unknown", cause=None),
+    "SocketUpgradeError": lambda: SocketUpgradeError(cause=None),
+    "SocketCloseError": lambda: SocketCloseError(code=1006),
+    "HttpClientErrorSchema": lambda: HttpClientErrorSchema(kind="TransportError"),
+}
+
+
+def test_every_reason_says_what_failed_in_the_rpc_client_error_message() -> None:
+    """Effect #10496: an HTTP failure's ``RpcClientError`` said only ``HttpError: ``. Every reason
+    of the union that makes its own message (read from the union, so a new one must be listed
+    here) names what failed after the tag, even when made with nothing to say."""
+    names = sorted(c.__name__ for c in _reason_classes())
+    assert names == sorted([*_MINIMAL, *_MESSAGE_GIVEN])
+    for name, make_reason in _MINIMAL.items():
+        tag, said = RpcClientError(reason=make_reason()).message.split(": ", 1)
+        assert tag and said.strip(), name

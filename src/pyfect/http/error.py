@@ -19,9 +19,9 @@ of an error without a description adds its cause:
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, ClassVar, Literal
+from typing import TYPE_CHECKING, ClassVar, Literal, cast
 
 from pyfect import schema as S
 from pyfect.errors import TaggedError, with_cause
@@ -232,7 +232,15 @@ class HttpClientErrorSchema(
 
     @property
     def message(self) -> str:
-        return ""
+        """The cause's message, or the kind when it has none (Effect #10496), so an
+        ``RpcClientError`` for an HTTP failure says what failed."""
+        cause = self.cause
+        message: object = (
+            cast("Mapping[str, object]", cause).get("message")
+            if isinstance(cause, Mapping)
+            else getattr(cause, "message", None)
+        )
+        return message if isinstance(message, str) and message else self.kind
 
     @classmethod
     def from_http_client_error(cls, error: HttpClientError) -> HttpClientErrorSchema:
