@@ -18,11 +18,13 @@
 - `big_decimal.from_string` (and `S.BigDecimalFromString`) reads at most
   `big_decimal.MAX_DIGITS` (30,000) significant digits by default, set with `max_digits`, and
   refuses an exponent past the safe integers before converting it.
-- Integers past 1000 digits in YAML, and hexadecimal or octal integer text past 1000 digits
-  in `S.Number` and `S.BigInt` coercion, read as infinities (or are no `BigInt`), as
-  JavaScript's `Number` reads them; JSON integers past 4300 digits read as infinities, as
-  `JSON.parse` reads them. A long hexadecimal text in `Number` coercion raised
-  `OverflowError`.
+- `yaml.parse` refuses an integer of more than `yaml.MAX_INTEGER_DIGITS` (1000) significant
+  digits, and JSON parsing refuses one of more than `encoding.MAX_JSON_INTEGER_DIGITS` (4300)
+  digits, with the parser's usual error (`ValueError`, a `SchemaError` through schemas) naming
+  the limit. 0.6.5 read these integers in full, at superlinear cost; 0.6.6 refuses them past
+  the limit. Hexadecimal or octal integer text past 1000 digits in `S.Number` and `S.BigInt`
+  coercion reads as an infinity (or is no `BigInt`), as JavaScript's `Number` reads it; a
+  long hexadecimal text in `Number` coercion raised `OverflowError`.
 - `S.RegExp` decoding refuses a pattern whose character classes span more than 2**20 code
   points, or that nests too deeply to compile (a defect before), and no longer fills `re`'s
   cache with decoded patterns.

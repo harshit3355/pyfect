@@ -40,38 +40,30 @@ def _reject_constant(name: str) -> Never:
     raise ValueError(f"{name} is not valid JSON")
 
 
+MAX_INTEGER_DIGITS = 4300
+"""The most digits of a JSON integer ``parse`` reads (Python's ``int`` limit); a longer one
+fails the parse, as converting it costs superlinear time."""
+
+
 def parse(text: str | bytes | bytearray) -> Json:
     """``JSON.parse``: ``json.loads`` without the ``NaN`` / ``Infinity``
     extensions (bytes are read as ``json.loads`` reads them). Text that is
     not JSON raises ``ValueError``, also when it nests too deeply to decode
-    (where ``json.loads`` raises ``RecursionError``)."""
-    try:
-        return _loads(text, int)
-    except ValueError as error:
-        if isinstance(error, json.JSONDecodeError) or error.__cause__ is not None:
-            raise
-        # An integer past the digits ``int`` reads is past the largest float,
-        # so ``JSON.parse`` reads it as an infinity.
-        return _loads(text, _int_or_infinity)
-
-
-def _int_or_infinity(digits: str) -> int | float:
-    if len(digits.lstrip("-")) <= _INT_DIGITS:
-        return int(digits)
-    return -math.inf if digits.startswith("-") else math.inf
-
-
-def _loads(text: str | bytes | bytearray, parse_int: Callable[[str], int | float]) -> Json:
+    (where ``json.loads`` raises ``RecursionError``) or holds an integer of
+    more than ``MAX_INTEGER_DIGITS`` digits."""
     value: Json = parse_nested(
-        lambda: json.loads(text, parse_constant=_reject_constant, parse_int=parse_int)
+        lambda: json.loads(text, parse_constant=_reject_constant, parse_int=_integer)
     )
     return value
 
 
+def _integer(digits: str) -> int:
+    if len(digits) - digits.startswith("-") > MAX_INTEGER_DIGITS:
+        raise ValueError(f"JSON integer has more than {MAX_INTEGER_DIGITS} digits")
+    return int(digits)
+
+
 _SAFE_INTEGER = 2**53 - 1
-_INT_DIGITS = 4300
-"""The most digits ``int`` reads (``sys.get_int_max_str_digits()``'s default); a JSON
-integer this long is already far past the largest float."""
 
 
 def whole_numbers_as_ints(value: Json) -> Json:

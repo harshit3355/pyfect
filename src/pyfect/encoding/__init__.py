@@ -27,6 +27,7 @@ one with ``Stream.pipe_through_channel``::
     records = byte_stream.pipe_through_channel(ndjson.decode())
 """
 
+from pyfect._json_text import MAX_INTEGER_DIGITS as MAX_JSON_INTEGER_DIGITS
 from pyfect._json_text import Json
 from pyfect.encoding import (
     base64,
@@ -50,6 +51,7 @@ from pyfect.encoding import (
 from pyfect.encoding.encoding_error import EncodingError
 
 __all__ = [
+    "MAX_JSON_INTEGER_DIGITS",
     "EncodingError",
     "Json",
     "base64",

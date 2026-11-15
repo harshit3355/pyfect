@@ -24,12 +24,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Never, cast
 
-from pyfect._digits import MAX_DIGITS
 from pyfect._js import LINE_END, SPACE, js_number, trim, trim_end, trim_start
 from pyfect._nesting import parse_nested
 from pyfect._stack import with_fresh_stack
 
 type _Record = dict[str, object]
+
+MAX_INTEGER_DIGITS = 1000
+"""The most significant digits of an integer ``parse`` reads (decimal, hexadecimal or
+octal); a longer one raises ``ValueError``, as converting it costs superlinear time."""
 
 _IS_SPACE = re.compile(f"[{SPACE}]")
 _ANCHOR_NAME_END = re.compile(f"[{SPACE},\\[\\]{{}}]")
@@ -252,13 +255,13 @@ def _parse_scalar(text: str) -> object:  # noqa: PLR0911 - one return per scalar
     return value
 
 
-def _radix_int(sign: int, digits: str, radix: int) -> int | float:
-    """The integer ``digits`` in ``radix``, or an infinity past ``MAX_DIGITS`` significant
-    digits, which JavaScript's ``Number`` reads as ``Infinity`` too: an int of any size
-    costs superlinear time to print, and a key is printed while parsing."""
+def _radix_int(sign: int, digits: str, radix: int) -> int:
+    """The integer ``digits`` in ``radix``; ``ValueError`` past ``MAX_INTEGER_DIGITS``
+    significant digits, as an int that long costs superlinear time to convert and to
+    print, and a key is printed while parsing."""
     significant = digits.lstrip("0")
-    if len(significant) > MAX_DIGITS:
-        return sign * math.inf
+    if len(significant) > MAX_INTEGER_DIGITS:
+        raise ValueError(f"YAML integer has more than {MAX_INTEGER_DIGITS} digits")
     return sign * int(significant or "0", radix)
 
 
@@ -815,4 +818,4 @@ def parse(text: str) -> object:
     return parse_nested(_Parser(lines).parse)
 
 
-__all__ = ["parse"]
+__all__ = ["MAX_INTEGER_DIGITS", "parse"]
