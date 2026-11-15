@@ -302,12 +302,6 @@ OMISSIONS: tuple[Omission, ...] = (
         "section 4: `Struct` keys are mapped with Python comprehensions, not `mapFields` helpers",
         r"evolveEntries|evolveKeys|mapOmit|mapPick|renameKeys|^should work with flow$",
     ),
-    _some(
-        "effect/test/persistence/PersistedQueueTest.ts",
-        "runs only for a store whose `cleanup` is unsupported: Effect's Cloudflare Durable "
-        "Object store (`platform-cloudflare`, not ported, section 4); every pyfect store cleans up",
-        r"^cleanup explicitly fails as unsupported$",
-    ),
 )
 
 
