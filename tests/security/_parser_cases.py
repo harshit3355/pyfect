@@ -459,6 +459,17 @@ def _xml_non_ascii(n: int) -> Work:
     return run_channel([b"<r><!--", *[chunk] * n, b"--></r>"], xml.decode())
 
 
+@case(
+    xml.decode,
+    "xml.decode: a leading comment with a non-ASCII character and ?> in every chunk (#42)",
+)
+def _xml_non_ascii_leading_comment(n: int) -> Work:
+    # The first token, so the US-ASCII declaration is still undecided; a comment can't be it,
+    # so no chunk may make the parser rescan it.
+    chunk = "é?>".encode() + b"a" * 60
+    return run_channel([b"<!--", *[chunk] * n, b"--><r/>"], xml.decode())
+
+
 @case(xml.decode_string, "xml.decode_string: text split by CDATA sections (#43)", size=8000)
 def _xml_cdata_text(n: int) -> Work:
     return run_channel(["<r>" + "xxxxxxxxxxxx<![CDATA[]]>" * n + "</r>"], xml.decode_string())

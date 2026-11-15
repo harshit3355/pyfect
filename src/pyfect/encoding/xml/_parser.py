@@ -53,6 +53,7 @@ _ATTRIBUTE_WHITESPACE_CHAR = re.compile(r"[\t\n\r]")
 _PUBLIC_ID_WHITESPACE = re.compile(r"[ \r\n]+")
 _HEX_DIGITS = re.compile(r"[0-9a-fA-F]+")
 _NON_ASCII = re.compile(r"[\u0080-￿]")
+_DECLARATION_START = "<?xml"
 _DECLARATION = re.compile(
     r"""[ \t\r\n]+version[ \t\r\n]*=[ \t\r\n]*(?:"(1\.[0-9]+)"|'(1\.[0-9]+)')"""
     r"""(?:[ \t\r\n]+encoding[ \t\r\n]*=[ \t\r\n]*"""
@@ -191,6 +192,15 @@ class Parser:
             return False
         if self._pending is None:
             return True
+        # The declaration is the first token and starts ``<?xml``: a pending token that can't
+        # be it (a leading comment) never needs its prefix parsed first.
+        head = ""
+        for piece in self._pending:
+            head += piece[: 5 - len(head)]
+            if len(head) == 5:
+                break
+        if not _DECLARATION_START.startswith(head) and not head.startswith(_DECLARATION_START):
+            return False
         return "?>" in self._pending[-1][-1:] + chunk
 
     def end(self) -> None:
