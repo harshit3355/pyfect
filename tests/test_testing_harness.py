@@ -130,30 +130,27 @@ def test_the_ini_timeout_is_the_default(pytester: pytest.Pytester) -> None:
     assert time.monotonic() - started < 3
 
 
-def test_a_bare_number_timeout_says_it_was_milliseconds(pytester: pytest.Pytester) -> None:
+@pytest.mark.parametrize(
+    ("timeout", "noted"), [("50", True), ('"50 millis"', False)], ids=["bare", "with_unit"]
+)
+def test_a_bare_number_timeout_says_it_was_milliseconds(
+    pytester: pytest.Pytester, timeout: str, noted: bool
+) -> None:
     pytester.makepyfile(
-        """
+        f"""
         import pyfect as fx
         from pyfect import testing
 
-        @testing.live(timeout=50)
-        def test_bare():
-            yield from fx.sleep("5 seconds")
-
-        @testing.live(timeout="50 millis")
-        def test_with_unit():
+        @testing.live(timeout={timeout})
+        def test_slow():
             yield from fx.sleep("5 seconds")
         """
     )
     result = pytester.runpytest()
-    result.assert_outcomes(failed=2)
-    result.stdout.fnmatch_lines(
-        [
-            "*test timed out after 0.05s*",
-            '*timeout=50 is 50 milliseconds, as in Effect; write timeout="50 seconds" for seconds*',
-        ]
-    )
-    assert result.stdout.str().count("is 50 milliseconds") == 1
+    result.assert_outcomes(failed=1)
+    result.stdout.fnmatch_lines(["*test timed out after 0.05s*"])
+    note = 'timeout=50 is 50 milliseconds, as in Effect; write timeout="50 seconds" for seconds'
+    assert (note in result.stdout.str()) is noted
 
 
 @testing.live
