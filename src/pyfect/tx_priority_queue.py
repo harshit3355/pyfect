@@ -2,8 +2,9 @@
 ``TxPriorityQueue``).
 
 Items are kept sorted by a ``key`` function, smallest first, as ``sorted``
-orders them (Effect's ``Order``); items with equal keys come out in the
-order they went in. ``take`` and ``peek`` wait (``tx_retry``) while the
+orders them (Effect's ``Order``), except that a ``NaN`` key, also inside a
+tuple key, comes first, as Effect's ``Order.Number`` puts it; items with
+equal keys come out in the order they went in. ``take`` and ``peek`` wait (``tx_retry``) while the
 queue is empty.
 """
 
@@ -12,7 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterable
 from typing import TYPE_CHECKING, Any, Never, overload
 
-from pyfect import _tx_ops
+from pyfect import _number_order, _tx_ops
 from pyfect._core import Effect
 from pyfect._unsubscripted import Unsubscripted
 from pyfect.effect import succeed
@@ -28,6 +29,11 @@ type Key[A] = Callable[[A], SupportsRichComparison]
 
 def _identity(item: Any) -> Any:
     return item
+
+
+def _ordered[A](key: Key[A]) -> Callable[[A], Any]:
+    """``key``, with a ``NaN`` result ordered first (``Order.Number``)."""
+    return lambda item: _number_order.key(key(item))
 
 
 def _merge_sorted[A](
@@ -67,11 +73,12 @@ class TxPriorityQueue[A = Unsubscripted]:
     items (Effect's ``makeUnsafe``); ``empty``, ``from_iterable`` and
     ``make`` are the effects. Without ``key``, items compare as they are."""
 
-    __slots__ = ("_key", "_ref")
+    __slots__ = ("_key", "_order", "_ref")
 
     def __init__(self, ref: TxRef[tuple[A, ...]], key: Key[A]) -> None:
         self._ref = ref
         self._key = key
+        self._order = _ordered(key)
 
     @overload
     @classmethod
@@ -113,7 +120,7 @@ class TxPriorityQueue[A = Unsubscripted]:
         """A new queue each time the effect runs. ``items`` is read once,
         here, so a one-shot iterator survives transaction retries.
         ``TxPriorityQueue[A].from_iterable(...)`` takes the subscript."""
-        initial = tuple(sorted(items, key=key))
+        initial = tuple(sorted(items, key=_ordered(key)))
         return TxRef.make(initial).map(lambda ref: TxPriorityQueue(ref, key))
 
     @overload
@@ -170,13 +177,13 @@ class TxPriorityQueue[A = Unsubscripted]:
         return _tx_ops.read(self._ref, lambda items: Some(items[0]) if items else None)
 
     def offer(self, item: A) -> Effect[None]:
-        return self._ref.update(lambda items: _merge_sorted(items, [item], self._key))
+        return self._ref.update(lambda items: _merge_sorted(items, [item], self._order))
 
     def offer_all(self, items: Iterable[A]) -> Effect[None]:
         """Add several items. ``items`` is read once, here, so a one-shot
         iterator survives transaction retries."""
-        added = sorted(items, key=self._key)
-        return self._ref.update(lambda current: _merge_sorted(current, added, self._key))
+        added = sorted(items, key=self._order)
+        return self._ref.update(lambda current: _merge_sorted(current, added, self._order))
 
     def take(self) -> Effect[A]:
         """Remove and succeed with the smallest item; waits while the queue

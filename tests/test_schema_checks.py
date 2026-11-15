@@ -258,20 +258,20 @@ def test_refine_narrows_and_aborts():
 
 def test_from_brand_runs_every_check_of_the_brand():
     Small = NewType("Small", float)
-    small = Brand[float, Small].check(S.is_greater_than(0), S.is_less_than(10))
+    small = Brand[float, Small].check(S.is_greater_than(0), S.is_int())
     asserts = SchemaAsserts(S.Number.pipe(S.from_brand(small)))
     asserts.decoding().succeed(5)
     asserts.decoding(errors="all").fail(
-        float("nan"), "Expected a value greater than 0\nExpected a value less than 10"
+        -0.5, "Expected a value greater than 0\nExpected an integer"
     )
 
 
 def test_a_brand_error_formats_its_issue():
     Small = NewType("Small", float)
-    small = Brand[float, Small].check(S.is_greater_than(0), S.is_less_than(10))
+    small = Brand[float, Small].check(S.is_greater_than(0), S.is_int())
     with pytest.raises(BrandError) as raised:
-        small(float("nan"))
-    assert str(raised.value) == "Expected a value greater than 0\nExpected a value less than 10"
+        small(-0.5)
+    assert str(raised.value) == "Expected a value greater than 0\nExpected an integer"
 
 
 # ------------------------------------------------------ number / dates

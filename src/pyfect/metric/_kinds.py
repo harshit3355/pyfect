@@ -13,6 +13,7 @@ import threading
 from collections.abc import Iterable, Sequence
 from typing import Any, Literal, overload
 
+from pyfect import _number_order
 from pyfect._timestamps import millis_to_nanos
 from pyfect.clock import Clock
 from pyfect.context import Context
@@ -209,7 +210,7 @@ class _Summary(Series[Any, Any]):
         age = from_input_unsafe(max_age).max(zero)
         self._max_age_ns: float = nanos_or_infinite(age)
         self._max_size = max_size
-        self._quantiles = tuple(sorted(quantiles))
+        self._quantiles = tuple(sorted(quantiles, key=_number_order.key))
 
     def _create_hooks(self) -> Hooks:
         max_age_ns, max_size, quantiles = self._max_age_ns, self._max_size, self._quantiles
@@ -242,9 +243,12 @@ class _Summary(Series[Any, Any]):
                 seen = list(observations)
                 state = (count, low, high, total)
             samples = sorted(
-                observed[1]
-                for observed in seen
-                if observed is not None and 0 <= now - observed[0] <= max_age_ns
+                (
+                    observed[1]
+                    for observed in seen
+                    if observed is not None and 0 <= now - observed[0] <= max_age_ns
+                ),
+                key=_number_order.key,
             )
             return SummaryState(tuple((q, _quantile(samples, q)) for q in quantiles), *state)
 
@@ -252,8 +256,9 @@ class _Summary(Series[Any, Any]):
 
 
 def _quantile(samples: list[float], q: float) -> float | None:
-    """The largest sample with at most ``q * n`` samples at or below it."""
-    if not samples:
+    """The largest sample with at most ``q * n`` samples at or below it;
+    none for a ``NaN`` quantile, as Effect's ``samples[NaN]``."""
+    if not samples or math.isnan(q):
         return None
     if q <= 0:
         return samples[0]
@@ -344,7 +349,8 @@ def histogram(
     bucket per boundary (sorted); values past the last are only in
     ``count`` (end the boundaries with ``math.inf`` to see them, as the
     ``*_boundaries`` helpers do)."""
-    return _Histogram(name, description, attributes, tuple(sorted(map(float, boundaries))))
+    bounds = tuple(sorted(map(float, boundaries), key=_number_order.key))
+    return _Histogram(name, description, attributes, bounds)
 
 
 def summary_with_timestamp(

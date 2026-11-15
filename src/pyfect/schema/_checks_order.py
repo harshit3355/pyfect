@@ -1,6 +1,7 @@
 """Bound checks for any ordered type (Effect's ``makeIsGreaterThan``,
-``makeIsBetween``, ``makeIsMultipleOf``, ...), compared with Python's
-operators. ``formatter`` writes a bound in the ``expected`` text
+``makeIsBetween``, ``makeIsMultipleOf``, ...), compared with ``order``
+(Effect's ``order``: negative, zero or positive), else Python's operators.
+``formatter`` writes a bound in the ``expected`` text
 (``format_unknown`` by default); ``annotate`` adds annotations per bound."""
 
 from __future__ import annotations
@@ -41,6 +42,38 @@ class Between[T](Protocol):
 
 type Annotate[T] = Callable[[T], Mapping[str, object]]
 
+type Order[T] = Callable[[T, T], int]
+"""Effect's ``Order``: negative, zero or positive as the first value is
+below, equal to or above the second."""
+
+
+class _Compare[T](Protocol):
+    def __call__(self, a: T, b: T, /) -> bool: ...
+
+
+def _relation[T: SupportsOrder](
+    order: Order[T] | None, python: _Compare[T], holds: Callable[[int], bool]
+) -> _Compare[T]:
+    if order is None:
+        return python
+    return lambda a, b: holds(order(a, b))
+
+
+def _gt[T: SupportsOrder](order: Order[T] | None) -> _Compare[T]:
+    return _relation(order, lambda a, b: a > b, lambda c: c > 0)
+
+
+def _ge[T: SupportsOrder](order: Order[T] | None) -> _Compare[T]:
+    return _relation(order, lambda a, b: a >= b, lambda c: c >= 0)
+
+
+def _lt[T: SupportsOrder](order: Order[T] | None) -> _Compare[T]:
+    return _relation(order, lambda a, b: a < b, lambda c: c < 0)
+
+
+def _le[T: SupportsOrder](order: Order[T] | None) -> _Compare[T]:
+    return _relation(order, lambda a, b: a <= b, lambda c: c <= 0)
+
 
 def _bound[T: SupportsOrder](
     accepts: Callable[[T, T], bool],
@@ -59,36 +92,52 @@ def _bound[T: SupportsOrder](
 
 
 def make_is_greater_than[T: SupportsOrder](
-    *, formatter: Callable[[T], str] = format_unknown, annotate: Annotate[T] | None = None
+    *,
+    formatter: Callable[[T], str] = format_unknown,
+    annotate: Annotate[T] | None = None,
+    order: Order[T] | None = None,
 ) -> Bound[T]:
-    return _bound(lambda a, b: a > b, "greater than", formatter, annotate)
+    return _bound(_gt(order), "greater than", formatter, annotate)
 
 
 def make_is_greater_than_or_equal_to[T: SupportsOrder](
-    *, formatter: Callable[[T], str] = format_unknown, annotate: Annotate[T] | None = None
+    *,
+    formatter: Callable[[T], str] = format_unknown,
+    annotate: Annotate[T] | None = None,
+    order: Order[T] | None = None,
 ) -> Bound[T]:
-    return _bound(lambda a, b: a >= b, "greater than or equal to", formatter, annotate)
+    return _bound(_ge(order), "greater than or equal to", formatter, annotate)
 
 
 def make_is_less_than[T: SupportsOrder](
-    *, formatter: Callable[[T], str] = format_unknown, annotate: Annotate[T] | None = None
+    *,
+    formatter: Callable[[T], str] = format_unknown,
+    annotate: Annotate[T] | None = None,
+    order: Order[T] | None = None,
 ) -> Bound[T]:
-    return _bound(lambda a, b: a < b, "less than", formatter, annotate)
+    return _bound(_lt(order), "less than", formatter, annotate)
 
 
 def make_is_less_than_or_equal_to[T: SupportsOrder](
-    *, formatter: Callable[[T], str] = format_unknown, annotate: Annotate[T] | None = None
+    *,
+    formatter: Callable[[T], str] = format_unknown,
+    annotate: Annotate[T] | None = None,
+    order: Order[T] | None = None,
 ) -> Bound[T]:
-    return _bound(lambda a, b: a <= b, "less than or equal to", formatter, annotate)
+    return _bound(_le(order), "less than or equal to", formatter, annotate)
 
 
 type AnnotateBetween[T] = Callable[[T, T, bool, bool], Mapping[str, object]]
 
 
 def make_is_between[T: SupportsOrder](
-    *, formatter: Callable[[T], str] = format_unknown, annotate: AnnotateBetween[T] | None = None
+    *,
+    formatter: Callable[[T], str] = format_unknown,
+    annotate: AnnotateBetween[T] | None = None,
+    order: Order[T] | None = None,
 ) -> Between[T]:
     """``annotate(minimum, maximum, exclusive_minimum, exclusive_maximum)``."""
+    gt, ge, lt, le = _gt(order), _ge(order), _lt(order), _le(order)
 
     def make(
         *,
@@ -99,8 +148,8 @@ def make_is_between[T: SupportsOrder](
         **annotations: object,
     ) -> Filter[T]:
         def accepts(input: T) -> bool:
-            above = input > minimum if exclusive_minimum else input >= minimum
-            below = input < maximum if exclusive_maximum else input <= maximum
+            above = gt(input, minimum) if exclusive_minimum else ge(input, minimum)
+            below = lt(input, maximum) if exclusive_maximum else le(input, maximum)
             return above and below
 
         low = formatter(minimum) + (" (excluded)" if exclusive_minimum else "")
