@@ -37,6 +37,10 @@
   without a `/` (every generated identity: a UUID) keeps its key and tables; a pair whose public
   key holds a `/` is now keyed apart, so such a store starts empty, and its rows stay in the
   tables named from the old key until moved by hand.
+- Event journals (memory and SQL): an imported entry id that is not 16 bytes, or more than a
+  day ahead of the clock (one at the UUID v7 ceiling), is no longer the floor of local ids, so
+  local writes go on after importing one, also after reopening a SQL journal that holds it.
+  They used to fail with `OverflowError` or `IndexError`, as Effect's journals still do.
 
 ## 0.6.5 (2026-11-14)
 

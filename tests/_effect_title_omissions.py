@@ -179,6 +179,13 @@ OMISSIONS: tuple[Omission, ...] = (
     ),
     _some("effect/test/Stream.test.ts", _NODE_STREAMS, r"event|ReadableStream"),
     _some(
+        "effect/test/eventlog/EventJournal.test.ts",
+        "an imported id more than a day ahead of the clock is not the floor of local ids, so one "
+        "at the UUID v7 ceiling no longer stops every local write (Effect's do fail); "
+        "tests/test_eventlog_entry_id_floor.py pins it",
+        r"^never commits a local id below an imported id at the maximum timestamp$",
+    ),
+    _some(
         "platform/node-shared/test/Dns.test-utils.ts",
         "the system resolver queries only PTR records (`resolve` of other types fails with "
         "`Unsupported`); `tests/oracle/test_dns_system.py` ports the PTR and reverse titles",
