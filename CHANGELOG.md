@@ -32,6 +32,8 @@
   `is_less_than(5)`. These followed Python's `sorted` and operators, which leave `NaN`
   wherever it falls. `make_is_less_than` and the other bound-check makers take Effect's
   `order=`.
+- hypercorn over TLS: shutdown is bounded by the graceful timeout.
+- `socket.server.make_web_socket`: closing is bounded by the abort grace period, as Effect's.
 
 ### Docs
 
