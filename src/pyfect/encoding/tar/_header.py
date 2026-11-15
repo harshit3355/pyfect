@@ -47,7 +47,7 @@ _TYPES: Mapping[str, EntryType] = {
     "7": "File",  # contiguous files
 }
 _PAX_STRING_KEYS = frozenset(("path", "linkpath", "uname", "gname"))
-_PAX_HEADER_KEYS = frozenset(("path", "linkpath", "size", "uid", "gid", "uname", "gname", "mtime"))
+PAX_HEADER_KEYS = frozenset(("path", "linkpath", "size", "uid", "gid", "uname", "gname", "mtime"))
 
 _TIME = re.compile(r"(-?)([0-9]+)(?:\.([0-9]+))?")
 _NONZERO = re.compile(r"[1-9]")
@@ -264,7 +264,7 @@ def apply_pax(header: RawHeader, records: Mapping[str, str]) -> dict[str, str]:
     for key, value in records.items():
         if key.startswith("GNU.sparse."):
             raise unsupported("GNU sparse files are not supported")
-        if key not in _PAX_HEADER_KEYS:
+        if key not in PAX_HEADER_KEYS:
             rest[key] = value
         elif value == "":
             continue
@@ -433,7 +433,7 @@ def encode_header(header: Header) -> bytes:  # noqa: PLR0912, PLR0915
     for key, value in header.pax.items():
         if key.startswith("GNU.sparse."):
             raise invalid_header(f"PAX record {quoted(key)} is not supported")
-        if key in _PAX_HEADER_KEYS:
+        if key in PAX_HEADER_KEYS:
             raise invalid_header(f"PAX record {quoted(key)} must be set through its header field")
         if key == "" or "=" in key or "\0" in key:
             raise invalid_header(f"invalid PAX record {quoted(key)}")
