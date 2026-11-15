@@ -51,13 +51,11 @@ def _dead_pid() -> int:
 
 def test_reaps_containers_of_processes_that_are_gone():
     image = _mssql.image()
-    if (
-        shutil.which("docker") is None
-        or subprocess.run(
-            ["docker", "image", "inspect", image], capture_output=True, check=False
-        ).returncode
-    ):
-        pytest.skip("no Docker, or no SQL Server image")
+    try:
+        _docker.require_docker()
+    except RuntimeError as error:
+        pytest.skip(f"no Docker: {error}")
+    _docker.pull(image)
     created = subprocess.run(
         [
             "docker",
