@@ -52,6 +52,9 @@
   member whose target is made is picked by its discriminator like any other member, where
   every one used to be tried on every value: 2^depth parses under `errors="all"`, the MCP
   server's tool-argument decoding. Issues then name only the members the discriminator picks.
+- Process workers: the worker's channel to its parent is no longer inheritable in the worker,
+  so a program the worker starts with `additional_fds` (which spawns without `close_fds`) does
+  not get it.
 
 ## 0.6.5 (2026-11-14)
 

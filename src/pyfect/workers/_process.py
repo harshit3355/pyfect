@@ -155,6 +155,8 @@ def current_parent() -> ParentPort | None:
         parent_pid = os.environ.pop(PARENT_ENV, None)
         if fd is None or parent_pid != str(os.getppid()):
             return None
+        # pass_fds left the channel inheritable: keep it from the processes this one starts.
+        os.set_inheritable(int(fd), False)
         port = _ProcessParent(socket.socket(fileno=int(fd)))
         _parent.append(port)
         return port
