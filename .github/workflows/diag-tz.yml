@@ -1,0 +1,19 @@
+name: diag-tz
+on:
+  push:
+    branches: [ci-exp]
+permissions:
+  contents: read
+jobs:
+  tz:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7.6.0
+      - run: |
+          cat /etc/os-release | head -3
+          dpkg -l | grep -i tzdata || true
+          ls -la /usr/share/zoneinfo/CST6CDT /usr/share/zoneinfo/EST5EDT /usr/share/zoneinfo/America/Chicago || true
+          ls /usr/share/zoneinfo | head -80 | tr '\n' ' '
+          echo; echo "TZ=$TZ"
+          for py in 3.13 3.14; do uv run --no-project --python $py python -c "import zoneinfo,sys; print(sys.version); print(zoneinfo.TZPATH); print(zoneinfo.ZoneInfo('CST6CDT'))" || true; done
