@@ -41,6 +41,9 @@
   day ahead of the clock (one at the UUID v7 ceiling), is no longer the floor of local ids, so
   local writes go on after importing one, also after reopening a SQL journal that holds it.
   They used to fail with `OverflowError` or `IndexError`, as Effect's journals still do.
+- `http.headers.parse_http_date` and `parse_retry_after` return an `Err` for a leap second past
+  the last `datetime` (`Fri, 31 Dec 9999 23:59:60 GMT`); they raised `OverflowError`, so such a
+  `Retry-After` ended `retry_transient` with a defect instead of retrying.
 
 ## 0.6.5 (2026-11-14)
 
