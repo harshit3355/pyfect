@@ -23,6 +23,9 @@
 - An HttpApi path parameter followed by a character the router does not split on
   (`/geo/:lat,:lng`) matches up to that character, in linear time; Effect's lazy `(.*?)`
   could let it take the character too, at polynomial cost.
+- `middleware.decompression()` answers 400 to a body with data after the end of its
+  compressed stream, as the web `DecompressionStream` Effect decodes with does, instead of
+  keeping that data.
 
 ## 0.6.5 (2026-11-14)
 

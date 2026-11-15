@@ -117,3 +117,11 @@ def test_every_decompress_call_in_pyfect_is_bounded() -> None:
 def test_a_zero_limit_admits_no_decompressed_byte() -> None:
     assert _post(_gzip(b"x"), "gzip", limit=0)[0] == 413
     assert _post(_gzip(b""), "gzip", limit=0)[:2] == (200, b"0")
+
+
+def test_data_after_the_end_of_the_compressed_body_is_an_error() -> None:
+    """As the web ``DecompressionStream`` Effect decodes with: input past the
+    end would otherwise be kept (and copied per chunk) outside every limit."""
+    assert _post(_gzip(b"{}") + b"x" * 4096, "gzip")[0] == 400
+    assert _post(_gzip(_gzip(b"{}") + b"tail"), "gzip, gzip")[0] == 400
+    assert _post(_gzip(b"{}"), "gzip")[:2] == (200, b"2")
