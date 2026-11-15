@@ -3,7 +3,7 @@
 # pyright: reportUnusedExpression=false
 
 import pyfect as fx
-from pyfect import duration, layer, metric
+from pyfect import duration, layer, metric, testing
 from pyfect import schema as S
 
 # asyncio-apps.mdx
@@ -16,6 +16,10 @@ metric.prometheus_format()
 fx.sleep("10 millis").track_duration(
     metric.histogram("checkout_seconds", boundaries=[1.0]), duration.to_seconds
 )
+# resources.mdx
+testing.adjust("2 seconds")
+# resources.mdx
+testing.adjust(0)
 # schedules.mdx
 fx.sleep(5)
 # schedules.mdx

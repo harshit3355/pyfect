@@ -4,7 +4,11 @@ effects with its services, as Effect's ``ManagedRuntime``.
 The layer is built on first use (or on entering the runtime as a context
 manager) and shared by every run until the runtime is disposed. Disposal
 interrupts and awaits the fibers the runtime started, then releases the
-layer's resources; later runs die.
+layer's resources; a run started once disposal has begun dies with
+"ManagedRuntime disposed". Every ``dispose`` call, from any thread and
+also one made while another is running, returns once the resources are
+released. A run's ``timeout`` covers its effect, not the layer build it
+waits for first.
 
 Built for an application's lifetime, such as a web server's lifespan::
 
@@ -251,7 +255,9 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
 
     async def run_async_exit[A, E = Never](self, eff: Effect[A, E, R_contra]) -> Exit[A, E | ER_co]:
         """Run on the running loop. Cancelling the awaiting task interrupts
-        the effect and waits for its finalizers."""
+        the effect and waits for its finalizers, then raises
+        ``CancelledError`` (where Effect's promise rejects with the
+        interruption), not an interrupted ``Exit``."""
         require_effect(eff, "eff")
         # Started now, as Effect's ``runPromise`` evaluates it: after dispose
         # it dies before joining the closed fiber scope would interrupt it.
@@ -300,9 +306,10 @@ class ManagedRuntime(Generic[R_contra, ER_co]):
         )
 
     def dispose(self) -> None:
-        """Dispose, blocking until the layer's resources are released.
-        Raises ``RuntimeError`` inside a fiber or a running asyncio loop,
-        whose fibers it could never see finish."""
+        """Dispose, blocking until the layer's resources are released, as
+        every call does, from any thread. Raises ``RuntimeError`` inside a
+        fiber or a running asyncio loop, whose fibers it could never see
+        finish."""
         _refuse_to_block("ManagedRuntime.dispose()", "await dispose_async()")
         scheduler = self._run_scheduler()
         fiber = new_root(scheduler, Context.empty())

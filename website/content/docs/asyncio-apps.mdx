@@ -48,6 +48,24 @@ A request decoded with a [pydantic model](/docs/pydantic-msgspec) (`from_model`)
 first problem it finds, as every Effect schema does by default (`errors: "first"`). Decode with
 `errors="all"` to report every problem, as FastAPI's own validation does.
 
+## Cancellation and shutdown
+
+Cancelling the task that awaits `run_async` or `run_async_exit` (by `task.cancel()`,
+`asyncio.timeout` or `wait_for`) interrupts the effect's fiber, and the await ends only once
+its finalizers have run. It then raises `CancelledError`, or the `TimeoutError` asyncio turns
+that into, where Effect's promise rejects with the interruption; `run_async_exit` raises too,
+rather than returning an interrupted `Exit`. An uninterruptible part of the effect still
+finishes, and what comes after it doesn't run.
+
+Disposing the runtime interrupts the runs in flight and waits for their finalizers before it
+releases the layer's resources. Every `dispose()` call returns only once they are released,
+whichever thread makes it and even while another disposal is running. A run started after
+disposal has begun dies with `RuntimeError("ManagedRuntime disposed")`.
+
+A run's own `timeout` covers its effect, not the layer build it waits for: the first runs of a
+runtime that builds its layer lazily wait for the build in full. Enter the runtime
+(`async with`) at startup to build the layer before any request comes.
+
 ## Sharing layers between runtimes
 
 Runtimes made with one `layer.MemoMap()` share the layers they have in common: such a layer is
@@ -163,6 +181,26 @@ once, over TLS too, as Node's server does.
 <include lang="text">../../snippets/asyncio_apps/tls.out</include>
 
 </CodeOutput>
+
+### Clients over TLS
+
+Every client checks the server's certificate and its name, as Node's do. To trust a private CA:
+
+- HTTP: `httpx_client.layer_with(verify=ssl.create_default_context(cafile=...))`, as above.
+- A TLS socket: `pyfect.socket.make_tls(port, host, tls=TlsUpgradeOptions(ca=pem))`.
+  `TlsUpgradeOptions` also takes `servername` (the SNI name and the name checked, else `host`),
+  a client certificate (`cert`, and `key` as `Redacted`), `alpn_protocols` and
+  `reject_unauthorized=False` to skip the check. A plain socket's `reader.upgrade(options)`
+  (STARTTLS) takes the same options.
+- `wss://` through `ws.layer_web_socket` or `layer_web_socket_constructor`: these take no TLS
+  options, and use Python's default trust store. Set `SSL_CERT_FILE` to a PEM bundle that holds
+  the CA before connecting. It replaces the default bundle, so include the public CAs in it
+  if the program also connects to public servers.
+
+`uvicorn_server.layer_test()` and `hypercorn_server.layer_test()` with TLS in `config` still
+give a client that sends to `http://`, as Effect's `layerTest` does, so its requests fail
+against the TLS port. Send to `https://127.0.0.1:{server.address.port}` with a client that
+trusts the certificate instead.
 
 Reference: [`pyfect.managed_runtime`](/docs/reference/managed_runtime),
 [`pyfect.http.router`](/docs/reference/http/router),

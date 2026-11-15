@@ -156,7 +156,8 @@ async def run_async_exit(
     eff: Effect[Any, Any, Any], *, context: Context = _EMPTY
 ) -> Exit[Any, Any]:
     """The effect's ``Exit``, run on the running asyncio loop; cancelling the
-    awaiting task interrupts the fiber and waits for its finalizers."""
+    awaiting task interrupts the fiber, waits for its finalizers, then
+    raises ``CancelledError`` rather than returning the interruption."""
     require_effect(eff, "eff")
     fiber: Fiber[Any, Any] = new_root(AsyncioScheduler.current(), context)
     fiber._start(eff)

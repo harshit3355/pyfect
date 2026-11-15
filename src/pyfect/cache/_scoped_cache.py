@@ -151,7 +151,10 @@ class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R =
         """A cache that looks keys up with ``lookup``, each in a scope of
         its own, closed when the entry leaves the cache, and all of them
         when the current scope closes. Options as ``Cache.make``; the
-        lookup's ``Scope`` is the entry's, never a requirement."""
+        lookup's ``Scope`` is the entry's, never a requirement. An expired
+        entry keeps its resources until something next reads it, and a zero
+        time to live keeps the entry, already expired, rather than nothing
+        as ``Cache``'s does: its resources stay open until that read."""
         ttl = time_to_live_of(time_to_live)
 
         def body(fiber: Fiber[Any, Any]) -> Effect[ScopedCache[Any, Any, Any, Any]]:
@@ -176,7 +179,9 @@ class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R =
         """The value for ``key``: cached, joined while another caller looks
         it up, or looked up now. The resource stays open while the entry
         is cached. When the last waiter leaves a lookup in progress, the
-        lookup is interrupted and forgotten."""
+        lookup is interrupted and forgotten. A key invalidated while its
+        lookup runs closes the new scope as the lookup ends, so the waiters
+        get a value whose resources are already released."""
 
         def body(restore: Restore) -> Effect[A, E]:
             return _WithFiber(lambda fiber: self._get(fiber, key, restore))
@@ -243,7 +248,9 @@ class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R =
         ).uninterruptible()
 
     def invalidate(self, key: K) -> Effect[None]:
-        """Forget ``key`` and close its scope."""
+        """Forget ``key`` and close its scope. During a lookup the scope
+        closes as the lookup ends, before its waiters get the value; a
+        ``refresh`` in flight still puts the key back."""
 
         def body() -> Effect[None]:
             with self._lock:
@@ -289,7 +296,8 @@ class ScopedCache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R =
         """Look ``key`` up again in a new scope. The cached entry keeps
         serving ``get`` until the new lookup ends; then the new outcome
         replaces it and its scope closes. A missing key is looked up as
-        ``get`` would. An interrupted refresh changes nothing."""
+        ``get`` would. An interrupted refresh changes nothing. A refresh
+        that ends after the key was invalidated caches it again."""
 
         def body(restore: Restore) -> Effect[A, E, R]:
             return _WithFiber(lambda fiber: self._refresh(fiber, key, restore))

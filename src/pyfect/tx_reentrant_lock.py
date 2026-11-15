@@ -5,7 +5,9 @@ Locks are held per fiber. Any number of fibers can hold read locks while no
 other fiber holds the write lock; one fiber can hold the write lock while
 no other fiber holds a read lock. A fiber can take either lock again while
 it holds it (each take counts and needs its own release), and the write
-lock's holder can also take read locks.
+lock's holder can also take read locks. A sole reader can take the write
+lock too. As in Effect there is no writer preference: new readers get in
+while a writer waits.
 """
 
 from __future__ import annotations
