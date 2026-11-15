@@ -1,14 +1,14 @@
-"""Using an effect the way asyncio or a method chain would gives a message that says what to
-write instead, in public names.
+"""Using an effect the way a method chain would gives a message that says what to write
+instead, in public names.
 
-- `await eff` raises `TypeError` naming `run_async` and `yield from`.
+- An effect is not awaitable (`inspect.isawaitable` is false), so libraries that await
+  whatever is awaitable pass it through.
 - The combinators that remove something from a type are functions for `.pipe`, never methods
   (pyright binds `self` first and erases the wrong thing). `eff.catch_tag(...)` raises an
   `AttributeError` showing the `.pipe(fx.catch_tag(...))` form. pyright still reports the
   attribute as unknown (`tests/type_checks.py`).
 """
 
-import asyncio
 import inspect
 import re
 import traceback
@@ -19,17 +19,12 @@ import pyfect as fx
 from pyfect._effect_misuse import PIPE_ONLY
 
 
-def test_awaiting_an_effect_says_to_use_run_async_or_yield_from():
-    async def main() -> object:
-        return await fx.succeed(1)  # pyright: ignore[reportGeneralTypeIssues, reportUnknownVariableType]
-
-    with pytest.raises(TypeError) as raised:
-        asyncio.run(main())
-    message = str(raised.value)
-    assert message.startswith("an Effect can't be awaited")
-    assert "await fx.run_async(eff)" in message
-    assert "yield from eff" in message
-    assert "_Succeed" not in message
+def test_an_effect_is_not_awaitable():
+    # An __await__, even one raising a clearer TypeError, would make libraries that await
+    # anything awaitable (GraphQL resolvers, pytest-asyncio, callback frameworks) raise on
+    # effects they pass through today.
+    assert inspect.isawaitable(fx.succeed(1)) is False
+    assert not hasattr(fx.Effect, "__await__")
 
 
 @pytest.mark.parametrize("name", sorted(PIPE_ONLY))

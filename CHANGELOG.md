@@ -16,9 +16,6 @@
   `return (yield from Error(...))` or `fx.fail(error)`. `Cause.pretty()` adds the hint after
   the defect, and `run_blocking` adds it as a note to the error it raises. The cause itself is
   unchanged, and a `TaggedError` made a defect by `or_die` gets no hint.
-- `await eff` raises a `TypeError` saying to use `await fx.run_async(eff)` or `yield from eff`,
-  instead of "object _Succeed can't be used in 'await' expression". pyright still reports an
-  effect as not awaitable.
 - `eff.catch_tag(...)` and the other combinators that are functions for `.pipe` on purpose
   (`catch_reason`, `catch_reasons`, `catch_no_such_element`, `provide`, `provide_context`,
   `provide_service`, `provide_service_effect`, `update_context`, `with_execution_plan`) raise an
