@@ -342,7 +342,7 @@ def test_keys_follow_node_readline_where_it_differs_from_a_plain_reading():
     assert decode("a\x1b") == [UserInput("a", Key("a")), UserInput(None, Key("escape", meta=True))]
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_an_escape_sequence_split_across_reads_is_one_key():
     # Node's readline keeps a partial sequence across reads, and takes a
     # trailing ESC for the escape key once 50 ms pass without more input.

@@ -55,7 +55,7 @@ from pyfect.socket import (
 from pyfect.socket import server as socket_server
 from pyfect.socket import ws as ws_platform
 
-live = testing.live(timeout="10 seconds")
+live = testing.live
 
 pytestmark = pytest.mark.filterwarnings(
     "error::ResourceWarning", "error::pytest.PytestUnraisableExceptionWarning"

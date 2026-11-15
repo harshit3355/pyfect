@@ -120,7 +120,7 @@ def _exits_while_a_grandchild_holds_stdin(seconds: str) -> process.StandardComma
     return make("sh", ["-c", f"exec 3<&0; sleep {seconds} <&3 & exit 0"])
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_a_write_cut_short_by_the_child_exiting_fails(process_services: Services[Platform]):
     # Checked against Effect under Node: the child's exit destroys stdin, so
     # a write still in progress (a grandchild holds the pipe and never
@@ -134,7 +134,7 @@ def test_a_write_cut_short_by_the_child_exiting_fails(process_services: Services
     assert error.cause.errno == errno.ECANCELED, error.cause
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_a_writer_thread_that_raises_fails_the_write(
     process_services: Services[Platform], monkeypatch: pytest.MonkeyPatch
 ):
@@ -162,7 +162,7 @@ def _wait_until_gone(pid: int) -> None:
     time.sleep(0.1)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_a_write_made_before_the_childs_exit_is_handled_fails_with_ecanceled(
     process_services: Services[Platform],
 ):
@@ -176,7 +176,7 @@ def test_a_write_made_before_the_childs_exit_is_handled_fails_with_ecanceled(
     assert error.cause.errno == errno.ECANCELED, error.cause
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_a_write_the_pipe_takes_at_once_succeeds_before_the_childs_exit_is_handled(
     process_services: Services[Platform],
 ):
@@ -212,7 +212,7 @@ def test_a_write_after_stdin_ended_fails_as_nodes_write_after_end(
     assert (cause.code, str(cause)) == ("ERR_STREAM_WRITE_AFTER_END", "write after end")
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_a_write_after_the_child_exited_fails_as_nodes_premature_close(
     process_services: Services[Platform],
 ):
@@ -226,7 +226,7 @@ def test_a_write_after_the_child_exited_fails_as_nodes_premature_close(
     assert (cause.code, str(cause)) == ("ERR_STREAM_PREMATURE_CLOSE", "Premature close")
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_exit_code_seen_before_the_exit_task_runs_has_closed_stdin(
     process_services: Services[Platform],
 ):
@@ -261,7 +261,7 @@ _ENDINGS = {
 
 @pytest.mark.parametrize("ending", _ENDINGS)
 @pytest.mark.parametrize("seen_through", ["exit_code", "is_running"])
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_stdin_is_destroyed_whenever_the_exit_is_visible(
     process_services: Services[Platform], ending: str, seen_through: str
 ):
@@ -280,14 +280,14 @@ def test_stdin_is_destroyed_whenever_the_exit_is_visible(
     yield from _assert_stdin_destroyed(handle)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_stdin_is_destroyed_once_kill_returns(process_services: Services[Platform]):
     handle = yield from make("sh", ["-c", "exec 3<&0; sleep 2 <&3 & exec sleep 30"], detached=False)
     yield from handle.kill()
     yield from _assert_stdin_destroyed(handle)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_a_write_the_child_refuses_fails_with_epipe_from_write(
     process_services: Services[Platform],
 ):

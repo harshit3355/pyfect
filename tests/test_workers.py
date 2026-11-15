@@ -93,7 +93,7 @@ def _run_error(handle: WorkerHandle) -> Effect[WorkerError]:
 
 
 @pytest.mark.parametrize("backend", list(ECHOES))
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_messages_sent_before_the_worker_is_ready_are_delivered_in_order(backend: str):
     worker = yield from _spawn(ECHOES[backend]())
     yield from worker.send(1)
@@ -104,7 +104,7 @@ def test_messages_sent_before_the_worker_is_ready_are_delivered_in_order(backend
     assert (yield from replies.take()) == ("echo", 2)
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_a_failing_handler_in_the_worker_is_logged_and_the_worker_keeps_serving():
     worker = yield from _spawn(ECHOES["thread"]())
     replies = yield from Queue[object].unbounded()
@@ -143,7 +143,7 @@ RAISING: dict[str, Callable[[], WorkerHandle]] = {
 
 
 @pytest.mark.parametrize("backend", list(RAISING))
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_a_handler_that_raises_in_the_worker_ends_the_worker(backend: str):
     """Node's message listener throwing is an uncaught exception: the worker
     ends, so the run fails rather than waiting for replies forever."""
@@ -157,7 +157,7 @@ def test_a_handler_that_raises_in_the_worker_ends_the_worker(backend: str):
         assert error.message == "The worker has exited with code: 1"
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_each_run_asks_the_spawner_for_a_new_worker():
     """Effect calls the spawner when a run starts, so a retried run gets a
     fresh worker."""
@@ -193,7 +193,7 @@ def _ready_then_close(handle: WorkerHandle) -> Effect[None, WorkerError]:
     return scoped(body)
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_closing_the_run_ends_a_thread_workers_program():
     ended = threading.Event()
 
@@ -205,7 +205,7 @@ def test_closing_the_run_ends_a_thread_workers_program():
     assert ended.wait(5)
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_closing_the_run_ends_a_process_workers_program(tmp_path: Path):
     marker = tmp_path / "ended"
     code = _ECHO + f"open({str(marker)!r}, 'w').close()\n"
@@ -213,14 +213,14 @@ def test_closing_the_run_ends_a_process_workers_program(tmp_path: Path):
     assert marker.exists()
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_a_process_that_exits_before_it_is_ready_fails_the_run_with_its_code():
     error = yield from _run_error(ProcessWorker(["-c", "raise SystemExit(3)"]))
     assert isinstance(error.reason, WorkerReceiveError)
     assert error.message == "The worker has exited with code: 3"
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_a_thread_worker_that_raises_fails_the_run_with_an_error_event():
     def target() -> None:
         raise ValueError("boom")
@@ -230,14 +230,14 @@ def test_a_thread_worker_that_raises_fails_the_run_with_an_error_event():
     assert isinstance(error.cause, ValueError)
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_a_process_that_cannot_start_fails_the_run_with_a_spawn_error():
     error = yield from _run_error(ProcessWorker([], executable="/nonexistent/python"))
     assert isinstance(error.reason, WorkerSpawnError)
     assert isinstance(error.cause, OSError)
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_a_message_that_cannot_be_pickled_fails_the_send():
     worker = yield from _spawn(ECHOES["process"]())
     replies = yield from Queue[object].unbounded()
@@ -248,7 +248,7 @@ def test_a_message_that_cannot_be_pickled_fails_the_send():
     assert isinstance(error.reason, WorkerSendError)
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_a_worker_that_does_not_exit_when_closed_is_killed(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
@@ -328,7 +328,7 @@ def _serve_initial() -> None:
     fx.run_blocking_exit(main.launch())
 
 
-@testing.live(timeout="20 seconds")
+@testing.live
 def test_each_rpc_worker_gets_the_initial_message_before_any_request():
     client_layer = (
         layer.effect(_InitClient, rpc_client.make(_InitGroup))

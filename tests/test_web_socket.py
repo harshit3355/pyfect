@@ -124,7 +124,7 @@ def echo_server():
     return acquire_release(sync(Echo), lambda e, _: sync(e.server.shutdown))
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_text_with_a_lone_surrogate_is_sent_as_a_browser_sends_it():
     # WebSocket.send takes a USVString: a lone surrogate becomes U+FFFD,
     # and later sends still go out.
@@ -138,7 +138,7 @@ def test_text_with_a_lone_surrogate_is_sent_as_a_browser_sends_it():
     assert (yield from blocking(lambda: echo.received.get(timeout=2))) == "b"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_closing_while_connecting_fails_the_open():
     # A server that accepts TCP but never answers the upgrade.
     listener = stdlib_socket.create_server(("127.0.0.1", 0))
@@ -171,7 +171,7 @@ def test_round_trip_on_the_asyncio_runtime():
     assert asyncio.run(main()) == ("ping",)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_an_invalid_close_code_is_a_write_error():
     # A browser's close() throws for codes other than 1000 and 3000-4999.
     echo = yield from echo_server()

@@ -68,7 +68,7 @@ FIXTURES = Path(__file__).parent / "fixtures" / "tls"
 CERT = (FIXTURES / "cert.pem").read_text()
 KEY = (FIXTURES / "key.pem").read_text()
 
-live = testing.live(timeout="10 seconds")
+live = testing.live
 
 # A connection nobody closes is a bug: collect garbage after each test so a
 # leaked transport's "unclosed" warning fails the test that leaked it.

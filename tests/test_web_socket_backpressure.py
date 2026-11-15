@@ -68,7 +68,7 @@ def _silent_client(port: int) -> socket.socket:
     return client
 
 
-@fx.testing.live(timeout="20 seconds")
+@fx.testing.live
 def test_a_server_write_waits_while_the_peer_does_not_read():
     written = [0]
     srv = yield from socket_server.make_web_socket(0, "127.0.0.1")

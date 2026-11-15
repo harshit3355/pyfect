@@ -85,7 +85,7 @@ def _create_todo(todo: TodoWithoutId) -> fx.Effect[Todo, object, HttpClient]:
     )
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_text(http: Services[HttpClient]):
     """text"""
     response = yield from c.get("/text?existing=1", url_params={"value": "a#b"}, hash="fragment")
@@ -96,7 +96,7 @@ def test_text(http: Services[HttpClient]):
     assert (yield from response.text) == "test"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_text_preserves_bytes(http: Services[HttpClient]):
     """accessing text preserves response bytes"""
     response = yield from c.get("/bytes")
@@ -104,7 +104,7 @@ def test_text_preserves_bytes(http: Services[HttpClient]):
     assert (yield from response.bytes_) == RESPONSE_BYTES
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_bom_json(http: Services[HttpClient]):
     """request and response json ignore a leading UTF-8 BOM"""
     response = yield from c.post("/bom-json", body=body.text('﻿{"a":1}', "application/json"))
@@ -112,7 +112,7 @@ def test_bom_json(http: Services[HttpClient]):
 
 
 @pytest.mark.parametrize("source", ["bytes", "stream"])
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_form_data(http: Services[HttpClient], source: str):
     """sends $source form data request bodies as multipart"""
     content: body.FileContent = (
@@ -139,7 +139,7 @@ def test_form_data(http: Services[HttpClient], source: str):
     ]
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_follow_redirects(http: Services[HttpClient]):
     """local server followRedirects"""
     client = (yield from HttpClient()).follow_redirects()
@@ -148,7 +148,7 @@ def test_follow_redirects(http: Services[HttpClient]):
     assert (yield from response.text) == "redirected"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_text_stream(http: Services[HttpClient]):
     """text stream"""
     client = yield from HttpClient()
@@ -156,7 +156,7 @@ def test_text_stream(http: Services[HttpClient]):
     assert text == "test"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_local_server(http: Services[HttpClient]):
     """local server"""
     client = yield from HttpClient()
@@ -171,14 +171,14 @@ def test_local_server(http: Services[HttpClient]):
     assert todo["title"] == "revived"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_local_server_schema_body_json(http: Services[HttpClient]):
     """local server schemaBodyJson"""
     todo = yield from _create_todo({"userId": 1, "title": "test", "completed": False})
     assert todo["title"] == "test"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_query_round_trip(http: Services[HttpClient]):
     """round trips QUERY method, body, and content type through the local server"""
     text = '{"query": "effect"}'
@@ -195,7 +195,7 @@ class _Status(TypedDict):
     status: int
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_head_schema_json(http: Services[HttpClient]):
     """head request with schemaJson"""
     client = yield from HttpClient()
@@ -205,7 +205,7 @@ def test_head_schema_json(http: Services[HttpClient]):
     assert decoded == {"status": 200}
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_interrupt(http: Services[HttpClient]):
     """interrupt"""
     client = yield from HttpClient()
@@ -213,7 +213,7 @@ def test_interrupt(http: Services[HttpClient]):
     assert result is None
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_upgrade_refused(http: Services[HttpClient]):
     """reads a refused upgrade as an ordinary response"""
     response = yield from c.execute(req.post("/upgrade").upgrade("tcp"))
@@ -283,7 +283,7 @@ def _read_until_close(reader: Reader) -> fx.Effect[str]:
     return fx.gen(loop)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_upgrade_hands_over_the_connection(http: Services[HttpClient]):
     """NodeHttpClient upgrade / hands over the connection of a 101 response"""
     with _upgrade_server() as (base_url, _closed):
@@ -300,7 +300,7 @@ def test_upgrade_hands_over_the_connection(http: Services[HttpClient]):
         assert (yield from _read_until_close(reader)) == "hello|echo:ping|bye"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_upgrade_closes_with_the_request_scope(http: Services[HttpClient]):
     """NodeHttpClient upgrade / closes the upgraded connection when the request scope closes"""
     with _upgrade_server() as (base_url, closed):
@@ -314,14 +314,14 @@ def test_upgrade_closes_with_the_request_scope(http: Services[HttpClient]):
         assert (yield from fx.sync(lambda: closed.wait(1))), "the connection is still open"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_close_early(http: Services[HttpClient]):
     """close early"""
     response = yield from c.get("/large")
     assert response.status == 200
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_stream_encode_failure(http: Services[HttpClient]):
     """returns a stream body encoding failure"""
     error = (
@@ -388,7 +388,7 @@ def _single_connection_client() -> fx.Layer[HttpClient]:
 single_connection = testing.layer_fixture(_single_connection_client(), live=True)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_follow_redirects_releases_bodies(single_connection: Services[HttpClient]):
     """followRedirects releases redirect response bodies with a single socket"""
     client = (yield from HttpClient()).follow_redirects()
@@ -396,7 +396,7 @@ def test_follow_redirects_releases_bodies(single_connection: Services[HttpClient
     assert (yield from response.text) == "redirected"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_follow_redirects_releases_scoped_bodies(single_connection: Services[HttpClient]):
     """followRedirects releases scoped redirect response bodies with a single socket"""
 
@@ -409,7 +409,7 @@ def test_follow_redirects_releases_scoped_bodies(single_connection: Services[Htt
     assert (yield from fx.scoped(program()).timeout("2 seconds")) == "redirected"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_form_data_file_stream_cannot_be_created(http: Services[HttpClient]):
     """returns TransportError when a form data file stream cannot be created"""
 
@@ -451,7 +451,7 @@ def _paused_server() -> tuple[str, Callable[[], None]]:
     return f"http://127.0.0.1:{listener.getsockname()[1]}", close
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_form_data_files_read_on_demand():
     """reads backpressured form data files on demand and releases them on interruption"""
     from pyfect.http import httpx_client

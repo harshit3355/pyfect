@@ -97,7 +97,7 @@ def _num(value: float) -> str:
 
 
 @pytest.mark.parametrize("failure", [False, True], ids=["success", "failure"])
-@testing.live(timeout="5 seconds")
+@testing.live
 def test_deferred_self_completion(failure: bool):
     """deferred self-completion / success | failure"""
     signal = durable_deferred.make("signal", success=S.String, error=S.String)

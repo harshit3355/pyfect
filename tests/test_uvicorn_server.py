@@ -377,7 +377,7 @@ def test_under_run_blocking_inside_a_running_loop_the_server_runs_on_a_loop_of_i
     assert asyncio.run(main()) == (200, "ok")
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_a_fiber_a_request_forks_into_a_longer_lived_set_can_still_be_interrupted():
     """A handler can fork a fiber that outlives its request (beacon's watcher
     keeps one per monitor in a FiberMap). It runs on the server's loop; the set

@@ -133,6 +133,9 @@ fuzz = ["atheris==3.1.0; sys_platform == 'linux'"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+# An effect test's real-time timeout only detects hangs; timing is checked on the
+# TestClock (tests/test_test_timeouts.py).
+pyfect_timeout = "30"
 # An xfail that passes fails the run (tests/test_xfail_guard.py).
 xfail_strict = true
 # A coroutine left pending (a close never awaited before a loop stopped) or

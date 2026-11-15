@@ -95,7 +95,7 @@ def name_server() -> Iterator[na.InetAddress]:
     tcp.close()
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_reverse_names(name_server: na.InetAddress):
     """looks up the host names of an address, skipping invalid names"""
     resolver = dns.make_system([name_server])
@@ -103,7 +103,7 @@ def test_reverse_names(name_server: na.InetAddress):
     assert (yield from resolver.reverse(ip("192.0.2.2"))) == ("good.example.test.",)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_reverse_missing(name_server: na.InetAddress):
     """reports missing names and records"""
     missing = yield from dns.make_system([name_server]).reverse(ip("192.0.2.9")).flip()
@@ -114,7 +114,7 @@ def test_reverse_missing(name_server: na.InetAddress):
     )
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_unusual_ptr_names(name_server: na.InetAddress):
     """converts unusual record data"""
     records = yield from dns.make_system([name_server]).resolve(
@@ -123,7 +123,7 @@ def test_unusual_ptr_names(name_server: na.InetAddress):
     assert records == (dns.Ptr("v2\\.0 Café\\\\x._svc._tcp.edge.test."),)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_escaped_dot_before_root(name_server: na.InetAddress):
     """keeps the root after a label ending with an escaped dot"""
     records = yield from dns.make_system([name_server]).resolve(
@@ -132,13 +132,13 @@ def test_escaped_dot_before_root(name_server: na.InetAddress):
     assert [dns.format_record(r) for r in records] == ["PTR printer\\.."]
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_truncated_answer_retried_over_tcp(name_server: na.InetAddress):
     names = yield from dns.make_system([name_server]).reverse(ip("10.0.0.1"))
     assert len(names) == 20
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_other_record_types_are_unsupported(name_server: na.InetAddress):
     error = yield from dns.make_system([name_server]).resolve(name("example.test"), dns.Mx).flip()
     assert (error.reason, error.record_type) == ("Unsupported", "MX")

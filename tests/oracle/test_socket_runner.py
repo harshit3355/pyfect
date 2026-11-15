@@ -177,25 +177,25 @@ def _assert_serialization(
     return fx.gen(body).pipe(fx.provide(shared_storage))
 
 
-@testing.live(timeout="15 seconds")
+@testing.live
 def test_uses_the_default_serialization_for_tcp_connections():
     """uses SchemaBinary by default for TCP connections"""
     yield from _assert_serialization(serialization.layer_schema_binary(), None)
 
 
-@testing.live(timeout="15 seconds")
+@testing.live
 def test_preserves_an_explicit_ndjson_selection():
     """(not an Effect title) an explicit ndjson selection reaches a runner on ndjson"""
     yield from _assert_serialization(serialization.layer_ndjson, "ndjson")
 
 
-@testing.live(timeout="15 seconds")
+@testing.live
 def test_preserves_an_explicit_binary_selection():
     """preserves an explicit binary selection"""
     yield from _assert_serialization(serialization.layer_schema_binary(), "binary")
 
 
-@testing.live(timeout="15 seconds")
+@testing.live
 def test_applies_serialization_max_buffer_size_to_the_default_parser():
     """applies serializationMaxBufferSize to the default SchemaBinary parser"""
 

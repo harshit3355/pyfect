@@ -1171,7 +1171,7 @@ def _check_lines(output: str) -> None:
     assert (lines[0], lines[99999]) == ("1", "100000")
 
 
-@testing.effect(timeout="10 seconds")
+@testing.effect
 def test_should_not_deadlock_on_large_stdout_output(node_services: Services[Platform]):
     """should not deadlock on large stdout output"""
     handle = yield from make("sh", ["-c", "seq 1 100000"])
@@ -1180,7 +1180,7 @@ def test_should_not_deadlock_on_large_stdout_output(node_services: Services[Plat
     _check_lines(output)
 
 
-@testing.effect(timeout="10 seconds")
+@testing.effect
 def test_child_process_string_should_not_deadlock_on_large_output(
     node_services: Services[Platform],
 ):
@@ -1189,7 +1189,7 @@ def test_child_process_string_should_not_deadlock_on_large_output(
     _check_lines((yield from service.string(make("sh", ["-c", "seq 1 100000"]))))
 
 
-@testing.effect(timeout="10 seconds")
+@testing.effect
 def test_child_process_exit_code_should_not_deadlock_on_large_output(
     node_services: Services[Platform],
 ):
@@ -1199,7 +1199,7 @@ def test_child_process_exit_code_should_not_deadlock_on_large_output(
     assert (yield from service.exit_code(command)) == ExitCode(0)
 
 
-@testing.effect(timeout="10 seconds")
+@testing.effect
 def test_child_process_string_should_not_deadlock_on_large_stderr_output(
     node_services: Services[Platform],
 ):
@@ -1514,7 +1514,7 @@ def _send(handle: ChildProcessHandle, line: str) -> fx.Effect[None, PlatformErro
     return stream.make(line.encode()).run(handle.stdin)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_scope_release_cleans_descendants_after_the_leader_exits_successfully(
     live_services: Services[Platform], tmp: str
 ):
@@ -1528,7 +1528,7 @@ def test_scope_release_cleans_descendants_after_the_leader_exits_successfully(
     assert FsPath(group.marker).read_text() == "exited"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_scope_release_force_kills_descendants_after_the_leader_exits_with_a_non_zero_code(
     live_services: Services[Platform], tmp: str
 ):
@@ -1540,7 +1540,7 @@ def test_scope_release_force_kills_descendants_after_the_leader_exits_with_a_non
     yield from _heartbeat_stopped(group.marker)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_scope_release_cleans_descendants_after_the_leader_is_killed_externally(
     live_services: Services[Platform], tmp: str
 ):
@@ -1555,7 +1555,7 @@ def test_scope_release_cleans_descendants_after_the_leader_is_killed_externally(
     assert FsPath(group.marker).read_text() == "exited"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_scope_release_waits_for_descendants_that_outlive_the_leader(
     live_services: Services[Platform], tmp: str
 ):
@@ -1566,7 +1566,7 @@ def test_scope_release_waits_for_descendants_that_outlive_the_leader(
     assert os.path.exists(group.marker)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_scope_release_drains_descendants_after_a_slow_leader_exits(
     live_services: Services[Platform], tmp: str
 ):
@@ -1579,7 +1579,7 @@ def test_scope_release_drains_descendants_after_a_slow_leader_exits(
     assert FsPath(group.marker).read_text() == "exited"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_scope_release_force_kills_descendants_that_ignore_the_kill_signal(
     live_services: Services[Platform], tmp: str
 ):
@@ -1589,7 +1589,7 @@ def test_scope_release_force_kills_descendants_that_ignore_the_kill_signal(
     yield from _heartbeat_stopped(group.marker)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_kill_force_kills_descendants_that_ignore_the_kill_signal(
     live_services: Services[Platform], tmp: str
 ):
@@ -1601,7 +1601,7 @@ def test_kill_force_kills_descendants_that_ignore_the_kill_signal(
     yield from group.scope.close(fx.exit.succeed(None))
 
 
-@testing.effect(timeout="10 seconds")
+@testing.effect
 def test_force_kill_after_escalation_does_not_depend_on_the_effect_clock(
     node_services: Services[Platform], tmp: str
 ):
@@ -1612,7 +1612,7 @@ def test_force_kill_after_escalation_does_not_depend_on_the_effect_clock(
     yield from _heartbeat_stopped(group.marker)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_scope_release_returns_when_a_descendant_holds_the_inherited_pipe_without_force_kill_after(
     live_services: Services[Platform], tmp: str
 ):

@@ -35,7 +35,7 @@ from pyfect.socket.datagram import (
     make_udp,
 )
 
-live = testing.live(timeout="10 seconds")
+live = testing.live
 
 pytestmark = pytest.mark.filterwarnings(
     "error::ResourceWarning", "error::pytest.PytestUnraisableExceptionWarning"

@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- A `@testing.effect` test whose deadline passed while it could not be interrupted (in a
+  finalizer, say), and which then finished, fails with a `TestTimeoutError` saying it finished
+  after its timeout, not that it was interrupted.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated

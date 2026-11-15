@@ -35,7 +35,7 @@ from ._http_server import base_url
 http = testing.layer_fixture(httpx_client.layer, live=True)
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_sends_bodies(http: Services[HttpClient]):
     """sends bodies from Web requests"""
     request = (
@@ -49,7 +49,7 @@ def test_sends_bodies(http: Services[HttpClient]):
     assert (yield from response.text) == "hello"
 
 
-@testing.live(timeout="10 seconds")
+@testing.live
 def test_keeps_request_bodies_streaming(http: Services[HttpClient]):
     """keeps supported request bodies streaming with duplex half"""
     request = req.post(f"{base_url()}/framing").body_stream(
