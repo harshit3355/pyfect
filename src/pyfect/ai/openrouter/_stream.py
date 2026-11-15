@@ -11,6 +11,7 @@ the reasoning end and the first tool call."""
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
@@ -32,11 +33,72 @@ type Part = Rs.Part
 type Detail = dict[str, Any]
 
 
+_STRUCTURE = re.compile(r'[\\"{}\[\]]')
+
+
+class _JsonShape:
+    """Follows the brackets and strings of a JSON text as it streams in, so that the
+    whole text is parsed only when it may be one complete value (Effect parses it after
+    every delta, which is quadratic in the arguments' length). A container or string at
+    the top that has closed and does not parse never will: nothing more is parsed."""
+
+    __slots__ = ("_container", "_dead", "_depth", "_escaped", "_in_string", "_started")
+
+    def __init__(self) -> None:
+        self._depth = 0
+        self._in_string = False
+        # A backslash in a string ended the last delta: the next character is escaped
+        self._escaped = False
+        self._started = False
+        self._container = False
+        self._dead = False
+
+    def add(self, delta: str) -> bool:
+        """Whether, after ``delta``, the text may parse."""
+        if not delta:
+            return self._may_parse()
+        if not self._started:
+            stripped = delta.lstrip()
+            if not stripped:
+                return False
+            self._started = True
+            self._container = stripped[0] in '{["'
+        skip = 0 if self._escaped else -1
+        self._escaped = False
+        for match in _STRUCTURE.finditer(delta):
+            at = match.start()
+            if at == skip:
+                continue
+            ch = match.group()
+            if self._in_string:
+                if ch == "\\":
+                    skip = at + 1
+                    self._escaped = at + 1 == len(delta)
+                elif ch == '"':
+                    self._in_string = False
+            elif ch == '"':
+                self._in_string = True
+            elif ch in "{[":
+                self._depth += 1
+            else:
+                self._depth -= 1
+        return self._may_parse()
+
+    def _may_parse(self) -> bool:
+        return self._started and not self._dead and not self._in_string and self._depth == 0
+
+    def failed(self) -> None:
+        """The text did not parse where ``add`` said it may."""
+        if self._container:
+            self._dead = True
+
+
 @dataclass
 class _ToolCall:
     id: str
     name: str
     params: P.TextBuffer
+    shape: _JsonShape = field(default_factory=_JsonShape)
 
 
 def _invalid(description: str) -> AiError:
@@ -181,8 +243,11 @@ class _Stream:
                 )
             if delta:
                 parts.append({"type": "tool-params-delta", "id": active.id, "delta": delta})
+            if not active.shape.add(delta):
+                continue
             ok, params = _parsed(active.params.text())
             if not ok:
+                active.shape.failed()
                 continue
             parts.append({"type": "tool-params-end", "id": active.id})
             parts.append(

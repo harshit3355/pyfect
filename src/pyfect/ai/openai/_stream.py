@@ -61,7 +61,8 @@ class _ApplyPatch:
 class _CodeInterpreter:
     container_id: str
     has_code: bool = False
-    streamed_code: str = ""
+    # Pieces of the streamed code, joined once: ``+=`` on an attribute copies it all
+    streamed_code: list[str] = field(default_factory=list[str])
 
 
 @dataclass
@@ -125,7 +126,7 @@ class _Stream:
                 "id": call.id,
                 "name": call.name,
                 "params": {
-                    "code": code_call.streamed_code if code_call.has_code else code,
+                    "code": "".join(code_call.streamed_code) if code_call.has_code else code,
                     "container_id": code_call.container_id,
                 },
                 "providerExecuted": True,
@@ -255,7 +256,7 @@ class _Stream:
         code = call.code_interpreter
         delta = ("" if code.has_code else '"') + escape_json_delta(event["delta"])
         code.has_code = True
-        code.streamed_code += event["delta"]
+        code.streamed_code.append(event["delta"])
         return [{"type": "tool-params-delta", "id": call.id, "delta": delta}]
 
     def code_done(self, event: Any) -> Gen[list[Part]]:
