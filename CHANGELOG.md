@@ -44,6 +44,14 @@
 - `http.headers.parse_http_date` and `parse_retry_after` return an `Err` for a leap second past
   the last `datetime` (`Fri, 31 Dec 9999 23:59:60 GMT`); they raised `OverflowError`, so such a
   `Retry-After` ended `retry_transient` with a defect instead of retrying.
+- `HttpClient.with_rate_limiter` no longer learns a `ratelimit-limit` below 1 from a response:
+  a request waits `window / limit`, so `0.000000001` parked the key for thousands of years,
+  past the hour pyfect allows a peer's time hints.
+- Schema: a union of mutually recursive `TypedDict`s (the members met again while their own
+  fields are derived are suspended) decodes in time linear in the input's depth. A suspended
+  member whose target is made is picked by its discriminator like any other member, where
+  every one used to be tried on every value: 2^depth parses under `errors="all"`, the MCP
+  server's tool-argument decoding. Issues then name only the members the discriminator picks.
 
 ## 0.6.5 (2026-11-14)
 

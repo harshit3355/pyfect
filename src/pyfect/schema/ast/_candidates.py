@@ -268,40 +268,81 @@ def _observed(
     return None
 
 
-class CandidateIndex:
-    """The candidates of a union's members for an input."""
+@dataclass(frozen=True, slots=True)
+class _Selection:
+    members: tuple[_Member, ...]
+    only_literals: bool
+    sentinel_keys: tuple[Hashable, ...]
+    waiting: tuple[int, ...]
+    """The suspended members whose target is not made yet."""
 
-    __slots__ = ("_members", "_only_literals", "_sentinel_keys")
+
+def _selection(types: Sequence[AST], members: list[_Member]) -> _Selection:
+    live = [m for m in members if not m.never]
+    keys: dict[Hashable, None] = {}
+    for m in live:
+        for key, _ in m.sentinels:
+            keys[key] = None
+    waiting = tuple(i for i, t in enumerate(types) if isinstance(t, Suspend) and t.made is None)
+    return _Selection(
+        tuple(members),
+        bool(live) and all(m.literal is not None for m in live),
+        tuple(keys),
+        waiting,
+    )
+
+
+class CandidateIndex:
+    """The candidates of a union's members for an input.
+
+    A suspended member takes anything until its target is made (selecting
+    candidates never makes it); from then on it is selected as its target
+    would be, so the discriminators of recursive members prune them."""
+
+    __slots__ = ("_selection", "_types")
 
     def __init__(self, types: Sequence[AST]) -> None:
         memo = _Memo()
-        self._members = [_member(t, memo) for t in types]
-        live = [m for m in self._members if not m.never]
-        self._only_literals = bool(live) and all(m.literal is not None for m in live)
-        keys: dict[Hashable, None] = {}
-        for m in live:
-            for key, _ in m.sentinels:
-                keys[key] = None
-        self._sentinel_keys = tuple(keys)
+        self._types = tuple(types)
+        self._selection = _selection(types, [_member(t, memo) for t in types])
+
+    def _current(self) -> _Selection:
+        selection = self._selection
+        if not selection.waiting:
+            return selection
+        made = [i for i in selection.waiting if cast("Suspend", self._types[i]).made is not None]
+        if not made:
+            return selection
+        memo = _Memo()
+        members = list(selection.members)
+        for i in made:
+            target = cast("Suspend", self._types[i]).made
+            assert target is not None
+            members[i] = _member(target, memo)
+        # One assignment: a reader on another thread sees the old or the new.
+        self._selection = updated = _selection(self._types, members)
+        return updated
 
     def __call__(self, input: object, constructing: bool = False) -> list[int]:
         """The candidates for ``input``; under a constructor (Effect's
         constructor mode) a missing sentinel key selects every member that
         has it, as a constructor default may fill it in."""
-        members = self._members
-        if self._only_literals:
+        selection = self._current()
+        members = selection.members
+        if selection.only_literals:
             return [
                 i
                 for i, m in enumerate(members)
                 if m.literal is not None and not m.never and same_literal(m.literal[0], input)
             ]
-        if self._sentinel_keys:
-            observed = _observed(input, self._sentinel_keys)
+        if selection.sentinel_keys:
+            observed = _observed(input, selection.sentinel_keys)
             if observed is not None:
-                return self._by_sentinels(*observed, constructing)
-        return self._by_kind(input)
+                return self._by_sentinels(members, *observed, constructing)
+        return self._by_kind(members, input)
 
-    def _by_kind(self, input: object) -> list[int]:
+    @staticmethod
+    def _by_kind(members: tuple[_Member, ...], input: object) -> list[int]:
         kind = kind_of(input)
 
         def takes(m: _Member) -> bool:
@@ -309,19 +350,21 @@ class CandidateIndex:
                 return same_literal(m.literal[0], input)
             return not m.kinds.isdisjoint(kind)
 
-        return [
-            i for i, m in enumerate(self._members) if not m.never and not m.sentinels and takes(m)
-        ]
+        return [i for i, m in enumerate(members) if not m.never and not m.sentinels and takes(m)]
 
+    @staticmethod
     def _by_sentinels(
-        self, observed: dict[Hashable, object], kind: frozenset[str], constructing: bool
+        members: tuple[_Member, ...],
+        observed: dict[Hashable, object],
+        kind: frozenset[str],
+        constructing: bool,
     ) -> list[int]:
         """Discriminated members whose sentinels the input does not
         contradict and that one of its sentinel values selects (or, when
         ``constructing``, that has a key the input lacks), plus the other
         members taking the input's kind. A missing key is neutral."""
         selected: list[int] = []
-        for i, m in enumerate(self._members):
+        for i, m in enumerate(members):
             if m.never:
                 continue
             if not m.sentinels:
@@ -348,7 +391,10 @@ def member_expected(ast: AST) -> str:
     """How a union names a member: a mapping with literal keys as
     ``{ readonly "_tag": "A", ... }``, a tuple with literal elements as
     ``readonly [ "a", ... ]``, any other as its encoded side expects (what
-    the union decodes from)."""
+    the union decodes from). A suspended member is named as its target,
+    once made."""
+    if isinstance(ast, Suspend) and ast.made is not None:
+        ast = ast.made
     side = to_encoded(ast)
     if isinstance(side, Class) and side.side == "encoded":
         side = side.shape.encoded
