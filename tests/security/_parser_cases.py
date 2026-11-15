@@ -255,8 +255,9 @@ def channel(target: object, make_channel: Callable[[], Any], *, is_bytes: bool =
             CASES.append(Case(f"{_qualified(target)}: {kind}, {how}", target, make))
 
 
-def schema(target: S.Top) -> None:
-    """A schema decoding text, on every adversary."""
+def schema(target: S.Top, name: str) -> None:
+    """A schema decoding text, on every adversary. ``name`` names the cases: a schema's repr
+    holds object addresses, which differ between processes."""
     decode = S.decode_unknown_exit(cast("Any", target))
     for kind, make_input in ADVERSARIES.items():
 
@@ -264,11 +265,7 @@ def schema(target: S.Top) -> None:
             value = make_input(n)
             return lambda: decode(value)
 
-        CASES.append(Case(f"S.{_schema_name(target)}: {kind}", target, make))
-
-
-def _schema_name(target: object) -> str:
-    return next((name for name in dir(S) if getattr(S, name) is target), repr(target))
+        CASES.append(Case(f"{name}: {kind}", target, make))
 
 
 # ------------------------------------------------------------------------- text parsers
@@ -671,12 +668,12 @@ def _frozen_set_collisions(n: int) -> Work:
 
 for _name_ in dir(S):
     if _name_.endswith("FromString"):
-        schema(getattr(S, _name_))
-schema(snowflake.SnowflakeFromString)
-schema(http_schema.RetryAfterFromString)
-schema(S.to_codec_json(S.RegExp))
-schema(S.UnknownFromJsonString)
-schema(S.BigDecimal.pipe(S.to_codec_json))
+        schema(getattr(S, _name_), f"S.{_name_}")
+schema(snowflake.SnowflakeFromString, "snowflake.SnowflakeFromString")
+schema(http_schema.RetryAfterFromString, "http_schema.RetryAfterFromString")
+schema(S.to_codec_json(S.RegExp), "S.to_codec_json(S.RegExp)")
+schema(S.UnknownFromJsonString, "S.UnknownFromJsonString")
+schema(S.BigDecimal.pipe(S.to_codec_json), "S.BigDecimal.pipe(S.to_codec_json)")
 
 
 # ------------------------------------------------------------------------- amplification

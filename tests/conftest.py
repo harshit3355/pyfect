@@ -2,6 +2,7 @@
 
 import gc
 import os
+import re
 from collections.abc import Iterator
 
 import pytest
@@ -42,3 +43,16 @@ def no_schema_compiler_left_installed() -> Iterator[None]:
     if _registry.active():
         _registry.reset()
         pytest.fail(f"this test left {_COMPILER_LEFT}")
+
+
+_ADDRESS = re.compile(r" at 0x[0-9a-fA-F]+")
+
+
+def pytest_collection_modifyitems(items: list[pytest.Item]) -> None:
+    """A test id holding an object's address differs between processes, so CI's shards and its
+    completeness check would see different tests. Name parameters explicitly."""
+    unstable = [item.nodeid for item in items if _ADDRESS.search(item.nodeid)]
+    if unstable:
+        raise pytest.UsageError(
+            f"{len(unstable)} test ids hold an object address, e.g. {unstable[0][:300]}"
+        )
