@@ -18,6 +18,8 @@
   `permessage-deflate`, as Effect's `ws` server does. Both can be set through the serve options.
 - A multipart body has at most `MaxParts` parts, now 1000 by default (it was unbounded, as in
   Effect); more fail with `TooManyParts`. Provide `MaxParts` to change it, `None` for no limit.
+- The router (and MCP resource templates) decode a path's `%25` escapes in one pass, in
+  time linear in the path's length.
 
 ## 0.6.5 (2026-11-14)
 
