@@ -58,6 +58,12 @@
 - PostgreSQL migrator: a client-key passphrase in `ssl` (libpq's `sslpassword`) reaches
   `pg_dump` through a service file only the user reads (removed after the dump), no longer on
   its command line, which other local accounts can read, or in a failed spawn's error.
+- SQL: statements compile in time linear in their segments. The compiler grew the text with
+  `+=` on an attribute, copying it for every segment, so an `and_` / `or_` / `csv` over a
+  long list took quadratic time; an empty `IN` list now reads only the end of the text.
+- Schema: `TemplateLiteral` tries each split point without copying the text on both sides, so
+  a long string that does not match (`"-" * n + "a"` against `${string}-${number}`) fails in
+  linear time.
 
 ## 0.6.5 (2026-11-14)
 
