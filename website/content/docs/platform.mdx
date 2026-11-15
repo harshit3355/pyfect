@@ -133,6 +133,10 @@ for a policy of your own. `response.schema_body_json` decodes the body with a
 
 This program runs against `client.layer_test`, which answers each request with a function.
 In production, provide `httpx_client.layer` instead (install the `pyfect-dev[httpx]` extra).
+`httpx_client.layer_with(**options)` passes options to `httpx.AsyncClient`: `verify=` takes an
+`ssl.SSLContext` that trusts a private CA (`ssl.create_default_context(cafile=...)`), and
+`http2=True` offers HTTP/2 over TLS (it needs the `h2` package, `httpx[http2]`). `headers`,
+`params`, `cookies` and `auth` become request defaults that pyfect adds to each request.
 
 <CodeOutput>
 

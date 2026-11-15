@@ -214,8 +214,8 @@ class Cache[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never, R = Never
 
     def refresh(self, key: K) -> Effect[A, E, R]:
         """Look ``key`` up again. A cached value keeps serving ``get`` until
-        the new lookup succeeds or fails; a missing key is cached at once,
-        as ``get`` would."""
+        the new lookup succeeds or fails, and then its outcome replaces it,
+        a failure too; a missing key is cached at once, as ``get`` would."""
         return _WithFiber(lambda fiber: self._refresh(fiber, key))
 
     def invalidate_all(self) -> Effect[None]:

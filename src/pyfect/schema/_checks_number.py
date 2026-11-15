@@ -6,6 +6,8 @@ Number checks take ``int`` and ``float``. ``is_int`` is JavaScript's
 ``S.BigInt``. The ``_big_int`` variants are the same checks over ``int``
 with Effect's ``bigint`` text (``"a value greater than 5n"``). A bound must
 be finite: a non-finite one raises ``ValueError`` (Effect's ``RangeError``).
+Bounds compare as Effect's ``Order.Number``, so ``NaN`` is below every
+number: it passes ``is_less_than`` and fails ``is_greater_than``.
 """
 
 from __future__ import annotations
@@ -15,6 +17,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime
 from decimal import Decimal
 
+from pyfect import _number_order
 from pyfect._js import js_number
 from pyfect.logger._text import iso_millis
 from pyfect.schema._checks_order import (
@@ -82,16 +85,24 @@ def _number_bound(id: str, key: str) -> Callable[[float], Mapping[str, object]]:
 
 
 is_greater_than: Bound[float] = make_is_greater_than(
-    formatter=js_number, annotate=_number_bound("isGreaterThan", "exclusiveMinimum")
+    formatter=js_number,
+    annotate=_number_bound("isGreaterThan", "exclusiveMinimum"),
+    order=_number_order.compare,
 )
 is_greater_than_or_equal_to: Bound[float] = make_is_greater_than_or_equal_to(
-    formatter=js_number, annotate=_number_bound("isGreaterThanOrEqualTo", "minimum")
+    formatter=js_number,
+    annotate=_number_bound("isGreaterThanOrEqualTo", "minimum"),
+    order=_number_order.compare,
 )
 is_less_than: Bound[float] = make_is_less_than(
-    formatter=js_number, annotate=_number_bound("isLessThan", "exclusiveMaximum")
+    formatter=js_number,
+    annotate=_number_bound("isLessThan", "exclusiveMaximum"),
+    order=_number_order.compare,
 )
 is_less_than_or_equal_to: Bound[float] = make_is_less_than_or_equal_to(
-    formatter=js_number, annotate=_number_bound("isLessThanOrEqualTo", "maximum")
+    formatter=js_number,
+    annotate=_number_bound("isLessThanOrEqualTo", "maximum"),
+    order=_number_order.compare,
 )
 
 
@@ -116,7 +127,9 @@ def _finite_payload(bound: object) -> object:
 
 
 is_between: Between[float] = make_is_between(
-    formatter=js_number, annotate=_between_payload("isBetween", _finite_payload)
+    formatter=js_number,
+    annotate=_between_payload("isBetween", _finite_payload),
+    order=_number_order.compare,
 )
 
 

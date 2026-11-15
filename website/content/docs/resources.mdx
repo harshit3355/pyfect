@@ -35,8 +35,18 @@ keeps nothing.
 
 <include meta='title="cache.py"'>../../snippets/resources/cache.py</include>
 
+A `refresh` keeps serving the cached value while the new lookup runs, then replaces it with
+the outcome, a failure too.
+
 `ScopedCache` is the same for lookups that hold resources: each entry's resources are
-released when it leaves the cache.
+released when it leaves the cache. As in Effect, a few things follow from that:
+
+- An expired entry leaves the cache, and releases its resources, only when something next reads
+  the key (or lists the keys), so it holds them until then. A `time_to_live` of zero keeps the
+  entry, already expired, until that read; `Cache` keeps nothing.
+- `invalidate` during a lookup releases the entry's resources as the lookup ends, so the callers
+  waiting on it get a value whose resources are already closed.
+- A `refresh` still running when its key is invalidated caches the key again when it ends.
 
 ## Pooling connections
 
@@ -46,14 +56,23 @@ for a free one. All the items are released when the pool's scope closes.
 `Pool.make_with_ttl(acquire, min=..., max=..., time_to_live=...)` grows with demand and
 shrinks back once items have been idle. `pool.stats()` gives a `PoolStats` snapshot (idle and
 used items, waiting borrowers, `min` and `max`) to report as metrics.
+With `time_to_live_strategy="creation"` the time to live is a maximum age for every item, the
+`min` ones too: each is replaced when its time is up, and a borrowed one is released when it
+comes back.
 
 <include meta='title="pool.py"'>../../snippets/resources/pool.py</include>
+
+Under the [test clock](/docs/testing), the items a growing pool acquires for waiting borrowers
+reach them in a task the scheduler runs later, as in Effect. A test that forks borrowers and
+then calls `testing.adjust("2 seconds")` moves the clock before they take their items, so they
+start late. Call `testing.adjust(0)` first to let them take them.
 
 ## Sharing by key
 
 `fx.RcMap.make(lookup)` acquires `lookup(key)` for the first scope that asks for a key and
 shares it with every other scope that asks while it is held. When the last one closes, the
-resource is released, at once or after `idle_time_to_live`.
+resource is released, at once or after `idle_time_to_live`. A failed lookup is kept the same
+way: with an idle time to live, every `get` of the key fails with it until it expires.
 
 <include meta='title="rc_map.py"'>../../snippets/resources/rc_map.py</include>
 

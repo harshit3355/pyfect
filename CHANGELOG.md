@@ -24,6 +24,32 @@
   `fiberScope` before `layerScope`) or dies with "ManagedRuntime disposed". The runtime's
   shared state is used only under one lock, enforced by `tests/test_managed_runtime_lock.py`;
   `tests/free_threaded/stress.py` runs both races without the GIL.
+- `NaN` is ordered as Effect's `Order.Number` orders it, before every number, wherever Effect
+  orders numbers with it: `TxPriorityQueue` keys (also inside a tuple key), histogram
+  boundaries, summary samples and quantiles (a `NaN` quantile reads no sample, as Effect's
+  `samples[NaN]`), and the number checks `is_less_than`, `is_less_than_or_equal_to`,
+  `is_greater_than`, `is_greater_than_or_equal_to` and `is_between`, so `NaN` now passes
+  `is_less_than(5)`. These followed Python's `sorted` and operators, which leave `NaN`
+  wherever it falls. `make_is_less_than` and the other bound-check makers take Effect's
+  `order=`.
+
+### Docs
+
+- ScopedCache: an expired entry keeps its resources until the key is next read, a zero time to
+  live keeps the entry (`Cache` keeps nothing), an `invalidate` during a lookup hands its
+  waiters a value whose resources are already released, and a `refresh` in flight caches an
+  invalidated key again.
+- A `Cache` refresh that fails replaces the cached value; an `RcMap` with an idle time to live
+  keeps a failed lookup until it expires.
+- Pool: a `"creation"` time to live replaces every item, the `min` ones too, and under the test
+  clock borrowers forked as the pool grows take their items only after `testing.adjust(0)`.
+- Adopting in an asyncio app: what cancelling a `run_async` awaiter does (`CancelledError`,
+  after the finalizers), `dispose()` with runs in flight or from several threads, and that a
+  run's timeout doesn't cover the layer build it waits for.
+- HTTP and TLS: `httpx_client.layer_with(verify=, http2=)`, `socket.make_tls` and
+  `TlsUpgradeOptions`, a private CA for `wss://` with `SSL_CERT_FILE`, and that `layer_test`
+  with TLS still gives an `http://` client.
+- `TxReentrantLock` has no writer preference, and a sole reader can take the write lock.
 
 ## 0.6.6 (2026-11-15)
 

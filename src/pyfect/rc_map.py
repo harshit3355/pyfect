@@ -184,7 +184,9 @@ class RcMap[K: Hashable = Unsubscripted, A = Unsubscripted, E = Never]:
         """A map that looks keys up with ``lookup`` (with the services in
         scope now and of the caller, and a scope per key), released when
         the current scope closes. ``idle_time_to_live`` defaults to 0:
-        release as soon as the last reference goes."""
+        release as soon as the last reference goes. A failed lookup is
+        kept like a resource: with an idle time to live, ``get`` fails the
+        same way until it expires, without looking up again."""
         ttl = _idle_time_to_live(idle_time_to_live)
         bound = None if capacity is None else max(capacity, 0)
 

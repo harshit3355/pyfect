@@ -160,8 +160,10 @@ class Pool[A = Unsubscripted, E = Never]:
         target_utilization: float = 1.0,
     ) -> Effect[Pool[T, X], Never, Scope | R]:
         """A pool between ``min`` and ``max`` items, growing with demand.
-        Items above ``min`` are released once they have been idle
-        (``"usage"``) or alive (``"creation"``) for ``time_to_live``."""
+        With ``"usage"``, items above ``min`` are released once they have
+        been idle for ``time_to_live``. With ``"creation"``, every item,
+        ``min``'s too, is replaced once it has been alive that long; a
+        borrowed one is released when it comes back."""
         from pyfect.pool._ttl import creation_ttl, usage_ttl
 
         require_effect(acquire, "acquire")
