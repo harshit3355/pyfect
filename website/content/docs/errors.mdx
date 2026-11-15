@@ -18,6 +18,13 @@ the effect: `return (yield from NotFound(key))`. Outside one, use `fx.fail(error
 
 <include meta='title="tagged.py"'>../../snippets/errors/tagged.py</include>
 
+<Callout title="Yield an error, don't raise it">
+`raise NotFound(key)` inside a generator is a defect, as a `throw` inside Effect's `gen` is: the
+error is not in the type, `catch_tag` never runs, and pyright says nothing. Write
+`return (yield from NotFound(key))`, or `yield from fx.fail(NotFound(key))`. A run that ends with
+such a defect prints a note saying so.
+</Callout>
+
 ## Handling errors
 
 `catch_tag(ErrorClass, handler)` handles one error class and removes it from the type. Because it

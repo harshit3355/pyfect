@@ -469,9 +469,12 @@ _EXAMPLE_LINE = re.compile(r"^ {4,}(?!>>>)(\S.*)$", re.MULTILINE)
 _CALLED_SECONDS = re.compile(r"`{1,2}([A-Za-z_][\w.]*)\(\s*seconds?\s*\)`{1,2}")
 _NAMED_SECONDS = re.compile(r"`{1,2}([A-Za-z_]\w*)`{1,2}\s+seconds\b")
 _WALL_CLOCK_SECONDS = re.compile(r"wall[- ]clock(?:,? in)? seconds", re.IGNORECASE)
-# Bare numbers shown on purpose: the guide's note on what one meant before 0.2.0.
+# Bare numbers shown on purpose: the guides' notes on what one means (and meant before 0.2.0).
 _ON_PURPOSE = frozenset(
-    {("website/content/docs/schedules.mdx", "`fx.sleep(5)`: `5` passed to `sleep`")}
+    {
+        ("website/content/docs/schedules.mdx", "`fx.sleep(5)`: `5` passed to `sleep`"),
+        ("website/content/docs/effects.mdx", "`fx.sleep(2.5)`: `2.5` passed to `sleep`"),
+    }
 )
 
 

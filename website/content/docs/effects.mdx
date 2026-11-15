@@ -19,6 +19,12 @@ function that returns one.
 
 <include meta='title="generators.py"'>../../snippets/effects/generators.py</include>
 
+<Callout title="A bare number is milliseconds">
+As in Effect, `fx.sleep(2.5)` sleeps 2.5 milliseconds, and so does every other duration given as a
+number. Write the unit, `fx.sleep("2.5 seconds")`, or a `timedelta`. See
+[Durations](/docs/schedules#durations).
+</Callout>
+
 pyright infers the success type from `return`, the errors from every effect that can fail and
 the services from every service used. You rarely write `Effect[...]` yourself, except on
 function signatures you want to pin.
@@ -57,6 +63,32 @@ resumes in the context it waited in, whoever wakes it.
 
 `fx.from_async` and `fx.try_async` wrap coroutines; `fx.blocking` and `fx.try_blocking` move
 blocking calls to a thread.
+
+## Common mistakes
+
+These run, or fail far from the line that caused them. Most are what a coroutine would do.
+
+- **`time.sleep` in an effect** blocks the thread, so every fiber of the run waits with it and
+  `.timeout` can't interrupt it. Use `fx.sleep("1 second")`, and `fx.blocking(f)` for a blocking
+  call you can't avoid: it runs on a thread, and the fiber waits without blocking the others.
+- **`run_blocking` in a coroutine or a notebook cell** blocks the running event loop until the
+  effect is done, and warns with `RunBlockingInEventLoopWarning`. There, use
+  `await fx.run_async(eff)`; Jupyter runs cells on an event loop, so `await` works at the top
+  of a cell.
+- **`yield eff` instead of `yield from eff`** runs the same, but pyright can't see the value or
+  the effect's errors and services: the variable is `Unknown`, which strict mode reports. Always
+  write `yield from`.
+- **`await eff`** raises `TypeError`: an effect is a description, not a coroutine. Run it with
+  `await fx.run_async(eff)`, or inside a generator, `yield from eff`.
+- **`@fx.fn async def`** is not an effect body: pyright reports that no overload of `fn` matches,
+  and running it dies with a `TypeError`. Write a `def` and run the coroutine inside it with
+  `yield from fx.from_async(f)`.
+- **`eff.catch_tag(...)`** raises `AttributeError`: `catch_tag`, `provide` and the other
+  combinators that remove something from the type are functions for `.pipe`:
+  `eff.pipe(fx.catch_tag(NotFound, handler))` (see [Typed errors](/docs/errors#handling-errors)).
+- **`raise NotFound(...)`** in a generator is a defect, not a typed failure, so `catch_tag` never
+  sees it. Fail with `return (yield from NotFound(...))` (see
+  [Typed errors](/docs/errors#defining-and-failing)).
 
 See the reference for [`Effect`](/docs/reference/Effect-class) (its methods) and
 [`pyfect.effect`](/docs/reference/effect) (constructors).

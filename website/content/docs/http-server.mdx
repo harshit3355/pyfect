@@ -24,6 +24,10 @@ it handles the error itself.
 As in Effect, two failures answer otherwise: a `SchemaError` (a request that doesn't decode)
 gets an empty 400 and a `NoSuchElementException` an empty 404.
 
+A handler returns a response. `server_response.text(...)` is one, so `get_todo` below returns it
+as it is, while `server_response.json(...)` is an effect, since encoding the value can fail, so
+the handler runs it with `yield from` and returns what it gives.
+
 <CodeOutput>
 
 <include meta='title="routes.py"'>../../snippets/http_server/routes.py</include>
