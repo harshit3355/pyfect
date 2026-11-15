@@ -13,7 +13,7 @@ from typing import Any, Final
 from pyfect._core import Effect
 from pyfect.cause import Cause
 from pyfect.duration import Duration
-from pyfect.effect import gen, sync, void
+from pyfect.effect import fail, gen, sync, void
 from pyfect.persistence._columns import column_int
 from pyfect.persistence._sql_keys import key_equals
 from pyfect.persistence.persistence._sql import SQL_CLEANUP_BATCH_SIZE
@@ -21,7 +21,7 @@ from pyfect.schedule import Schedule
 from pyfect.scope import Scope, scoped
 from pyfect.sql.client import SqlClientService
 from pyfect.sql.connection import Row
-from pyfect.sql.error import SqlError
+from pyfect.sql.error import ConstraintError, SqlError
 from pyfect.sql.statement import Fragment, Statement
 
 _LONE_SURROGATE = re.compile("[\ud800-\udfff]")
@@ -113,6 +113,15 @@ type PollStatement = Callable[[str, int, int, Fragment], Effect[Sequence[Row], S
 type CleanupBatch = Callable[[str, Duration], Effect[int, SqlError]]
 
 
+MYSQL_KEY_BYTES: Final = 1020
+"""The bytes of MySQL's ``id`` and ``queue_name`` columns (``VARBINARY(1020)``)."""
+
+
+def _too_long(column: str) -> SqlError:
+    message = f"The {column} is longer than its column ({MYSQL_KEY_BYTES} bytes of UTF-8)"
+    return SqlError(reason=ConstraintError(cause=None, message=message, operation="offer"))
+
+
 def offer_statement(dialect: Dialect, table_name: str) -> OfferStatement:
     sql = dialect.sql
     table = sql.identifier(table_name)
@@ -133,17 +142,29 @@ def offer_statement(dialect: Dialect, table_name: str) -> OfferStatement:
         )
 
     def mysql() -> OfferStatement:
-        return lambda id, name, element, visible_at: sql(
-            "INSERT IGNORE INTO {} (id, queue_name, element, state, attempts, visible_at, "
-            "created_at, updated_at) VALUES ({}, {}, {}, 'pending', 0, {}, {}, {})",
-            table,
-            id,
-            name,
-            element,
-            visible_at,
-            now,
-            now,
-        )
+        # Not INSERT IGNORE, which also cuts an id or name longer than its
+        # column, so a second id sharing the kept bytes would be dropped as
+        # a duplicate; such an id fails here instead.
+        def offer(
+            id: str, name: str, element: str, visible_at: Fragment
+        ) -> Effect[object, SqlError]:
+            for column, value in (("id", id), ("queue_name", name)):
+                if len(value.encode("utf-8", "surrogatepass")) > MYSQL_KEY_BYTES:
+                    return fail(_too_long(column))
+            return sql(
+                "INSERT INTO {} (id, queue_name, element, state, attempts, visible_at, "
+                "created_at, updated_at) VALUES ({}, {}, {}, 'pending', 0, {}, {}, {}) "
+                "ON DUPLICATE KEY UPDATE id = id",
+                table,
+                id,
+                name,
+                element,
+                visible_at,
+                now,
+                now,
+            )
+
+        return offer
 
     def mssql() -> OfferStatement:
         # No MERGE WITH (HOLDLOCK), whose range locks deadlock concurrent

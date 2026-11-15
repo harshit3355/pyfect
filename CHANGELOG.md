@@ -75,6 +75,11 @@
   by a trailing `.` no longer share one file on macOS or Windows file systems. Keys without
   either keep their file names; an entry whose key has an upper-case letter was written under
   the old name, which `get` no longer reads (`keys` still lists it): set it again to move it.
+- SQL `PersistedQueue` on MySQL: `offer` fails with a `PersistedQueueError` for an id or queue
+  name longer than its column (1020 bytes of UTF-8), and a duplicate is skipped with
+  `ON DUPLICATE KEY UPDATE` instead of `INSERT IGNORE`. `INSERT IGNORE` cut such an id to the
+  column, so a second id sharing its first 1020 bytes was dropped while `offer` reported it
+  stored. The other stores keep or refuse long ids already.
 
 ## 0.6.5 (2026-11-14)
 
