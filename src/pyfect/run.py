@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import asyncio
 import signal
+import sys
 import threading
 import warnings
 from collections.abc import Callable, Generator
@@ -344,10 +345,17 @@ def run_main[A, E](
     signalled = _Signalled()
     started: list[Fiber[A, E]] = []
     try:
-        ex = asyncio.run(_run_main_exit(main, signalled, started))
+        # The handlers live inside the Runner's loop and are gone before it closes, so
+        # every exit restores what was there (asyncio.Runner adds no SIGINT handler
+        # of its own while ours is installed).
+        with (
+            asyncio.Runner() as runner,
+            _interrupt_on_signals(runner.get_loop(), started, signalled),
+        ):
+            ex = runner.run(_run_main_exit(main, signalled, started))
     except KeyboardInterrupt:
-        # Ctrl-C (or a raised KeyboardInterrupt) while user code ran: the
-        # fiber was interrupted and finished as asyncio.run shut down.
+        # A KeyboardInterrupt raised by user code: the fiber was interrupted and
+        # finished as the runner shut down.
         ex = started[0]._exit if started else None
         if ex is None:
             raise
@@ -383,30 +391,46 @@ async def _run_main_exit[A, E](
     fiber: Fiber[A, E] = new_root(AsyncioScheduler.current(), Context.empty())
     started.append(fiber)
     fiber._start(eff)
-    with _interrupt_on_signals(fiber, signalled):
-        return await await_fiber(fiber)
+    if signalled.received:  # before the fiber existed
+        fiber.interrupt_as_unsafe(fiber.id)
+    return await await_fiber(fiber)
+
+
+_SIGNALS = (signal.SIGINT, signal.SIGTERM)
 
 
 @contextmanager
-def _interrupt_on_signals(fiber: Fiber[Any, Any], signalled: _Signalled) -> Generator[None]:
-    """While open, SIGINT and SIGTERM interrupt ``fiber`` as itself, as
-    Effect's ``runMain`` does (from the loop, not inside the signal
-    handler). Python only delivers signals to the main thread, so elsewhere
-    this does nothing."""
+def _interrupt_on_signals(
+    loop: asyncio.AbstractEventLoop, started: list[Fiber[Any, Any]], signalled: _Signalled
+) -> Generator[None]:
+    """While open, SIGINT and SIGTERM interrupt the main fiber as itself, from the
+    loop, as Effect's ``runMain`` does from Node's. The handlers are the loop's
+    (``add_signal_handler``), which wake it through its wakeup pipe: a plain
+    ``signal.signal`` handler leaves a loop asleep in ``select`` when the signal
+    lands on another thread or just before ``select`` starts. Python only delivers
+    signals to the main thread, so elsewhere this does nothing."""
     if threading.current_thread() is not threading.main_thread():
         yield
         return
-    loop = asyncio.get_running_loop()
 
-    def on_signal(_signum: int, _frame: object) -> None:
+    def on_signal() -> None:
         signalled.received = True
-        loop.call_soon_threadsafe(fiber.interrupt_as_unsafe, fiber.id)
+        if started:
+            started[0].interrupt_as_unsafe(started[0].id)
 
-    previous = {sig: signal.signal(sig, on_signal) for sig in (signal.SIGINT, signal.SIGTERM)}
+    previous = {sig: signal.getsignal(sig) for sig in _SIGNALS}
+    on_loop = sys.platform != "win32"  # Windows loops have no signal handlers
+    for sig in _SIGNALS:
+        if on_loop:
+            loop.add_signal_handler(sig, on_signal)
+        else:
+            signal.signal(sig, lambda _signum, _frame: loop.call_soon_threadsafe(on_signal))
     try:
         yield
     finally:
         for sig, handler in previous.items():
+            if on_loop:
+                loop.remove_signal_handler(sig)
             signal.signal(sig, handler)
 
 

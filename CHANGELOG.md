@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.7 (unreleased)
+
+### Fixed
+
+- `run_main` handles SIGINT and SIGTERM on its event loop (`add_signal_handler`), so a
+  signal always wakes it. A signal that arrived on another thread, or just as the loop went
+  to wait, used to leave the program hanging. Every way out of `run_main`, including a
+  `KeyboardInterrupt` raised by user code and a real SIGINT, now restores the handlers it
+  found, where it used to leave the closed loop's SIGINT handler installed.
+
 ## 0.6.6 (2026-11-15)
 
 ### Added
