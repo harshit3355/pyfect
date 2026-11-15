@@ -186,6 +186,14 @@ def create_global_tables(
             ),
             ["next_sweep_at"],
         )
+        # A legacy scope (named as 0.6.5 did) given to the pair whose new
+        # scope is ``scope`` (``legacy.migrate_legacy_store``).
+        yield from create_table(
+            sql,
+            f"{prefix}_scope_aliases",
+            sql("legacy_scope {id} PRIMARY KEY, scope {id} NOT NULL", id=types.id),
+            ["scope"],
+        )
         # The highest last sequence stored in each storage-time hour.
         yield from create_table(
             sql,

@@ -33,10 +33,15 @@
   `ValueError`). `tests/test_peer_hash_keys.py` feeds all-colliding ints to each, and keeps
   maps keyed by `RequestId` from being plain dicts or sets.
 - `sql_event_log_server_encrypted`: two (public key, store id) pairs that joined to one
-  `publicKey/storeId` string (`("a", "b/c")` and `("a/b", "c")`) shared one store. A public key
-  without a `/` (every generated identity: a UUID) keeps its key and tables; a pair whose public
-  key holds a `/` is now keyed apart, so such a store starts empty, and its rows stay in the
-  tables named from the old key until moved by hand.
+  `publicKey/storeId` string (`("a", "b/c")` and `("a/b", "c")`) shared one store. Upgrading:
+  a pair whose `publicKey/storeId` has exactly one `/` keeps its tables and needs nothing. Any
+  other pair is keyed apart; if its tables from 0.6.5 or earlier hold batches, which another
+  pair may have written, the store does not open (its storage operations die with
+  `LegacyStoreNeedsMigration`) until its owner runs
+  `sql_event_log_server_encrypted.migrate_legacy_store(public_key, store_id)` once, which
+  gives it those tables. Only one pair can claim them (another gets
+  `LegacyStoreMigrationError`). Stores whose public keys hold a `/` (base64 keys often do)
+  need this before they serve again; a store with no 0.6.5 batches opens as before.
 - Event journals (memory and SQL): an imported entry id that is not 16 bytes, or more than a
   day ahead of the clock (one at the UUID v7 ceiling), is no longer the floor of local ids, so
   local writes go on after importing one, also after reopening a SQL journal that holds it.
