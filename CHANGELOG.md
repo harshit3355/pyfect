@@ -32,6 +32,11 @@
   decode to an `InvalidValue`, `is_unique` fails its check, `dedupe` raises `HashFlood`, a
   `ValueError`). `tests/test_peer_hash_keys.py` feeds all-colliding ints to each, and keeps
   maps keyed by `RequestId` from being plain dicts or sets.
+- `sql_event_log_server_encrypted`: two (public key, store id) pairs that joined to one
+  `publicKey/storeId` string (`("a", "b/c")` and `("a/b", "c")`) shared one store. A public key
+  without a `/` (every generated identity: a UUID) keeps its key and tables; a pair whose public
+  key holds a `/` is now keyed apart, so such a store starts empty, and its rows stay in the
+  tables named from the old key until moved by hand.
 
 ## 0.6.5 (2026-11-14)
 

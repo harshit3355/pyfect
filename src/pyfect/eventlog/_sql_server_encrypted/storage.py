@@ -6,6 +6,7 @@ opening stores, writes, acks and changes. Compaction is in
 from __future__ import annotations
 
 import itertools
+import json
 from collections.abc import Sequence
 from typing import Any
 
@@ -44,7 +45,14 @@ from pyfect.stream import unwrap as stream_unwrap
 
 
 def _scope_key(public_key: str, store_id: str) -> str:
-    return f"{public_key}/{store_id}"
+    """The key naming a store's tables and row, one per (public key, store
+    id) pair. A public key without a ``/`` (a generated identity's UUID)
+    keeps Effect's ``publicKey/storeId``, which the first ``/`` splits
+    back, so existing stores keep their tables. Any other pair is written
+    as JSON without a ``/``, which no key of the first form equals."""
+    if "/" not in public_key:
+        return f"{public_key}/{store_id}"
+    return "\0" + json.dumps([public_key, store_id], ensure_ascii=False).replace("/", "\\u002f")
 
 
 def _ensure_store(db: Db, scope: str, table: Identifier) -> Effect[None, SqlError]:
