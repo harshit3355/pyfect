@@ -112,9 +112,36 @@ def apply(patch: JsonPatch, old_value: JsonValue) -> JsonValue:
     returns ``old_value`` itself. As in Effect, an operation whose ``op`` is
     not ``add`` or ``remove`` (``test``, a typo, none) is a ``replace``."""
     doc = old_value
+    owned = _Owned()
     for operation in patch:
-        doc = _apply_operation(doc, _parse_operation(operation))
+        doc = _apply_operation(doc, _parse_operation(operation), owned)
     return doc
+
+
+class _Owned:
+    """The containers one ``apply`` made: later operations change them in
+    place, so a patch costs time linear in its length, not one copy of each
+    container on its path per operation. The objects are held so their ids
+    are not reused."""
+
+    __slots__ = ("_objects",)
+
+    def __init__(self) -> None:
+        self._objects: dict[int, object] = {}
+
+    def array(self, container: _Array) -> list[JsonValue]:
+        if id(container) in self._objects:
+            return cast("list[JsonValue]", container)
+        copy = list(container)
+        self._objects[id(copy)] = copy
+        return copy
+
+    def mapping(self, container: _Object) -> dict[str, JsonValue]:
+        if id(container) in self._objects:
+            return cast("dict[str, JsonValue]", container)
+        copy = dict(container)
+        self._objects[id(copy)] = copy
+        return copy
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,7 +198,7 @@ def _not_a_container(operation: _Operation) -> ValueError:
     )
 
 
-def _apply_operation(doc: JsonValue, operation: _Operation) -> JsonValue:
+def _apply_operation(doc: JsonValue, operation: _Operation, owned: _Owned) -> JsonValue:
     path = operation.path
     if not path:
         if operation.kind == "remove":
@@ -182,20 +209,26 @@ def _apply_operation(doc: JsonValue, operation: _Operation) -> JsonValue:
         raise _not_a_container(operation)
     stack, parent, last_token = resolved
     if _is_array(parent):
-        return _rebuild(stack, _apply_to_array(cast("_Array", parent), last_token, operation))
+        return _rebuild(
+            stack, _apply_to_array(cast("_Array", parent), last_token, operation, owned), owned
+        )
     if _is_object(parent):
-        return _rebuild(stack, _apply_to_object(cast("_Object", parent), last_token, operation))
+        return _rebuild(
+            stack, _apply_to_object(cast("_Object", parent), last_token, operation, owned), owned
+        )
     raise _not_a_container(operation)
 
 
-def _apply_to_array(parent: _Array, last_token: str, operation: _Operation) -> list[JsonValue]:
+def _apply_to_array(
+    parent: _Array, last_token: str, operation: _Operation, owned: _Owned
+) -> list[JsonValue]:
     if last_token == "-" and operation.kind != "add":
         raise ValueError(f'"-" is not valid for {operation.op} at "{operation.path}".')
     index = len(parent) if last_token == "-" else _array_index(last_token)
     max_index = len(parent) if operation.kind == "add" else len(parent) - 1
     if index > max_index:
         raise ValueError(f'Array index out of bounds at "{operation.path}".')
-    updated = list(parent)
+    updated = owned.array(parent)
     if operation.kind == "add":
         updated.insert(index, operation.value)
     elif operation.kind == "remove":
@@ -206,11 +239,11 @@ def _apply_to_array(parent: _Array, last_token: str, operation: _Operation) -> l
 
 
 def _apply_to_object(
-    parent: _Object, last_token: str, operation: _Operation
+    parent: _Object, last_token: str, operation: _Operation, owned: _Owned
 ) -> dict[str, JsonValue]:
     if operation.kind != "add" and last_token not in parent:
         raise ValueError(f'Property "{last_token}" does not exist at "{operation.path}".')
-    updated = dict(parent)
+    updated = owned.mapping(parent)
     if operation.kind == "remove":
         del updated[last_token]
     else:
@@ -246,17 +279,17 @@ def _resolve_parent(doc: JsonValue, pointer: str) -> tuple[_Stack, JsonValue, st
     return stack, current, tokens[-1]
 
 
-def _rebuild(stack: _Stack, new_parent: JsonValue) -> JsonValue:
+def _rebuild(stack: _Stack, new_parent: JsonValue, owned: _Owned) -> JsonValue:
     """The document with ``new_parent`` written back through ``stack``,
-    copying each container on the way."""
+    copying each container on the way that this ``apply`` did not make."""
     acc = new_parent
     for container, token in reversed(stack):
         if isinstance(token, int):
-            array = list(cast("_Array", container))
+            array = owned.array(cast("_Array", container))
             array[token] = acc
             acc = array
         else:
-            mapping = dict(cast("_Object", container))
+            mapping = owned.mapping(cast("_Object", container))
             mapping[token] = acc
             acc = mapping
     return acc
