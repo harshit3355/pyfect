@@ -67,8 +67,9 @@ class _RedactedUrl(TaggedError):
     def _method_and_url(self) -> str:
         return f"{self.request.method} {self._url}"
 
-    def _request_json(self) -> dict[str, object]:
-        return {"_id": "HttpClientRequest", "method": self.request.method, "url": self._url}
+    def to_json(self) -> dict[str, object]:
+        request = {"_id": "HttpClientRequest", "method": self.request.method, "url": self._url}
+        return {"_tag": type(self).__name__, "request": request}
 
 
 @dataclass(eq=False)
@@ -88,9 +89,6 @@ class _RequestReason(_RedactedUrl):
 
     def __str__(self) -> str:
         return _with_cause(self.message, self.description, self.cause)
-
-    def to_json(self) -> dict[str, object]:
-        return {"_tag": type(self).__name__, "request": self._request_json()}
 
 
 @dataclass(eq=False)
@@ -136,11 +134,8 @@ class _ResponseReason(_RedactedUrl):
         return _with_cause(self.message, self.description, self.cause)
 
     def to_json(self) -> dict[str, object]:
-        return {
-            "_tag": type(self).__name__,
-            "request": self._request_json(),
-            "response": {"_id": "HttpClientResponse", "status": self.response.status},
-        }
+        response = {"_id": "HttpClientResponse", "status": self.response.status}
+        return {**super().to_json(), "response": response}
 
 
 @dataclass(eq=False)

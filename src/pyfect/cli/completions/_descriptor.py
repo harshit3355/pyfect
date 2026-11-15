@@ -108,7 +108,7 @@ def _repeatable_singles(
         variadic = cast("Variadic[Any]", param)
         outermost = repeatable if repeatable is not None else not _at_most_once(variadic)
         return _repeatable_singles(variadic.param, outermost)
-    if isinstance(param, Mapped | Optional | Transformed):
+    if isinstance(param, (Mapped, Optional, Transformed)):
         inner: Param[Any] = cast(
             "Mapped[Any, Any] | Optional[Any] | Transformed[Any, Any]", param
         ).param

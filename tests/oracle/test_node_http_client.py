@@ -40,6 +40,7 @@ from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from typing import Any, TypedDict
 
+import _ports
 import pytest
 
 pytest.importorskip("httpx")
@@ -496,17 +497,12 @@ def test_form_data_files_read_on_demand():
         close()
 
 
-def _closed_port() -> int:
-    with socket.create_server(("127.0.0.1", 0)) as listener:
-        return listener.getsockname()[1]
-
-
 @testing.live
 def test_redacts_a_transport_error_url_with_the_redacted_names_of_the_request():
     """redacts a transport error URL with the redacted names of the request
 
     A refused connection stands in for Effect's missing socket path."""
-    url = f"http://127.0.0.1:{_closed_port()}/path?token="
+    url = f"http://127.0.0.1:{_ports.refused_tcp_port()}/path?token="
     message = f"Transport error (GET {url}REDACTED)"
 
     @fx.fn
