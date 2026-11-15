@@ -59,6 +59,9 @@ class PersistedQueueSuite:
 
     layer: ClassVar[fx.Layer[pq.PersistedQueueStore, Any, Any]]
     live: ClassVar[float] = 1.0
+    cleanup_uses_clock: ClassVar[bool | None] = None
+    """Effect's ``cleanupUsesClock``: cleanup timestamps read the test
+    clock, even when I/O needs live waits (``None``: when ``live`` is 0)."""
 
     def make_layer(self) -> fx.Layer[pq.PersistedQueueStore, Any, Any]:
         """The store for one test (``layer``, unless a module builds a
@@ -202,8 +205,6 @@ class PersistedQueueSuite:
             queue = yield from pq.make(
                 name="test-queue-retry-schedule",
                 schema=ITEM,
-                # MySQL and SQLite truncate retry timestamps to whole seconds:
-                # leave room for that before the real-time check below.
                 retry_schedule=schedule.spaced("2 seconds"),
             )
             yield from queue.offer({"n": 42})
@@ -436,6 +437,109 @@ class PersistedQueueSuite:
 
             fiber = yield from queue.take(_succeed).fork_scoped()
             yield from self.assert_not_delivered(fiber)
+
+        self.run(body)
+
+    def test_until_executed_coalesces_an_id_until_its_element_completes(self) -> None:
+        """untilExecuted coalesces an id until its element completes"""
+
+        def body():
+            queue = yield from pq.make(name="test-queue-until-executed-completed", schema=ITEM)
+            id = "until-executed-completed-id"
+
+            def offer(n: int) -> fx.Effect[str, Any]:
+                return queue.offer({"n": n}, id=id, deduplicate="untilExecuted")
+
+            # offers are coalesced while the element is pending and processing
+            yield from offer(1)
+            yield from offer(2)
+            taken = Latch()
+            release = Latch()
+            first = yield from queue.take(
+                lambda value, _m: taken.open().and_then(release.wait()).as_(value)
+            ).fork_scoped()
+            yield from taken.wait()
+            yield from offer(3)
+            yield from release.open()
+            assert (yield from first.join()) == {"n": 1}
+            next_ = yield from queue.take(_succeed).fork_scoped()
+            yield from self.assert_not_delivered(next_)
+
+            # once completed the id is released, and the re-offer queues behind
+            # work offered before it
+            yield from queue.offer({"n": 4})
+            yield from offer(5)
+            assert (yield from self.await_delivery(next_)) == {"n": 4}
+            reoffered = yield from queue.take(_succeed).fork_scoped()
+            assert (yield from self.await_delivery(reoffered)) == {"n": 5}
+
+        self.run(body)
+
+    def test_until_executed_releases_the_id_of_a_failed_element(self) -> None:
+        """untilExecuted releases the id of a failed element"""
+
+        def body():
+            queue = yield from pq.make(
+                name="test-queue-until-executed-failed", schema=ITEM, max_attempts=1
+            )
+            id = "until-executed-failed-id"
+            yield from queue.offer({"n": 1}, id=id, deduplicate="untilExecuted")
+            assert (yield from queue.take(_boom).flip()) == "boom"
+
+            # the re-offer is new work and honours its own delay
+            yield from queue.offer({"n": 2}, id=id, deduplicate="untilExecuted", delay="3 seconds")
+            fiber = yield from queue.take(_succeed).fork_scoped()
+            yield from self.assert_not_delivered(fiber)
+            assert (yield from self.await_delivery(fiber)) == {"n": 2}
+
+        self.run(body)
+
+    def test_until_executed_keeps_an_id_reserved_when_cleanup_expires_an_earlier_failure(
+        self,
+    ) -> None:
+        """untilExecuted keeps an id reserved when cleanup expires an earlier failure"""
+
+        def body():
+            store = yield from pq.PersistedQueueStore()
+            queue = yield from pq.make(
+                name="test-queue-until-executed-cleanup", schema=ITEM, max_attempts=1
+            )
+            id = "until-executed-cleanup-id"
+
+            def offer(n: int) -> fx.Effect[str, Any]:
+                return queue.offer({"n": n}, id=id, deduplicate="untilExecuted")
+
+            fail = queue.take(_boom).flip()
+            cleanup_failed = store.cleanup(
+                time_to_live=millis(2_592_000_000), failed_time_to_live=millis(1000)
+            )
+
+            yield from offer(1)
+            yield from fail
+
+            # Only a virtual clock can guarantee cleanup expires the first
+            # failure but retains the second. SQL clocks can cross the
+            # one-second TTL between failing the second element and running
+            # cleanup.
+            uses_clock = self.cleanup_uses_clock
+            if uses_clock if uses_clock is not None else self.live == 0:
+                yield from self.advance_past_ttl()
+                yield from offer(2)
+                yield from fail
+                yield from cleanup_failed
+
+                # The retained failure reserves the id for default-mode offers.
+                yield from queue.offer({"n": 9}, id=id)
+
+            # On every store, expiring failures must not release a pending replacement.
+            yield from offer(3)
+            yield from self.advance_past_ttl()
+            yield from cleanup_failed
+            yield from offer(4)
+
+            assert (yield from queue.take(_succeed)) == {"n": 3}
+            duplicate = yield from queue.take(_succeed).fork_scoped()
+            yield from self.assert_not_delivered(duplicate)
 
         self.run(body)
 

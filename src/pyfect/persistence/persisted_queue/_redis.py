@@ -26,6 +26,7 @@ from pyfect.persistence.persisted_queue import _redis_scripts as scripts
 from pyfect.persistence.persisted_queue._error import PersistedQueueError, dead_letter_from_cause
 from pyfect.persistence.persisted_queue._mailbox import Mailbox, run_poller, take_from
 from pyfect.persistence.persisted_queue._store import (
+    Deduplicate,
     PersistedQueueStore,
     PersistedQueueStoreService,
     QueueStates,
@@ -242,8 +243,10 @@ class _RedisStore:
         element: object,
         is_custom_id: bool,
         delay: Duration | None = None,
+        deduplicate: Deduplicate = "untilRemoved",
     ) -> Effect[None, PersistedQueueError]:
         keys = self._settings.keys(name)
+        until_executed = deduplicate == "untilExecuted"
         # replace lone surrogates as UTF-8 encoding does, so the id in the
         # payload matches the id keys
         id = _LONE_SURROGATE.sub("\ufffd", id)
@@ -252,11 +255,13 @@ class _RedisStore:
         def send() -> Effect[object, RedisError]:
             if delay is None:
                 if is_custom_id:
-                    return self._run.offer(keys.queue, keys.ids, id, payload)
+                    return self._run.offer(keys.queue, keys.ids, id, payload, until_executed)
                 return self._redis.send("RPUSH", keys.queue, payload)
             visible_at = now_millis(self._clock) + to_millis(delay)
             if is_custom_id:
-                return self._run.offer_delayed(keys.delayed, keys.ids, id, payload, visible_at)
+                return self._run.offer_delayed(
+                    keys.delayed, keys.ids, id, payload, visible_at, until_executed
+                )
             return self._redis.send("ZADD", keys.delayed, js_number(visible_at), payload)
 
         def nudge() -> None:
@@ -316,6 +321,7 @@ class _RedisStore:
                     keys.owners,
                     element.id,
                     record,
+                    now,
                 )
             )
 

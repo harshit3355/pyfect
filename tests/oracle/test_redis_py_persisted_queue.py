@@ -54,6 +54,8 @@ def _redis_layer() -> fx.Layer[Redis | redis_py.RedisPy, RedisError]:
 class TestPersistedQueueRedis(suite.PersistedQueueSuite):
     """PersistedQueue (NodeRedis)"""
 
+    cleanup_uses_clock = True
+
     def make_layer(self) -> fx.Layer[pq.PersistedQueueStore, Any, Any]:
         # short intervals so the periodic reset runs while the suite's takes
         # are in flight

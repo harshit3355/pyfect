@@ -69,6 +69,51 @@ def test_persisted_ids_hash_on_the_web_crypto_reference():
     assert execution_id == bytes(range(16)).hex()
 
 
+def _interrupt_right_after_startup(budget: int | None):
+    wf = workflow.make("CleanupOrder", payload=S.Struct(Empty), idempotency_key=lambda _: "one")
+    instance = WorkflowInstanceService.initial(wf, "one")
+    started: fx.Deferred[None] = yield from fx.Deferred[None].make()
+    order: list[str] = []
+
+    def handler():
+        yield from workflow.add_finalizer(
+            lambda _: fx.sync(lambda: order.append("workflow-finalizer"))
+        )
+        yield from started.succeed(None)
+        return (yield from fx.never)
+
+    run = (
+        fx.gen(handler)
+        .on_exit(lambda _: fx.sync(lambda: order.append("handler-finalizer")))
+        .pipe(workflow.into_result)
+        .pipe(fx.provide_service(WorkflowInstance, instance))
+    )
+    if budget is not None:
+        run = run.pipe(fx.provide_service(fx.MaxOpsBeforeYield, budget))
+    running = yield from run.fork()
+    yield from started.wait()
+    # Do not yield between startup and interruption: that would hide the race.
+    order.append("interrupt")
+    yield from running.interrupt()
+    return order
+
+
+@testing.effect
+def test_waits_for_handler_cleanup_before_workflow_finalizers_on_immediate_interruption():
+    """Workflow.intoResult / waits for handler cleanup before workflow finalizers on immediate interruption"""  # noqa: E501
+    order = yield from _interrupt_right_after_startup(None)
+    assert order == ["interrupt", "handler-finalizer", "workflow-finalizer"]
+
+
+@testing.effect
+def test_into_result_runs_handler_cleanup_first_whichever_op_the_run_pauses_at():
+    """Effect's test interrupts at one point of the run; a pause at any op must not let
+    the workflow finalizers overtake the handler's cleanup either."""
+    for budget in BUDGETS:
+        order = yield from _interrupt_right_after_startup(budget)
+        assert order == ["interrupt", "handler-finalizer", "workflow-finalizer"], budget
+
+
 @testing.effect
 def test_releases_acquisition_interrupted_before_the_body_starts():
     """Workflow.wrapActivityResult / releases acquisition interrupted before the body starts"""

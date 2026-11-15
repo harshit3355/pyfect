@@ -91,26 +91,66 @@ class Dialect:
     def seconds_ago(self, duration: Duration) -> Fragment:
         return self.seconds_offset(-max(math.ceil(duration.to_seconds()), 0))
 
-    def seconds_from_now(self, duration: Duration) -> Fragment:
-        return self.seconds_offset(max(math.ceil(duration.to_seconds()), 0))
-
-    def delayed_visible_at(self, delay: Duration) -> Fragment:
-        """When a delayed offer becomes visible, never before ``delay``
-        elapses: PostgreSQL reads ``clock_timestamp()`` (``NOW()`` is fixed
-        at the transaction's start); MySQL and SQLite clocks drop the
-        current second's fraction, so they get a whole second more."""
+    def sqlite_offset(self, seconds: int) -> Fragment:
+        """SQLite's now plus ``seconds``, keeping milliseconds:
+        ``CURRENT_TIMESTAMP`` drops the current second's fraction, so
+        ``visible_at`` deadlines and the readiness check share this clock."""
         sql = self.sql
-        seconds = math.ceil(delay.to_seconds())
+        return sql("strftime('%Y-%m-%d %H:%M:%f', 'now', '{} seconds')", sql.unsafe(str(seconds)))
+
+    def visible_after(self, delay: Duration) -> Fragment:
+        """When a delayed offer or a retry becomes visible, never before
+        ``delay`` elapses: PostgreSQL reads ``clock_timestamp()`` (``NOW()``
+        is fixed at the transaction's start); MySQL stores whole seconds and
+        its ``NOW()`` drops the current fraction, so it gets a second more."""
+        sql = self.sql
+        seconds = max(math.ceil(delay.to_seconds()), 0)
         return sql.on_dialect_or_else(
             pg=lambda: sql("clock_timestamp() + INTERVAL '{} seconds'", sql.unsafe(str(seconds))),
+            mysql=lambda: self.seconds_offset(seconds + 1),
             mssql=lambda: self.seconds_offset(seconds),
-            or_else=lambda: self.seconds_offset(seconds + 1),
+            or_else=lambda: self.sqlite_offset(seconds),
         )
 
 
 type OfferStatement = Callable[[str, str, str, Fragment], Effect[object, SqlError]]
 type PollStatement = Callable[[str, int, int, Fragment], Effect[Sequence[Row], SqlError]]
 type CleanupBatch = Callable[[str, Duration], Effect[int, SqlError]]
+type ReplaceExecuted = Callable[[str, str, Effect[object, SqlError]], Effect[object, SqlError]]
+
+
+def replace_executed_statement(dialect: Dialect, table_name: str) -> ReplaceExecuted:
+    """Run ``insert`` for an ``"untilExecuted"`` offer of id ``id`` in queue
+    ``name``, first deleting that id's completed or failed row so the
+    re-offer is stored as a new row with a fresh sequence. The plain read
+    keeps new ids lock-free, since under MySQL's repeatable read deleting an
+    absent key takes gap locks that deadlock concurrent inserts. The delete
+    re-checks the state and shares a transaction with the insert, so
+    concurrent offers of the id wait on the deleted row and then see the
+    re-offer."""
+    sql = dialect.sql
+    table = sql.identifier(table_name)
+
+    def replace(id: str, name: str, insert: Effect[object, SqlError]) -> Effect[object, SqlError]:
+        def then(rows: Sequence[Row]) -> Effect[object, SqlError]:
+            if not rows:
+                return insert
+            return sql.with_transaction(
+                sql(
+                    "DELETE FROM {} WHERE sequence = {} AND state IN ('completed', 'failed')",
+                    table,
+                    rows[0]["sequence"],
+                ).and_then(insert)
+            )
+
+        return sql(
+            "SELECT sequence FROM {} WHERE {} AND {} AND state IN ('completed', 'failed')",
+            table,
+            key_equals(sql, "id", id),
+            key_equals(sql, "queue_name", name),
+        ).flat_map(then)
+
+    return replace
 
 
 MYSQL_KEY_BYTES: Final = 1020
@@ -305,11 +345,12 @@ def poll_statement(dialect: Dialect, table_name: str, expires_at: Fragment) -> P
             "UPDATE {table} SET acquired_at = {now}, acquired_by = {lock}, "
             "attempts = attempts + 1 WHERE sequence IN (SELECT sequence FROM {table} "
             "WHERE queue_name = {name} AND state = 'pending' AND attempts < {max_attempts} "
-            "AND visible_at <= {now} AND (acquired_at IS NULL OR acquired_at < {expires_at}) "
+            "AND visible_at <= {ready} AND (acquired_at IS NULL OR acquired_at < {expires_at}) "
             "ORDER BY visible_at ASC, sequence ASC LIMIT {size}) "
             "RETURNING sequence, id, element, attempts",
             table=table,
             now=now,
+            ready=dialect.sqlite_offset(0),
             lock=lock,
             name=name,
             max_attempts=max_attempts,
@@ -454,7 +495,7 @@ class Settlements:
             sql(
                 "updated_at = {}, visible_at = {}, last_failure = {}",
                 self._dialect.now,
-                self._dialect.seconds_from_now(delay),
+                self._dialect.visible_after(delay),
                 cause.pretty(),
             ),
         )

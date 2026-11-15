@@ -24,6 +24,7 @@ from pyfect.persistence.persisted_queue._error import (
     is_dead_letter,
 )
 from pyfect.persistence.persisted_queue._store import (
+    Deduplicate,
     PersistedQueueStore,
     PersistedQueueStoreService,
     TakeOptions,
@@ -116,11 +117,31 @@ class PersistedQueue[A, R = Never]:
         )
 
     def offer(
-        self, value: A, *, id: str | None = None, delay: DurationInput | None = None
+        self,
+        value: A,
+        *,
+        id: str | None = None,
+        delay: DurationInput | None = None,
+        deduplicate: Deduplicate = "untilRemoved",
     ) -> Effect[str, PersistedQueueError | SchemaError, R]:
         """Add ``value`` and give its id: ``id``, or a new UUID. An id the
-        queue already has (even completed, until ``layer_cleanup`` removes
-        it) adds nothing, and that offer's ``delay`` is ignored.
+        queue already has adds nothing, and that offer's ``delay`` is
+        ignored. ``deduplicate`` sets how long a custom ``id`` stays
+        reserved:
+
+        - ``"untilRemoved"`` (default): until ``layer_cleanup`` removes the
+          completed or failed element. The id works as an idempotency key.
+        - ``"untilExecuted"``: until the element completes or fails its final
+          attempt. Offers while it is pending, processing or waiting to retry
+          are ignored; a later offer enqueues a new element behind queued
+          work, with its own ``delay``. Handlers should read current state
+          rather than the offered value: an offer arriving after the handler
+          read state but before the element completes is ignored. A
+          re-offered failed id may lose its earlier failure record.
+
+        The mode is chosen per offer and not stored with the id, so an
+        ``"untilExecuted"`` offer can re-open an id other producers offer
+        with ``"untilRemoved"``: don't share an idempotency key between them.
 
         ``delay`` postpones the first delivery, measured by the store's
         clock (SQL: the database's, rounded up to whole seconds); zero or
@@ -139,6 +160,7 @@ class PersistedQueue[A, R = Never]:
                     element=element,
                     is_custom_id=id is not None,
                     delay=seconds,
+                    deduplicate=deduplicate,
                 ).as_(element_id)
             )
 

@@ -267,6 +267,35 @@ def test_fails_with_retry_after_until_the_fixed_window_resets() -> None:
     _run(body)
 
 
+def test_admits_at_most_the_limit_until_the_full_window_elapses() -> None:
+    """fixed-window / admits at most the limit until the full window elapses"""
+
+    def body():
+        limiter = yield from rl.make
+        consume = limiter.consume(
+            algorithm="fixed-window",
+            on_exceeded="fail",
+            window="1 minute",
+            limit=5,
+            key="full-window",
+        )
+        attempt = consume.match(
+            on_success=lambda result: result.remaining,
+            on_failure=lambda error: type(error.reason).__name__,
+        )
+        assert (yield from fx.for_each([0, 1, 2, 3], lambda _: attempt)) == [4, 3, 2, 1]
+
+        yield from testing.adjust("48 seconds")
+        assert (yield from fx.for_each([0, 1], lambda _: attempt)) == [0, "RateLimitExceeded"]
+
+        yield from testing.adjust("12 seconds")
+        result = yield from consume
+        assert result.remaining == 4
+        assert to_millis(result.reset_after) == 60_000
+
+    _run(body)
+
+
 # --- token-bucket ---------------------------------------------------------------------
 
 

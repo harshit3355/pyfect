@@ -2,6 +2,24 @@
 
 ## 0.6.6 (unreleased)
 
+### Added
+
+- `PersistedQueue.offer(..., deduplicate="untilExecuted")`: a custom id stays reserved only
+  until its element completes or fails its final attempt; a later offer enqueues it again,
+  behind queued work and with its own delay. The default `"untilRemoved"` keeps the id until
+  cleanup, as before. On the memory, SQL (every dialect) and Redis stores, as in Effect 4.1.4
+  (#10316). A custom store's `offer` gets the option when it takes a `deduplicate` keyword
+  (`DeduplicatingOffer`); one written before ignores it, so its offers stay `"untilRemoved"`.
+  Redis now parks in-flight and failed ids under finite scores, so cleanup of an old failure
+  can't release a newer element of the same id; `+inf` entries left by earlier versions still
+  read as in flight.
+- Hooks for runtimes and stores outside pyfect, as in Effect 4.1.4 (#7322):
+  `entity.KeepAliveHandler`, which `entity.keep_alive` calls instead of messaging the entity
+  when a runtime provides it; `persisted_queue.is_dead_letter_cause(cause)`, for a custom
+  store's take finalizer to fail an element whose payload can't be decoded at once; and
+  `durable_clock.InMemoryThreshold`, the threshold a `sleep` without `in_memory_threshold`
+  reads (60 seconds), so an engine whose timers are always durable can provide zero.
+
 ### Fixed
 
 - `mcp_server.layer_http` reads an `initialize` under its own `max_initialize_bytes` limit
@@ -158,6 +176,31 @@
   cache with decoded patterns.
 - The CLI's file prompt escapes control characters in file names, the target line and the
   submitted value, with the helper CLI output already escaped them with.
+- Cluster workflows: a transient `PersistenceError` while a workflow starts a child workflow,
+  or while it reads a `DurableDeferred` it awaits, is retried without bound (backing off to
+  once a minute) instead of failing the workflow with a defect, as in Effect 4.1.4 (#10311,
+  #10356). Deferred reads gave up after three tries. Reads of the interrupt signal made by
+  shutdown cleanup still give up after three, so shutdown is not held by an outage, and a
+  top-level `execute` still dies at once. `tests/test_cluster_engine_or_die_sites.py` pins
+  each place the engine turns a storage failure into a defect to the one Effect has.
+- Workflows: `workflow.layer_memory` keeps the `add_finalizer` finalizers of a run resumed
+  after a defect until the execution completes; the new run forked from the execution scope
+  the defect had closed, so they ran at once. Run setup is serialized, so concurrent wakes
+  can't start two runs, as in Effect 4.1.4 (#10393).
+- Workflows: `into_result` interrupted right after the handler starts runs the handler's
+  cleanup before the workflow's finalizers; only the join is interruptible now, as in Effect
+  4.1.4 (#10472). A test interrupts it after every op of the run, not only at Effect's one
+  point.
+- `RateLimiter`: a fixed-window `consume` with `on_exceeded="fail"` admits at most `limit`
+  per `window`: the first admission opens a window of the full `window` that later admissions
+  don't extend. Each admission extended it by `window / limit`, so the window let in more
+  than `limit` and `reset_after` read short. Fixed in the memory and Redis stores, as in
+  Effect 4.1.4 (#10390). A test replays random call sequences on both stores and compares
+  them, so the Lua script and the memory store can't drift apart again.
+- SQL `PersistedQueue`: a failed job is retried no earlier than its retry schedule's delay on
+  SQLite and MySQL (it could come up to a second early), and a delayed offer on SQLite no
+  longer waits a second more than its delay. SQLite keeps `visible_at` deadlines and the
+  readiness check on one millisecond clock, as in Effect 4.1.4 (#10318).
 
 ## 0.6.5 (2026-11-14)
 

@@ -7,7 +7,7 @@ from typing import Never
 
 from pyfect._core import Effect
 from pyfect.cluster.cluster_schema import Persisted, Uninterruptible
-from pyfect.cluster.entity._services import CurrentAddress, KeepAliveLatch
+from pyfect.cluster.entity._services import CurrentAddress, KeepAliveHandler, KeepAliveLatch
 from pyfect.cluster.envelope import make_request
 from pyfect.cluster.message import OutgoingRequest
 from pyfect.cluster.reply import Reply
@@ -32,10 +32,15 @@ def _ignore(_: Reply) -> Effect[None]:
 
 def keep_alive(enabled: bool) -> Effect[None, Never, Sharding | CurrentAddress]:
     """Keep the current entity alive (``True``) until called with
-    ``False``; outside an entity that can be kept alive it does nothing."""
+    ``False``; outside an entity that can be kept alive it does nothing. A
+    provided ``KeepAliveHandler`` is called instead."""
 
     @gen
     def run():
+        handler = yield from service_option(KeepAliveHandler)
+        if handler is not None:
+            yield from handler.value(enabled)
+            return
         found = yield from service_option(KeepAliveLatch)
         if found is None:
             return

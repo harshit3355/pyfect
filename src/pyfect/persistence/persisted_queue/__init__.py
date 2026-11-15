@@ -19,7 +19,7 @@ completed (and, optionally, failed) elements.
 """
 
 from pyfect._public import publish
-from pyfect.persistence.persisted_queue._error import PersistedQueueError
+from pyfect.persistence.persisted_queue._error import PersistedQueueError, is_dead_letter_cause
 from pyfect.persistence.persisted_queue._memory import layer_store_memory, make_store_memory
 from pyfect.persistence.persisted_queue._queue import (
     DEFAULT_MAX_ATTEMPTS,
@@ -38,6 +38,8 @@ from pyfect.persistence.persisted_queue._redis import layer_store_redis, make_st
 from pyfect.persistence.persisted_queue._sql import layer_store_sql, make_store_sql
 from pyfect.persistence.persisted_queue._store import (
     Cleanup,
+    Deduplicate,
+    DeduplicatingOffer,
     Offer,
     PersistedQueueStore,
     PersistedQueueStoreService,
@@ -49,6 +51,8 @@ __all__ = [
     "DEFAULT_MAX_ATTEMPTS",
     "DEFAULT_RETRY_SCHEDULE",
     "Cleanup",
+    "Deduplicate",
+    "DeduplicatingOffer",
     "Metadata",
     "Offer",
     "PersistedQueue",
@@ -60,6 +64,7 @@ __all__ = [
     "RetrySchedule",
     "TakeOptions",
     "TakenElement",
+    "is_dead_letter_cause",
     "layer",
     "layer_cleanup",
     "layer_store_memory",

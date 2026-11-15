@@ -137,9 +137,10 @@ def ensure_success[A](effect: Effect[A, Any, Any]) -> Effect[A, Never, Any]:
     )
 
 
-def _retry_lookup[A](make: Callable[[], Effect[A, Any, Any]]) -> Effect[A, Never, Any]:
-    """Retry a storage read a few times on ``PersistenceError``, then die.
-    Each attempt calls ``make`` again, so storage is asked anew."""
+def _retry_persistence_bounded[A](make: Callable[[], Effect[A, Any, Any]]) -> Effect[A, Never, Any]:
+    """Retry a storage read a few times on ``PersistenceError``, then die,
+    for reads that uninterruptible cleanup makes and so must not wait out an
+    outage. Each attempt calls ``make`` again, so storage is asked anew."""
     return (
         suspend(make)
         .retry(
@@ -154,9 +155,9 @@ def _retry_lookup[A](make: Callable[[], Effect[A, Any, Any]]) -> Effect[A, Never
 def _retry_persistence[A](make: Callable[[], Effect[A, Any, Any]]) -> Effect[A, Never, Any]:
     """Retry while ``PersistenceError``: a transient storage failure must not
     become the workflow result. Each attempt calls ``make`` again, so storage
-    is asked anew. Activity, clock and deferred requests are saved under a
-    primary key, so a retry after a lost acknowledgement is deduplicated
-    instead of stored twice."""
+    is asked anew. Activity, clock, deferred and child run requests are saved
+    under a primary key, so a retry after a lost acknowledgement is
+    deduplicated instead of stored twice."""
     return (
         suspend(make)
         .retry(schedule=_retry_policy, while_=lambda e: isinstance(e, PersistenceError))
@@ -556,7 +557,7 @@ class ClusterEngine:
             )
             return request_id
 
-        return _retry_lookup(lambda: gen(body))
+        return _retry_persistence_bounded(lambda: gen(body))
 
     def interrupt_unsafe(self, workflow: AnyWorkflow, execution_id: str) -> Effect[None]:
         def body() -> Generator[Effect[Any, Any, Any], Any]:
@@ -690,7 +691,13 @@ class ClusterEngine:
             client = make_client(execution_id)
             return client.run.discard(run) if discard else client.run(run)
 
-        return scoped(self.clients.get(workflow.tag).flat_map(call).or_die())
+        def start() -> Effect[Any, Any, Scope]:
+            return self.clients.get(workflow.tag).flat_map(call)
+
+        # A failed save inside a workflow would be stored as its result.
+        # Top-level calls still die, so their callers are not blocked during
+        # an outage.
+        return scoped(start().or_die() if parent is None else _retry_persistence(start))
 
     def poll(self, workflow: AnyWorkflow, execution_id: str) -> Effect[Result[Any, Any] | None]:
         def body() -> Generator[Effect[Any, Any, Any], Any, Result[Any, Any] | None]:
@@ -792,9 +799,15 @@ class ClusterEngine:
             reply = yield from self.reply_for_request_id(request_id)
             return None if reply is None else _deferred_exit(reply)
 
+        # Uninterruptible exit cleanup reads the interrupt signal, so bound its retries.
+        retry = (
+            _retry_persistence_bounded
+            if deferred.name == INTERRUPT_SIGNAL.name
+            else _retry_persistence
+        )
         return cast(
             "Effect[Exit[Any, Any] | None, Never, WorkflowInstance]",
-            _retry_lookup(lambda: gen(body)),
+            retry(lambda: gen(body)),
         )
 
     def deferred_done(

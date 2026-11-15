@@ -46,8 +46,48 @@ def _count(reply: RedisReply) -> int:
     return reply
 
 
-def _offer_params(key_queue: str, key_ids: str, id: str, payload: str) -> list[str | float]:
-    return [key_queue, key_ids, id, payload]
+# ids sorted set scores. The sentinels sit above any completion time, so the
+# time_to_live trim skips them:
+# - IN_FLIGHT_ID_SCORE: pending or processing
+# - FAILED_ID_SCORE + failed_at: failed at failed_at. TRIM_FAILED removes it
+#   only with the failed record carrying that failed_at
+# - +inf: legacy in-flight or failed entry. Offers treat it as in flight
+# - otherwise: the completion time
+IN_FLIGHT_ID_SCORE: Final = 1e15
+FAILED_ID_SCORE: Final = 2e15
+
+# formatted as an integer, since Lua's default number formatting keeps only 14
+# significant digits
+_FAILED_SCORE = f"""
+local function failed_score(failed_at)
+  return string.format("%.0f", {FAILED_ID_SCORE:.0f} + tonumber(failed_at))
+end
+"""
+
+# Reserves the id and returns whether to store the offer. With until_executed,
+# a completed or failed id is reclaimed.
+_CLAIM_ID = f"""
+local function claim_id(key_ids, id, until_executed)
+  if redis.call("ZADD", key_ids, "NX", {IN_FLIGHT_ID_SCORE:.0f}, id) == 1 then
+    return true
+  end
+  if until_executed ~= "1" then
+    return false
+  end
+  local score = redis.call("ZSCORE", key_ids, id)
+  if score == "inf" or tonumber(score) == {IN_FLIGHT_ID_SCORE:.0f} then
+    return false
+  end
+  redis.call("ZADD", key_ids, "XX", {IN_FLIGHT_ID_SCORE:.0f}, id)
+  return true
+end
+"""
+
+
+def _offer_params(
+    key_queue: str, key_ids: str, id: str, payload: str, until_executed: bool
+) -> list[str | float]:
+    return [key_queue, key_ids, id, payload, 1 if until_executed else 0]
 
 
 OFFER = script(
@@ -58,21 +98,20 @@ local key_queue = KEYS[1]
 local key_ids = KEYS[2]
 local id = ARGV[1]
 local payload = ARGV[2]
-
--- park the dedupe entry outside the timeToLive trim range until the element
--- completes, so unprocessed elements never lose dedupe protection
-local result = redis.call("ZADD", key_ids, "NX", "+inf", id)
-if result == 1 then
+"""
+    + _CLAIM_ID
+    + """
+if claim_id(key_ids, id, ARGV[3]) then
   redis.call("RPUSH", key_queue, payload)
 end
 """,
 )
 
 
-def _offer_delayed_params(
-    key_delayed: str, key_ids: str, id: str, payload: str, visible_at: float
+def _offer_delayed_params(  # noqa: PLR0917
+    key_delayed: str, key_ids: str, id: str, payload: str, visible_at: float, until_executed: bool
 ) -> list[str | float]:
-    return [key_delayed, key_ids, id, payload, visible_at]
+    return [key_delayed, key_ids, id, payload, visible_at, 1 if until_executed else 0]
 
 
 OFFER_DELAYED = script(
@@ -84,9 +123,10 @@ local key_ids = KEYS[2]
 local id = ARGV[1]
 local payload = ARGV[2]
 local visible_at = ARGV[3]
-
-local result = redis.call("ZADD", key_ids, "NX", "+inf", id)
-if result == 1 then
+"""
+    + _CLAIM_ID
+    + """
+if claim_id(key_ids, id, ARGV[4]) then
   redis.call("ZADD", key_delayed, visible_at, payload)
 end
 """,
@@ -120,7 +160,9 @@ local key_ids = KEYS[5]
 local key_owners = KEYS[6]
 local max_attempts = tonumber(ARGV[1])
 local now = ARGV[2]
-
+"""
+    + _FAILED_SCORE
+    + """
 local entries = redis.call("HGETALL", key_pending)
 -- recovery revokes ownership, so late settlements from the old claim are no-ops
 for i = 1, #entries, 2 do
@@ -138,7 +180,7 @@ for i = 1, #entries, 2 do
       redis.call("HDEL", key_attempts, id)
       -- failed ids keep their dedupe entry until failedTimeToLive removes the
       -- dead-letter record, so park them outside the timeToLive trim range
-      redis.call("ZADD", key_ids, "XX", "+inf", id)
+      redis.call("ZADD", key_ids, "XX", failed_score(now), id)
     else
       redis.call("RPUSH", key_queue, payload)
     end
@@ -269,8 +311,11 @@ def _failed_params(  # noqa: PLR0917
     key_owners: str,
     id: str,
     payload: str,
+    failed_at: float,
 ) -> list[str | float]:
-    return [key_pending, key_lock, key_failed, key_attempts, key_ids, key_owners, id, payload]
+    return [
+        key_pending, key_lock, key_failed, key_attempts, key_ids, key_owners, id, payload, failed_at
+    ]  # fmt: skip
 
 
 FAILED = script(
@@ -285,14 +330,16 @@ local key_ids = KEYS[5]
 local key_owners = KEYS[6]
 local id = ARGV[1]
 local payload = ARGV[2]
+local failed_at = ARGV[3]
 """
+    + _FAILED_SCORE
     + _RELEASE_CLAIM
     + """
 redis.call("HDEL", key_attempts, id)
 redis.call("RPUSH", key_failed, payload)
 -- failed ids keep their dedupe entry until failedTimeToLive removes the
 -- dead-letter record, so park them outside the timeToLive trim range
-redis.call("ZADD", key_ids, "XX", "+inf", id)
+redis.call("ZADD", key_ids, "XX", failed_score(failed_at), id)
 """,
 )
 
@@ -407,7 +454,13 @@ while removed < """
     -- failedAt is always the last field of a failed record
     local failed_at = tonumber(string.match(head, ',"failedAt":([^,}]+)%}$'))
     if failed_at ~= nil and failed_at >= cutoff then break end
-    redis.call("ZREM", key_ids, id)
+    -- release the id only if it still belongs to this failure
+    local score = redis.call("ZSCORE", key_ids, id)
+    if score == "inf" or (failed_at ~= nil and tonumber(score) == """
+    + f"{FAILED_ID_SCORE:.0f}"
+    + """ + failed_at) then
+      redis.call("ZREM", key_ids, id)
+    end
   end
   -- a corrupt head would otherwise block trimming of the whole list
   redis.call("LPOP", key_failed)

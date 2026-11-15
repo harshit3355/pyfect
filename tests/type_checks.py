@@ -7183,6 +7183,32 @@ def check_persisted_queue(
         ],
     )
     pq.make(name="q", schema=S.Int, max_attempts="10")  # pyright: ignore[reportArgumentType]
+    assert_type(
+        queue.offer(1, id="job", deduplicate="untilExecuted"),
+        fx.Effect[str, pq.PersistedQueueError | S.SchemaError],
+    )
+    queue.offer(1, id="job", deduplicate="untilDone")  # pyright: ignore[reportArgumentType]
+
+    # A store written before ``deduplicate`` existed still builds a service.
+    def old_offer(
+        *,
+        name: str,
+        id: str,
+        element: object,
+        is_custom_id: bool,
+        delay: fx.duration.Duration | None = None,
+    ) -> fx.Effect[None, pq.PersistedQueueError]:
+        return fx.void
+
+    def no_take(_: pq.TakeOptions) -> fx.Effect[pq.TakenElement, pq.PersistedQueueError, fx.Scope]:
+        return fx.never
+
+    def no_cleanup(
+        *, time_to_live: fx.duration.Duration, failed_time_to_live: fx.duration.Duration | None
+    ) -> fx.Effect[None, pq.PersistedQueueError]:
+        return fx.void
+
+    pq.PersistedQueueStoreService(offer=old_offer, take=no_take, cleanup=no_cleanup)
     # an error's cause is the exception the backend raised, not a Cause
 
 
