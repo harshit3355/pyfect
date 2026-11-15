@@ -37,8 +37,8 @@ class LegacyStoreNeedsMigration(S.TaggedError, tag="LegacyStoreNeedsMigration"):
     (public key, store id) pair may have written. Its owner calls
     ``migrate_legacy_store(public_key, store_id)`` once to keep them."""
 
-    public_key: str = S.field(S.String)
-    store_id: str = S.field(S.String)
+    public_key: str = S.field(S.String, key="publicKey")
+    store_id: str = S.field(S.String, key="storeId")
 
     @property
     def message(self) -> str:
