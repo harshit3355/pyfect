@@ -73,7 +73,9 @@ def _check_name(what: str, name: object) -> None:
 
 class Writer:
     def __init__(self, is_bytes: bool) -> None:
-        self.out: list[str] = []
+        # The pieces of the current output string, joined when read: ``+=`` on a list item
+        # copies the whole string for every event
+        self._pieces: list[str] = []
         self._stack: list[str] = []
         self._state = _NOTHING_WRITTEN
         self._doctype = False
@@ -103,13 +105,19 @@ class Writer:
                 raise invalid_event(f"attribute {name} must be a string")
             _check_chars(f"attribute {name}", value)
 
+    @property
+    def out(self) -> list[str]:
+        """The output of the events pushed since ``out`` was last set: one string, or none."""
+        return ["".join(self._pieces)] if self._pieces else []
+
+    @out.setter
+    def out(self, out: list[str]) -> None:
+        self._pieces = list(out)
+
     def push(self, value: Event, /) -> None:
         text = self._write(value)
         if text:
-            if self.out:
-                self.out[0] += text
-            else:
-                self.out.append(text)
+            self._pieces.append(text)
 
     def end(self) -> None:
         if self._stack:

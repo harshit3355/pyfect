@@ -110,17 +110,18 @@ class Parser:
         self._pending_added = 0
         self._scanner = Scanner()
         # Line and column of document offset ``_counted``
-        self._line = 1
-        self._line_start = 0
-        self._counted = 0
+        self._line: int = 1
+        self._line_start: int = 0
+        self._counted: int = 0
         self._state = _PROLOG
         self._stack: list[str] = []
         self._open_name_size = 0
-        self._doctype = False
+        self._doctype: bool = False
         self._literal_end = 0
-        # Character data that has not been emitted yet, and its size in the input
-        self._text = ""
-        self._text_size = 0
+        # Character data that has not been emitted yet, and its size in the input; pieces,
+        # joined once, as ``+=`` on an attribute copies the whole text each time
+        self._text: list[str] = []
+        self._text_size: int = 0
         self._max_token_size = max_token_size
         self._max_depth = max_depth
         self._is_bytes = is_bytes
@@ -137,7 +138,7 @@ class Parser:
             if chunk[:1] == "﻿":
                 chunk = chunk[1:]
         if self._is_bytes:
-            non_ascii = _NON_ASCII.search(chunk)
+            non_ascii = _NON_ASCII.search(chunk) if self._ascii_pending(chunk) else None
             if non_ascii is not None:
                 # The prefix may contain the declaration that selects US-ASCII.
                 self.feed(chunk[: non_ascii.start()], True)
@@ -155,6 +156,19 @@ class Parser:
                 self.received,
             )
         self._consume(chunk, force)
+
+    def _ascii_pending(self, chunk: str) -> bool:
+        """Whether a non-ASCII character in ``chunk`` may need the prefix before it parsed
+        first: once the declaration that selects US-ASCII is found, or can no longer be
+        (something at offset 0 was parsed), only a chunk that can complete a pending one does.
+        Parsing the prefix of every such chunk rescanned a long pending token each time."""
+        if self._ascii:
+            return True
+        if self._counted > 0:
+            return False
+        if self._pending is None:
+            return True
+        return "?>" in self._pending[-1][-1:] + chunk
 
     def end(self) -> None:
         if self._pending is not None:
@@ -282,15 +296,15 @@ class Parser:
                         next_cr = _index_or_end(s, "\r", i)
                     raw = s[i:j]
                     if next_amp >= j:
-                        self._text += raw if next_cr >= j else _normalize_lines(raw)
+                        self._text.append(raw if next_cr >= j else _normalize_lines(raw))
                     else:
-                        self._text += self._decode_text(raw, i, False, next_cr < j)
+                        self._text.append(self._decode_text(raw, i, False, next_cr < j))
                 i = j
                 continue
             # Markup is parsed from at most max_token_size + 1 characters, so that
             # its errors do not depend on how the input is chunked
             long = n - i > self._max_token_size
-            end = self._markup(s[: int(i + self._max_token_size + 1)] if long else s, i)
+            end = self._bounded_markup(s, i) if long else self._markup(s, i)
             if end == -1:
                 if long:
                     raise self._token_limit(self._base + i)
@@ -311,10 +325,34 @@ class Parser:
             self._scanner.scan(rest, 0)
             self._check_pending()
 
+    def _bounded_markup(self, s: str, i: int) -> int:
+        """``_markup`` of ``s[: i + max_token_size + 1]``, without copying that prefix for
+        each token (that made a long chunk of small tags quadratic): a token that parses
+        within the window parses the same in all of ``s``, so only a token that fails is
+        parsed again from the copy, with the state its failure changed put back, and that
+        ends the parse."""
+        limit = i + self._max_token_size + 1
+        state: tuple[int, int, int, int, bool] = (
+            self._line,
+            self._line_start,
+            self._counted,
+            self._text_size,
+            self._doctype,
+        )
+        try:
+            end = self._markup(s, i)
+        except XmlError:
+            end = -1
+        if end != -1 and end <= limit:
+            return end
+        self._line, self._line_start, self._counted, self._text_size, self._doctype = state
+        return self._markup(s[: int(limit)], i)
+
     def _flush_text(self) -> None:
-        if self._text:
-            self.out.append(Text(from_units(self._text)))
-            self._text = ""
+        text = "".join(self._text)
+        if text:
+            self.out.append(Text(from_units(text)))
+        self._text = []
         self._text_size = 0
 
     def _add_text(self, i: int, size: int) -> None:
@@ -607,7 +645,7 @@ class Parser:
         if self._state != CONTENT:
             raise self._syntax("CDATA sections are only allowed inside the root element", i)
         self._add_text(i, end + 3 - i)
-        self._text += _normalize_lines(s[i + 9 : end])
+        self._text.append(_normalize_lines(s[i + 9 : end]))
         return end + 3
 
     def _doctype_declaration(self, s: str, i: int) -> int:

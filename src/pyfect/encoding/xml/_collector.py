@@ -17,12 +17,31 @@ from pyfect.encoding.xml._model import (
 
 
 class _Open:
-    __slots__ = ("attributes", "children", "name")
+    __slots__ = ("_text", "attributes", "children", "name")
 
     def __init__(self, name: str, attributes: Mapping[str, str]) -> None:
         self.name = name
         self.attributes = attributes
         self.children: list[Element | str] = []
+        # The pieces of the text after the last child element, joined once: ``+=`` on a
+        # list item copies the whole text for each piece
+        self._text: list[str] = []
+
+    def add_text(self, text: str) -> None:
+        self._text.append(text)
+
+    def add_element(self, element: Element) -> None:
+        self._end_text()
+        self.children.append(element)
+
+    def element(self) -> Element:
+        self._end_text()
+        return Element(self.name, self.attributes, tuple(self.children))
+
+    def _end_text(self) -> None:
+        if self._text:
+            self.children.append("".join(self._text))
+            self._text = []
 
 
 class Collector:
@@ -68,10 +87,9 @@ class Collector:
         if self._depth == 0:
             raise invalid_event(f"end tag </{event.name}> without a start tag")
         if self._stack:
-            opened = self._stack.pop()
-            element = Element(opened.name, opened.attributes, tuple(opened.children))
+            element = self._stack.pop().element()
             if self._stack:
-                self._stack[-1].children.append(element)
+                self._stack[-1].add_element(element)
             else:
                 self.out.append(element)
         if self._matched == self._depth:
@@ -82,11 +100,7 @@ class Collector:
         if not self._stack or not event.text:
             return
         self._grow(js_length(event.text))
-        children = self._stack[-1].children
-        if children and isinstance(children[-1], str):
-            children[-1] += event.text
-        else:
-            children.append(event.text)
+        self._stack[-1].add_text(event.text)
 
     def end(self) -> None:
         if self._depth > 0:
