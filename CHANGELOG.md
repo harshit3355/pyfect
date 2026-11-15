@@ -39,6 +39,10 @@
   plain-http response a `Secure` cookie, a `__Secure-` or `__Host-` name, and a cookie that
   would replace or shadow a held `Secure` one (RFC 6265bis strict secure cookies), as
   browsers do; Effect's jar takes them.
+- `AllowedOrigins`' same-origin check takes the request's scheme: over `https` or `wss` a
+  plain-http page of the same host is not the server's own origin, as browsers see it
+  (`OriginPolicy.allows` takes an optional `scheme`). An https origin on a plain request
+  still is, for servers behind a proxy that ends TLS.
 
 ## 0.6.5 (2026-11-14)
 

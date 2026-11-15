@@ -92,10 +92,11 @@ def _make(
     accepted = Accepted()
     serve_options = _serve_options(serve_options)
     then = serve_options.pop("process_request", None)
+    scheme = "wss" if serve_options.get("ssl") is not None else "ws"
 
     async def process_request(connection: ServerConnection, request: Request) -> Any:
         own = parse_authority(request.headers.get("Host", ""))
-        if not policy.allows(request.headers.get("Origin"), own):
+        if not policy.allows(request.headers.get("Origin"), own, scheme):
             return connection.respond(HTTPStatus.FORBIDDEN, "Origin not allowed\n")
         if then is None:
             return None

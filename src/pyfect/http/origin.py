@@ -30,6 +30,7 @@ Origin = NewType("Origin", str)
 the scheme's default port; or ``null`` (an opaque origin)."""
 
 _DEFAULT_PORTS = {"http": 80, "https": 443, "ws": 80, "wss": 443}
+_SECURE = frozenset({"https", "wss"})
 
 
 def _host_port(scheme: str, authority: str) -> str:
@@ -62,10 +63,15 @@ class OriginPolicy:
     origins: frozenset[Origin] = frozenset()
     any: bool = False
 
-    def allows(self, sent: str | None, authority: Authority | None) -> bool:
+    def allows(
+        self, sent: str | None, authority: Authority | None, scheme: str | None = None
+    ) -> bool:
         """Whether a request with ``Origin: sent`` to ``authority`` (its
         ``host[:port]``) may go on: no ``Origin``, the server's own, a
-        listed one, or ``any``."""
+        listed one, or ``any``. Over a secure ``scheme`` (``https``, ``wss``)
+        a plain ``http`` origin of the same host is not the server's own, as
+        browsers see it; an ``https`` origin on a plain request is (a proxy
+        may have ended TLS)."""
         if sent is None or self.any:
             return True
         origin = parse_origin(sent.strip())
@@ -75,8 +81,10 @@ class OriginPolicy:
             return True
         if authority is None or origin == "null":
             return False
-        scheme, _, own = origin.partition("://")
-        return own == _host_port(scheme, authority)
+        sent_scheme, _, own = origin.partition("://")
+        if scheme in _SECURE and sent_scheme not in _SECURE:
+            return False
+        return own == _host_port(sent_scheme, authority)
 
 
 SAME_ORIGIN = OriginPolicy()
@@ -107,19 +115,20 @@ class AllowedOrigins(Reference[OriginPolicy]):
         return SAME_ORIGIN
 
 
-def _authority(request: ServerRequest) -> Authority | None:
-    """The request's own ``host[:port]``: its URL's, which servers build
-    from a checked ``Host``, else its ``Host``."""
+def _own(request: ServerRequest) -> tuple[Authority | None, str | None]:
+    """The request's own ``host[:port]`` (its URL's, which servers build from
+    a checked ``Host``, else its ``Host``) and its URL's scheme."""
     parts = split_url(request.original_url)
     netloc = "" if parts is None else parts.netloc
-    return parse_authority(netloc or request.headers.get("host", ""))
+    scheme = None if parts is None else parts.scheme.lower() or None
+    return parse_authority(netloc or request.headers.get("host", "")), scheme
 
 
 def origin_allowed(request: ServerRequest) -> Effect[bool]:
     """Whether ``AllowedOrigins`` lets ``request`` go on."""
     sent = request.headers.get("origin")
-    authority = _authority(request)
-    return AllowedOrigins().flat_map(lambda policy: succeed(policy.allows(sent, authority)))
+    authority, scheme = _own(request)
+    return AllowedOrigins().flat_map(lambda policy: succeed(policy.allows(sent, authority, scheme)))
 
 
 def require_allowed_origin(request: ServerRequest) -> Effect[None, HttpServerError]:
