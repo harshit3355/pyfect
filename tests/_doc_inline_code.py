@@ -10,6 +10,12 @@ from pyfect import schema as S
 layer.MemoMap()
 # cluster.mdx
 fx.yield_now()
+# effects.mdx
+fx.sleep(2.5)
+# effects.mdx
+fx.sleep("2.5 seconds")
+# effects.mdx
+fx.sleep("1 second")
 # observability.mdx
 metric.prometheus_format()
 # observability.mdx

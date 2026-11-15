@@ -25,6 +25,7 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, Concatenate, Never, Unpack, cast, overload
 
 from pyfect._core import Effect, _FailCause, _Gen, _Locally, _Succeed, _Suspend
+from pyfect._effect_args import not_a_generator
 from pyfect._stack_frame import CurrentStackFrame, StackFrame, call_site
 from pyfect.cause import die as die_cause
 from pyfect.context import Context
@@ -114,10 +115,11 @@ def _run_body(f: _AnyBody, name: str, result: object) -> Effect[Any, Any, Any]:
         return _Gen(lambda: generator)
     return _FailCause(
         die_cause(
-            TypeError(
+            not_a_generator(
                 f"fn({name!r}): {f.__qualname__} returned {type(result).__name__}, "
                 "not an effect or a generator; an effect inside it runs only with "
-                "`yield from effect`"
+                "`yield from effect`",
+                result,
             )
         )
     )

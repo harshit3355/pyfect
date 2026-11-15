@@ -99,7 +99,9 @@ server is `event_log_server_encrypted.layer` behind `rpc_server.layer_protocol_w
 served by a router; each device's remote is `event_log_remote.layer_encrypted` over
 `rpc_client.layer_protocol_socket()` on a `ws.layer_web_socket(url)`. Both devices write as
 the same `Identity`: `encode_identity_string` turns it into text to carry to the other
-device, and `decode_identity_string` reads it back.
+device, and `decode_identity_string` reads it back. It needs the `eventlog` extra for the
+encryption and the `server` extra for uvicorn and WebSockets:
+`uv add "pyfect-dev[eventlog,server]"`.
 
 <CodeOutput>
 

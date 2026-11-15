@@ -29,6 +29,10 @@
   allow_empty=True)`: the value is an `Option`, `None` for empty or whitespace-only text and
   `Some` of the decoded object otherwise, as in Effect 4.1.4 (#10527).
 - Anthropic: `OutputConfig.effort` accepts `"xhigh"` and `"max"`, as in Effect 4.1.4 (#10421).
+- `RunBlockingInEventLoopWarning`, a `RuntimeWarning`: `run_blocking` and `run_blocking_exit`
+  warn when called on a thread whose asyncio loop is running (in a coroutine or a notebook
+  cell), which they block until the effect is done. The effect still runs as before; use
+  `await fx.run_async(eff)` there. pyfect's own tests turn the warning into an error.
 
 ### Fixed
 
@@ -343,12 +347,48 @@
   emit empty text deltas, as in Effect 4.1.4 (#10370).
 - OpenRouter: base64 string image and file data is sent as a `data:` URL; it was sent bare, as
   in Effect 4.1.4 (#10485).
+- A `TaggedError` that was raised in an effect body (a defect, as a throw in Effect's `gen`
+  is, so `catch_tag` never sees it) is printed with a hint to fail with it instead:
+  `return (yield from Error(...))` or `fx.fail(error)`. `Cause.pretty()` adds the hint after
+  the defect, and `run_blocking` adds it as a note to the error it raises. The cause itself is
+  unchanged, and a `TaggedError` made a defect by `or_die` gets no hint.
+- `eff.catch_tag(...)` and the other combinators that are functions for `.pipe` on purpose
+  (`catch_reason`, `catch_reasons`, `catch_no_such_element`, `provide`, `provide_context`,
+  `provide_service`, `provide_service_effect`, `update_context`, `with_execution_plan`) raise an
+  `AttributeError` showing the `eff.pipe(fx.catch_tag(...))` form, instead of naming a private
+  class and suggesting `catch_all`. Other missing attributes name `Effect` rather than a private
+  class. pyright still reports them as unknown attributes (`tests/type_checks.py`).
+- An `async def` given to `@fx.fn`, `fx.fn_untraced`, `fx.fn("name")` or `@fx.gen` dies with a
+  `TypeError` that says to write a `def` and run the coroutine with `yield from fx.from_async(f)`,
+  and its coroutine is closed, so Python no longer warns that it was never awaited.
+- A test timeout given as a bare number (`@testing.effect(timeout=10)`, 10 milliseconds, as in
+  Effect) fails with a note saying it was milliseconds and how to write seconds.
+- A member that `layer.mock` was not given dies with `UnimplementedError` naming a given member
+  it may be a typo of (`... Unimplemented method "send"; layer.mock was given "sned": a typo?`).
+  Without a close match the message is Effect's, as before.
+- The `ImportError` of a missing extra gives the `pip install "pyfect-dev[extra]"` form next to
+  `uv add`.
+- The README's links and images are absolute, so they work on PyPI, which shows the README
+  without the repository around it; `tests/test_readme.py` keeps them that way and runs the
+  quick look, which now prints its greeting.
 
 ### Performance
 
 - `find_my_way` escapes each `%25` in a request path by appending, as in Effect main
   (#10619): it copied the whole path for every one, so a path of many `%25` took quadratic
   time (about 500 ms for 50,000 of them, now about 30 ms).
+
+### Docs
+
+- Effects: a callout that a bare-number duration is milliseconds, and a "Common mistakes"
+  section (`time.sleep`, `run_blocking` in a coroutine or notebook, `yield` for `yield from`,
+  `await eff`, `@fx.fn async def`, `eff.catch_tag`, `raise` for a typed failure).
+- Errors: a callout that a raised `TaggedError` is a defect, and how to fail with it. The
+  introduction says pyright checks typed errors, not raised exceptions.
+- Installation: start a project with `uv init`, add pyright as a dev dependency, the pip
+  equivalent, and why `uv add` needs a `[project]` table; `hello.py` prints its greeting.
+- Services: mocking a service with `layer.mock`, and what a misspelt member does.
+- Testing: a bare-number timeout is milliseconds; the `pyfect_timeout` ini option is seconds.
 
 ## 0.6.5 (2026-11-14)
 

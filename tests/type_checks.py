@@ -11060,3 +11060,15 @@ def check_for_each_discard() -> None:
         fx.for_each([1, 2], item, concurrency="unbounded", discard=False),
         fx.Effect[list[str], KeyError, Never],
     )
+
+
+# --- the runtime's misuse messages stay invisible to pyright ------------------------
+# (tests/test_effect_misuse_messages.py): an Effect is not awaitable and has no
+# methods for the combinators that change its type.
+
+
+async def check_effect_is_not_awaitable_or_a_catch_tag_method() -> None:
+    await fx.succeed(1)  # pyright: ignore[reportGeneralTypeIssues]
+    fx.fail(NotFound("k")).catch_tag  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
+    fx.succeed(1).provide  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
+    fx.succeed(1).provide_service  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018

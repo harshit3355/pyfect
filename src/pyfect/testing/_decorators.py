@@ -18,7 +18,7 @@ from pyfect.scope import Scope, scoped
 from pyfect.testing._clock import TestClock
 from pyfect.testing._console import TestConsole
 from pyfect.testing._layers import Services
-from pyfect.testing._runtime import AsyncioRuntime, Runtime, SyncRuntime
+from pyfect.testing._runtime import AsyncioRuntime, Runtime, SyncRuntime, TestTimeoutError
 
 type TestBody[R] = Generator[Effect[Any, Any, R], Any, object] | Effect[object, object, R]
 """What a test function gives: a generator of effects (``yield from``), or
@@ -37,7 +37,7 @@ type _Mode = Literal["effect", "live"]
 
 
 class _Options:
-    __slots__ = ("asyncio", "mode", "timeout", "warning_delay")
+    __slots__ = ("asyncio", "bare_timeout", "mode", "timeout", "warning_delay")
 
     def __init__(
         self,
@@ -48,6 +48,10 @@ class _Options:
     ) -> None:
         self.mode: _Mode = mode
         self.timeout = None if timeout is None else from_input_unsafe(timeout)
+        # A bare number is milliseconds; a timeout written as seconds expires at once.
+        self.bare_timeout = (
+            timeout if isinstance(timeout, (int, float)) and not isinstance(timeout, bool) else None
+        )
         self.asyncio = asyncio
         self.warning_delay = warning_delay
 
@@ -109,8 +113,9 @@ def effect(
             yield from adjust("3 seconds")
             assert (yield from fiber.join()) == "ok"
 
-    ``timeout`` (real time; default from the ``pyfect_timeout`` ini option)
-    interrupts the test and runs its finalizers. ``asyncio`` runs it on an
+    ``timeout`` (real time; default from the ``pyfect_timeout`` ini option, in
+    seconds) interrupts the test and runs its finalizers. Write its unit,
+    ``timeout="10 seconds"``: a bare number is milliseconds, as in Effect. ``asyncio`` runs it on an
     event loop, for ``from_async``. A first parameter annotated
     ``Services[...]`` (a ``layer_fixture``; in a test class, the parameter
     after ``self``) provides those services."""
@@ -154,6 +159,14 @@ def _make_test(f: Callable[..., Any], options: _Options) -> Callable[..., None]:
         timeout = options.timeout if options.timeout is not None else settings.timeout
         try:
             ex = runtime.run(scoped(_body(f, args, kwargs)), context, timeout=timeout)
+        except TestTimeoutError as error:
+            if options.bare_timeout is not None:
+                n = options.bare_timeout
+                error.add_note(
+                    f"timeout={n!r} is {n!r} milliseconds, as in Effect; "
+                    f'write timeout="{n!r} seconds" for seconds'
+                )
+            raise
         finally:
             if clock is not None:
                 clock.stop_warning()

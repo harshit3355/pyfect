@@ -203,6 +203,7 @@ from pyfect.resource import Resource
 from pyfect.result import Err, Ok, Result
 from pyfect.run import (
     Interruptor,
+    RunBlockingInEventLoopWarning,
     Teardown,
     default_teardown,
     run_async,
@@ -516,6 +517,7 @@ __all__ = [
     "Resource",
     "Restore",
     "Result",
+    "RunBlockingInEventLoopWarning",
     "Schedule",
     "Scope",
     "ScopedCache",

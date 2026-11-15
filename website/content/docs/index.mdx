@@ -5,8 +5,10 @@ description: "Effect for Python: typed errors and services, a fiber runtime with
 
 pyfect is a Python port of [Effect](https://effect.website) (v4). You write programs as
 **effects**: values that describe work and say, in their type, what they produce, how they can
-fail and which services they need. pyright infers all three, and refuses to run a program that
-leaves an error unhandled or a service unprovided.
+fail and which services they need. pyright infers all three, and rejects a program that
+leaves a typed error unhandled or a service unprovided. Typed errors are the ones an effect
+fails with (`yield from NotFound(key)`, `fx.fail(error)`); an exception raised in your code is a
+defect, which the type doesn't track (see [Typed errors](/docs/errors)).
 
 ```text
 Effect[A, E, R]

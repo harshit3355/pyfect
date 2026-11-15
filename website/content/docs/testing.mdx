@@ -15,7 +15,9 @@ of retries, timeouts and schedules are exact and take no real time.
 
 A test that would wait forever fails with `StalledError` instead of hanging, and each test has a
 real-time timeout (`@testing.effect(timeout="10 seconds")`, 5 seconds by default) that interrupts it and
-runs its finalizers.
+runs its finalizers. Write the timeout's unit: a bare number is milliseconds, as in Effect, so
+`timeout=10` gives up after 10 milliseconds (the failure says so). The `pyfect_timeout` ini option
+is in seconds.
 
 <include meta='title="test_retry.py"'>../../snippets/testing/test_retry.py</include>
 

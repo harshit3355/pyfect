@@ -12,6 +12,7 @@ that way. The run loop never checks again.
 
 from __future__ import annotations
 
+import types
 from collections.abc import Iterable
 
 from pyfect._effect_base import EffectBase
@@ -22,6 +23,19 @@ def require_effect(value: object, name: str) -> None:
     is an ``Effect``."""
     if not isinstance(value, EffectBase):
         raise TypeError(_message(value, name))
+
+
+def not_a_generator(message: str, got: object) -> TypeError:
+    """The defect of a generator body that gave ``got`` instead. An ``async def``
+    body gives a coroutine, which is closed here (it never runs) and named in the
+    message, with what to write instead."""
+    if not isinstance(got, types.CoroutineType):
+        return TypeError(message)
+    got.close()
+    return TypeError(
+        f"{message}; {got.__qualname__} is an async def: write it as a def using "
+        "`yield from`, and run a coroutine in it with `yield from fx.from_async(f)`"
+    )
 
 
 def require_effects(values: Iterable[object], name: str) -> None:

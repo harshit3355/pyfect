@@ -274,7 +274,13 @@ class Cause(Generic[E_co]):
         errors = self.pretty_errors()
         reasons = [r for r in self.reasons if not isinstance(r, Interrupt)] or self.reasons[:1]
         return tuple(
-            "\n".join([_render_error(e), *render(_frame(r.annotations, StackTrace))])
+            "\n".join(
+                [
+                    _render_error(e),
+                    *_unnoted_hint(r),
+                    *render(_frame(r.annotations, StackTrace)),
+                ]
+            )
             for e, r in zip(errors, reasons, strict=True)  # pragma: no mutate, same lengths
         )
 
@@ -282,6 +288,35 @@ class Cause(Generic[E_co]):
         """``pretty_stacks`` joined by blank lines (Effect's ``    at span
         (location)`` lines after each error)."""
         return "\n\n".join(self.pretty_stacks())
+
+
+def _raised_tagged_error_hint(defect: object) -> str | None:
+    """What to write instead when ``defect`` is a ``TaggedError`` that was raised (in an
+    effect body, ``fx.sync`` or a callback), which makes it a defect: Effect's ``gen``
+    turns a throw into a defect too, so ``catch_tag`` never sees it. ``None`` for any
+    other defect, including a ``TaggedError`` made one by ``or_die``, which was never
+    raised."""
+    from pyfect.errors import TaggedError
+
+    if not isinstance(defect, TaggedError) or defect.__traceback__ is None:
+        return None
+    name = type(defect).__name__
+    return (
+        f"{name} was raised, so it is a defect, not a typed failure, and catch_tag never "
+        f"sees it. To fail with it, write `return (yield from {name}(...))` in an effect "
+        "generator, or use fx.fail(error)"
+    )
+
+
+def _unnoted_hint(reason: Reason[Any]) -> list[str]:
+    """``_raised_tagged_error_hint`` of a ``Die``, unless the defect already carries it as a
+    note (``run.unwrap`` adds one), which its traceback shows."""
+    if not isinstance(reason, Die):
+        return []
+    hint = _raised_tagged_error_hint(reason.defect)
+    if hint is None or hint in (getattr(reason.defect, "__notes__", None) or ()):
+        return []
+    return [hint]
 
 
 def _render_error(error: BaseException) -> str:
