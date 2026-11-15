@@ -16,7 +16,7 @@ from pyfect.http.server_response import HttpServerResponse, empty, text
 from pyfect.http.server_response import bytes_ as bytes_response
 from pyfect.http.server_response import stream as stream_response
 from pyfect.queue import Queue
-from pyfect.rpc.message import RequestId, response_defect_encoded
+from pyfect.rpc.message import RequestId, is_request_id, response_defect_encoded
 from pyfect.rpc.serialization import (
     Frame,
     MaxBufferSizeExceeded,
@@ -364,11 +364,22 @@ class _HttpHandler:
             except Exception as cause:
                 decoded = []
                 yield from client.write(response_defect_encoded(self._encode_defect(cause)))
-            for message in decoded:
-                if message.get("_tag") == "Request":
-                    request_ids.append(message["id"])
-                yield from self._writes[0](client_id, _with_headers(message, headers))
-            yield from self._writes[0](client_id, {"_tag": "Eof"})
+            write = self._writes[0]
+
+            @gen
+            def write_all():
+                for message in decoded:
+                    request_id = message.get("id")
+                    if message.get("_tag") == "Request" and is_request_id(request_id):
+                        request_ids.append(request_id)
+                    yield from write(client_id, _with_headers(message, headers))
+                yield from write(client_id, {"_tag": "Eof"})
+
+            # Written on a fiber of its own, while the responses are read: a body
+            # answering more requests at once than the queue holds still goes on.
+            yield from fork_scoped(
+                write_all.on_error(lambda _: queue.end().as_void()), start_immediately=True
+            )
             content_type = serialization.content_type
             if not framed:
                 collected: Effect[list[Any], Never] = queue.collect()

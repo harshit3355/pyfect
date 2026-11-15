@@ -10,6 +10,7 @@ from pyfect._core import Effect
 from pyfect._service_copy import replaced
 from pyfect.context import Context, Tag
 from pyfect.effect import context, gen, never, provide_context, succeed, suspend
+from pyfect.logger import LogLevel
 from pyfect.option import Option
 from pyfect.queue import Queue
 from pyfect.rpc.serialization import CodecFor
@@ -142,6 +143,9 @@ class ProtocolParts:
     client_ids: Effect[Set[int]] | None = None
 
 
+_REPLAY_FAILED = "RpcServer: a message written before the server ran failed"
+
+
 def with_run[EX, RX](
     make: Callable[[WriteRequest], Effect[ProtocolParts, EX, RX]],
 ) -> Effect[ServerProtocolService, EX, RX]:
@@ -170,9 +174,13 @@ def with_run[EX, RX](
                 @gen
                 def running():
                     # What these requests' startup writes joins the buffer, and is run too.
+                    # Each runs on its own: a message that fails ends only itself, as a
+                    # live write's failure ends only its own client's reader.
                     for client_id, message, services in buffer:
-                        yield from suspend(lambda c=client_id, m=message: f(c, m)).pipe(
-                            provide_context(services)
+                        yield from (
+                            suspend(lambda c=client_id, m=message: f(c, m))
+                            .pipe(provide_context(services))
+                            .ignore_cause(log=LogLevel.DEBUG, message=_REPLAY_FAILED)
                         )
                     buffer.clear()
                     current.append(f)

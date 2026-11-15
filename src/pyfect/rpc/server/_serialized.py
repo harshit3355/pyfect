@@ -21,16 +21,16 @@ from pyfect.rpc._rpc import AnyRpc, exit_schema, handler_tag, parse_options
 from pyfect.rpc.group import HandlersFor, RpcGroup
 from pyfect.rpc.message import (
     PONG,
-    Ack,
     ClientEnd,
-    Eof,
     FromServer,
     Interrupt,
+    MalformedMessage,
     Request,
     RequestId,
     ResponseChunk,
     ResponseDefect,
     ResponseExit,
+    decode_control,
     is_request_id,
     response_defect_encoded,
 )
@@ -290,7 +290,10 @@ class _Serialized:
             return self._protocol.send(client.id, PONG).catch_cause(
                 lambda cause: self._send_defect(client, cause.squash())
             )
-        control = _control_message(message)
+        try:
+            control = decode_control(message)
+        except MalformedMessage as error:
+            return self._send_defect(client, str(error))
         if control is None:
             return self._send_defect(client, unknown_tag(tag))
         return server.write(client_id, control)
@@ -356,18 +359,6 @@ class _Serialized:
     def disconnect(self, client_id: int) -> Effect[None]:
         self._clients.pop(client_id, None)
         return self._server().disconnect(client_id)
-
-
-def _control_message(message: Message) -> Eof | Ack | Interrupt | None:
-    match message.get("_tag"):
-        case "Eof":
-            return Eof()
-        case "Ack":
-            return Ack(message["requestId"])
-        case "Interrupt":
-            return Interrupt(message["requestId"])
-        case _:
-            return None
 
 
 def make[G: RpcGroup](

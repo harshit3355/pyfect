@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.6.6 (unreleased)
+
+### Fixed
+
+- RPC server: messages a transport receives before the server runs (while other layers are
+  still being built) are replayed one by one, so one that fails ends only itself instead of
+  stopping the server for every client. An `Ack` or `Interrupt` without a valid `requestId`
+  is answered with a defect for its client (it raised `KeyError` on the server), and an HTTP
+  request without an id no longer fails the whole body. Client control messages are read
+  through `rpc.message.decode_control`; `tests/test_rpc_server_reads_messages_safely.py`
+  keeps the server modules from indexing a client's message.
+- RPC over HTTP with a framed serialization (`ndjson`, `schema_binary`): a body that answers more
+  requests at once than the stream buffer holds (17 failing requests with the default 16)
+  gets its response; the requests are now written while the response is read, where the
+  writes used to wait for a reader that only started after them.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated
