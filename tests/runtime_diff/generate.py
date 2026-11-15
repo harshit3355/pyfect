@@ -47,6 +47,7 @@ from .program import (
     Interrupt,
     Interruptible,
     Items,
+    Json,
     Log,
     MapAdd,
     MapEffect,
@@ -81,6 +82,7 @@ from .program import (
     Uninterruptible,
     YieldNow,
     ZipSum,
+    to_json,
 )
 
 _MS = st.sampled_from([1, 5, 10, 50, 100])
@@ -244,3 +246,49 @@ def programs(max_leaves: int = 12) -> st.SearchStrategy[Expr]:
     part = st.builds(Exited, st.just(0), st.recursive(_LEAVES, _extend, max_leaves=max_leaves))
     parts = st.lists(part, min_size=2, max_size=5).map(tuple)
     return st.builds(Seq, st.just(0), parts).map(_numbered)
+
+
+# A shape whose op count differs between the runtimes by one shows only at the one budget
+# where that op is the last before a yield, so a fresh program at one random budget finds it
+# by luck. The corpus sweeps these budgets for a program using each node instead
+# (``python -m runtime_diff --sweep``), up to past the 32-op inline limit.
+SWEEP_BUDGETS = range(3, 61)
+SWEEP_TIMES = 3
+
+
+def probe(program: Expr) -> Expr:
+    """``program`` with its yields made visible: a child forked without starting logs
+    when the fiber running ``program`` first yields, and a log after it shows where
+    ``program`` ends."""
+    body = Seq(0, (program, Log(0)))
+    fork = Fork(
+        0, Log(0), body, "join", start_immediately=False, daemon=False, uninterruptible=False
+    )
+    return _numbered(Seq(0, (Exited(0, fork),)))
+
+
+def ops(value: Json) -> set[str]:
+    """Every ``op`` in a program's JSON form."""
+    if isinstance(value, list):
+        return set[str]().union(*(ops(item) for item in value))
+    if isinstance(value, dict):
+        found = {str(value["op"])} if "op" in value else set[str]()
+        return found.union(*(ops(item) for item in value.values()))
+    return set()
+
+
+def covering(candidates: list[Expr], times: int) -> list[Expr]:
+    """Few of ``candidates`` such that each node the candidates use is used by at least
+    ``times`` picks: ``times`` rounds, each picking until every node is used, each pick
+    the program using the most nodes the round still wants, ties to the smallest."""
+    left = [(ops(to_json(c)), len(str(to_json(c))), c) for c in candidates]
+    every = set[str]().union(*(used for used, _, _ in left))
+    picked: list[Expr] = []
+    for _ in range(times):
+        wanted = set(every)
+        while wanted and left:
+            row = max(left, key=lambda row: (len(row[0] & wanted), -row[1]))
+            left.remove(row)
+            picked.append(row[2])
+            wanted -= row[0]
+    return picked

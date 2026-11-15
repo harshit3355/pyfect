@@ -9,6 +9,15 @@
   to wait, used to leave the program hanging. Every way out of `run_main`, including a
   `KeyboardInterrupt` raised by user code and a real SIGINT, now restores the handlers it
   found, where it used to leave the closed loop's SIGINT handler installed.
+- A fiber waiting on a `Deferred` (or any wait resumed by a wake-up) that resumes with a
+  failure no longer runs the wait's canceler first: the canceler runs only for a cause with
+  interrupts, as Effect's `asyncFinalizer` does. The extra steps moved where the fiber yields
+  under `MaxOpsBeforeYield`, so it logged after a sibling it logs before in Effect.
+- `Stream.take`, `take_until`, `take_while` and `take_while_filter` pull past their end in
+  three steps, as Effect's `flatMap(suspend(...), ...)` does, and `Stream.zip`, `zip_with` and
+  the other streams that pull their sources with `Channel.to_pull_scoped` no longer spend a
+  step before building the pull. A fiber running them under `MaxOpsBeforeYield` yields where
+  Effect's does, so a forked child or a queue producer runs at the same point.
 
 ## 0.6.6 (2026-11-15)
 

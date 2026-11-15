@@ -146,4 +146,6 @@ def to_pull(self: AnyChannel) -> AnyEffect:
 
 
 def to_pull_scoped(self: AnyChannel, scope: CloseableScope) -> AnyEffect:
-    return _Suspend(lambda: self._transform(ENDED, scope))
+    # Effect's ``toTransform(self)(Cause.done(), scope)``: the build is the
+    # first op, which ``_transform`` already defers to when it runs.
+    return self._transform(ENDED, scope)

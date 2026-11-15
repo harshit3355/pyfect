@@ -265,22 +265,6 @@ class _Yielded:
         self.decided = decided
 
 
-class _CancelIfFailed(Frame):
-    """Below a wake-up (``_Retry``): if the fiber fails before the wake-up
-    decides anything (an interrupt that reached it first), run the wait's
-    canceler, uninterruptibly, so a parked entry it left is taken back."""
-
-    __slots__ = ("canceler",)
-
-    def __init__(self, canceler: Effect[Any, Any, Any]) -> None:
-        self.canceler = canceler
-
-    def _on_failure(self, cause: Cause[Any], fiber: Fiber[Any, Any]) -> Step:
-        fiber._push(_RestoreInterruptible(fiber._interruptible))
-        fiber._interruptible = False  # pragma: no mutate, falsy either way
-        return _run_finalizer(self.canceler, Failure(cause))
-
-
 class _ReturnExit(Frame):
     """Finish with a stored exit, ignoring whatever ran above it."""
 
@@ -1062,11 +1046,12 @@ class Fiber(Generic[A_co, E_co]):
         if self._waiting is wait:
             self._waiting = None
             if canceler is not None:
-                # Effect keeps the canceler's frame under every wait: an
-                # interrupt the wait resumes with runs it too. Below a
-                # wake-up it also runs on any failure before the wake-up
-                # decides.
-                self._push(_CancelIfFailed(canceler) if wait.woken else _AsyncFinalizer(canceler))
+                # Effect keeps the canceler's frame under every wait, a
+                # wake-up's too: a cause with interrupts runs it (an
+                # interrupt that reached the fiber before the wake-up
+                # decided, or one the wait resumed with); any other failure,
+                # a deferred's stored ``fail`` among them, is one op on.
+                self._push(_AsyncFinalizer(canceler))
             self._evaluate(effect)
         deferred, self._interrupts_after_resume = self._interrupts_after_resume, []
         for by, interruptor in deferred:
