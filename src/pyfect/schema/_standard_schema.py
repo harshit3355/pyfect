@@ -43,6 +43,7 @@ from typing import (
 )
 
 from pyfect._fiber import Fiber
+from pyfect._futures import settle
 from pyfect._root import new_root
 from pyfect.context import Context
 from pyfect.exit import Exit, Success
@@ -271,7 +272,7 @@ def _run[A](effect: Any) -> Result[A] | Awaitable[Result[A]]:
         exited: asyncio.Future[Exit[Result[A], object]] = loop.create_future()
 
         def observe(ex: Exit[Result[A], object]) -> None:
-            loop.call_soon_threadsafe(exited.set_result, ex)
+            loop.call_soon_threadsafe(settle, exited, ex)
 
         fiber.add_observer_unsafe(observe)
         return _result(await exited)

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.7 (unreleased)
+
+### Fixed
+
+- Cancelling a task awaiting `fx.run_async` / `run_async_exit` (or a `ManagedRuntime`'s) a
+  second time while the interrupted fiber ran its finalizers ended the await before they
+  finished, and the fiber's exit then raised `InvalidStateError` into the loop, which stopped
+  the fiber's other exit observers (an `await_exit` elsewhere hung). Every cancel now waits for
+  the fiber, as Effect's `runPromiseExit` does with its signal aborted twice. A cancelled
+  standard-schema validation raised the same error in the loop. A future's `set_result` /
+  `set_exception` is no longer passed as a callback anywhere (`pyfect._futures.settle` skips a
+  done future), enforced by `tests/test_future_callbacks.py`.
+
 ## 0.6.5 (2026-11-14)
 
 ### Deprecated
