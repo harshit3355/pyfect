@@ -6,12 +6,12 @@ opening stores, writes, acks and changes. Compaction is in
 from __future__ import annotations
 
 import itertools
-import json
 from collections.abc import Sequence
 from typing import Any
 
 from pyfect._core import Effect
 from pyfect._js import text_encode
+from pyfect._json_text import quote
 from pyfect.clock import Clock, now_millis_unsafe
 from pyfect.crypto.digest import Digest, DigestService, sha256
 from pyfect.effect import gen, succeed
@@ -52,7 +52,8 @@ def _scope_key(public_key: str, store_id: str) -> str:
     as JSON without a ``/``, which no key of the first form equals."""
     if "/" not in public_key:
         return f"{public_key}/{store_id}"
-    return "\0" + json.dumps([public_key, store_id], ensure_ascii=False).replace("/", "\\u002f")
+    pair = f"[{quote(public_key)},{quote(store_id)}]"
+    return "\0" + pair.replace("/", "\\u002f")
 
 
 def _ensure_store(db: Db, scope: str, table: Identifier) -> Effect[None, SqlError]:
