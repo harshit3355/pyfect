@@ -3,6 +3,8 @@ cache between the two sizes) from growth that is superlinear at every size."""
 
 from __future__ import annotations
 
+import gc
+
 import pytest
 
 from ._growth import MIN_SECONDS, Make, assert_near_linear, cpu
@@ -45,3 +47,12 @@ def test_linear_work_passes() -> None:
     base = _base()
     make: Make = lambda n: lambda: sum(range(n))  # noqa: E731
     assert_near_linear(make, base, _no_doubling(base))
+
+
+def test_measuring_collects_only_the_young_generations(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A full collection walks the whole test process's heap: it was 90% of every parser case's
+    time, and the collector is off while the work runs anyway."""
+    generations: list[int] = []
+    monkeypatch.setattr(gc, "collect", lambda generation=2: generations.append(generation) or 0)
+    cpu(lambda: None)
+    assert generations and max(generations) < 2

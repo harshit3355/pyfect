@@ -27,13 +27,20 @@ from pyfect.run import InterruptExitCode
 READY = "ready"
 
 _PRELUDE = """\
+import faulthandler
+import signal
 import sys
 from dataclasses import dataclass
 from typing import ClassVar
 import pyfect as fx
 
+faulthandler.register(signal.SIGUSR1, all_threads=True)
+
 def ready():
     print("ready", flush=True)
+
+def signalled():
+    sys.stdin.readline()
 
 def log(msg):
     print(msg, flush=True)
@@ -50,26 +57,34 @@ class Finished:
 def run_main_process(
     tmp_path: Path, program: str, *, send: signal.Signals | None = None
 ) -> Finished:
-    """Run ``program`` (with ``fx``, ``ready()`` and ``log()`` in scope) in a
-    new interpreter. With ``send``, deliver that signal once the program
-    calls ``ready()``."""
+    """Run ``program`` (with ``fx``, ``ready()``, ``signalled()`` and ``log()`` in
+    scope) in a new interpreter. With ``send``, deliver that signal once the program
+    calls ``ready()``; ``signalled()`` returns once it has been sent.
+
+    A child still running at ``SUBPROCESS_TIMEOUT`` is hung: the failure shows where
+    its threads were (``faulthandler``)."""
     script = tmp_path / "main.py"
     script.write_text(_PRELUDE + textwrap.dedent(program))
-    proc = subprocess.Popen(
+    with subprocess.Popen(
         [sys.executable, str(script)],
+        stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
-    )
-    try:
-        if send is not None:
-            assert proc.stdout is not None
-            first = proc.stdout.readline().strip()
-            assert first == READY, f"expected {READY!r}, got {first!r}"
-            os.kill(proc.pid, send)
-        stdout, stderr = proc.communicate(timeout=SUBPROCESS_TIMEOUT)
-    finally:
-        proc.kill()
+    ) as proc:
+        try:
+            if send is not None:
+                assert proc.stdout is not None
+                first = proc.stdout.readline().strip()
+                assert first == READY, f"expected {READY!r}, got {first!r}"
+                os.kill(proc.pid, send)
+            stdout, stderr = proc.communicate("sent\n", timeout=SUBPROCESS_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            os.kill(proc.pid, signal.SIGUSR1)
+            _, stderr = proc.communicate(timeout=SUBPROCESS_TIMEOUT)
+            raise AssertionError(f"the program hung:\n{stderr}") from None
+        finally:
+            proc.kill()
     return Finished(proc.returncode, stdout, stderr)
 
 
@@ -92,6 +107,37 @@ def test_signal_interrupts_main_fiber_and_runs_finalizers(tmp_path: Path, sig: s
     assert done.stdout.splitlines() == ["finalizer ran"]
     assert done.returncode == 130
     assert "Traceback" not in done.stderr
+
+
+def test_a_signal_handled_off_the_main_thread_wakes_the_loop(tmp_path: Path):
+    """A signal can arrive while the loop waits in ``select`` without interrupting it:
+    on another thread (Linux delivers a process's signal to any thread), or just
+    before ``select`` starts. The loop must still wake for it, as Node's does
+    (asyncio's ``add_signal_handler`` writes to the loop's wakeup pipe). Here a
+    thread signals itself once the main fiber waits; a plain ``signal.signal``
+    handler left the loop asleep, and run_main hung (1 in 480 runs on Linux)."""
+    program = """
+    import threading
+    import time
+
+    def signal_from_a_thread():
+        def send():
+            time.sleep(0.2)
+            signal.pthread_kill(threading.get_ident(), signal.SIGTERM)
+
+        threading.Thread(target=send).start()
+
+    fx.run_main(
+        fx.acquire_use_release(
+            fx.sync(signal_from_a_thread),
+            lambda _: fx.never,
+            lambda _a, _ex: fx.sync(lambda: log("finalizer ran")),
+        )
+    )
+    """
+    done = run_main_process(tmp_path, program)
+    assert done.stdout.splitlines() == ["finalizer ran"]
+    assert done.returncode == 130
 
 
 def test_success_returns_the_value_and_exits_zero(tmp_path: Path):
@@ -182,21 +228,49 @@ def test_error_exit_code_sets_the_process_status(tmp_path: Path):
 
 
 def test_signal_handlers_are_restored_after_run_main(tmp_path: Path):
+    """However run_main ends (success, failure, a KeyboardInterrupt raised by user
+    code, a real SIGINT), the process's handlers are the ones it found: a later
+    Ctrl-C must not go to a closed loop."""
     program = """
-    import signal
-    before = signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)
-    fx.run_main(fx.succeed(None))
-    log((signal.getsignal(signal.SIGTERM), signal.getsignal(signal.SIGINT)) == before)
+    def handlers():
+        return signal.getsignal(signal.SIGINT), signal.getsignal(signal.SIGTERM)
+
+    def raise_keyboard_interrupt():
+        raise KeyboardInterrupt
+
+    before = handlers()
+    for name, program in [
+        ("success", fx.succeed(None)),
+        ("failure", fx.fail(ValueError("x"))),
+        ("KeyboardInterrupt", fx.sync(raise_keyboard_interrupt)),
+        ("SIGINT", fx.sync(lambda: signal.raise_signal(signal.SIGINT)).and_then(fx.never)),
+    ]:
+        try:
+            fx.run_main(program, disable_error_reporting=True)
+        except (SystemExit, KeyboardInterrupt):
+            pass
+        log(f"{name}: {handlers() == before}")
     """
     done = run_main_process(tmp_path, program)
-    assert done.stdout.splitlines() == ["True"]
+    assert done.stdout.splitlines() == [
+        "success: True",
+        "failure: True",
+        "KeyboardInterrupt: True",
+        "SIGINT: True",
+    ]
 
 
 def test_signal_waits_for_uninterruptible_work(tmp_path: Path):
     """The interrupt lands when the uninterruptible region ends, so the work
-    finishes and the process still exits 130."""
+    finishes and the process still exits 130. The work waits until the signal
+    was sent (it used to sleep 0.3 ms and race it), then yields to the loop."""
     program = """
-    work = fx.sync(ready).and_then(fx.sleep(0.3)).and_then(fx.sync(lambda: log("done")))
+    work = (
+        fx.sync(ready)
+        .and_then(fx.sync(signalled))
+        .and_then(fx.sleep("1 millis"))
+        .and_then(fx.sync(lambda: log("done")))
+    )
     program = fx.uninterruptible_mask(lambda _restore: work)
     fx.run_main(program)
     log("after run_main")

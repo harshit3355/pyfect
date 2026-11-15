@@ -7,7 +7,7 @@ from pathlib import Path
 from types import ModuleType
 
 import pytest
-from _shards import assign, shard_of
+from _shards import DURATIONS, Plan, assign, load_durations, shard_of
 from _subprocess import SUBPROCESS_TIMEOUT
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -26,19 +26,35 @@ def _script() -> ModuleType:
 
 def test_longest_files_first_keeps_the_shards_level():
     durations = {"a.py": 10.0, "b.py": 9.0, "c.py": 6.0, "d.py": 5.0, "e.py": 4.0, "f.py": 2.0}
-    shards = assign(durations, 3)
-    assert shards.keys() == durations.keys()
-    loads = [sum(s for path, s in durations.items() if shards[path] == k) for k in (1, 2, 3)]
+    plan = assign(durations, 3)
+    assert plan.shards.keys() == durations.keys() and not plan.spread
+    loads = [sum(s for path, s in durations.items() if plan.shards[path] == k) for k in (1, 2, 3)]
+    assert tuple(loads) == plan.loads
     # Longest-first packing is within 4/3 of the best split, whatever the durations.
     assert max(loads) <= 4 / 3 * sum(durations.values()) / 3
-    assert assign(dict(reversed(durations.items())), 3) == shards
+    assert assign(dict(reversed(durations.items())), 3) == plan
+
+
+def test_a_file_longer_than_a_shards_share_is_spread_over_every_shard():
+    durations = {"big.py": 60.0, "a.py": 10.0, "b.py": 10.0, "c.py": 10.0}
+    plan = assign(durations, 3)
+    assert plan.spread == {"big.py"} and "big.py" not in plan.shards
+    assert shard_of("big.py", plan, 3) is None
+    assert max(plan.loads) == min(plan.loads) == 30.0
+
+
+def test_the_recorded_durations_keep_every_shard_near_the_mean():
+    """A heavy new file packed whole once left one CI shard at 47 minutes and the rest at 8."""
+    loads = assign(load_durations(DURATIONS), 5).loads
+    assert max(loads) <= 1.15 * sum(loads) / 5, [round(load) for load in loads]
 
 
 def test_a_file_with_no_recorded_duration_still_lands_in_one_shard():
+    empty = Plan({}, frozenset(), (0.0,) * 4)
     for path in ("tests/test_new.py", "tests/oracle/test_other.py"):
-        assert 1 <= shard_of(path, {}, 4) <= 4
-        assert shard_of(path, {}, 4) == shard_of(path, {}, 4)
-    assert shard_of("tests/test_new.py", {"tests/test_new.py": 3}, 4) == 3
+        assert shard_of(path, empty, 4) in (1, 2, 3, 4)
+        assert shard_of(path, empty, 4) == shard_of(path, empty, 4)
+    assert shard_of("tests/test_new.py", Plan({"tests/test_new.py": 3}, frozenset(), ()), 4) == 3
 
 
 def test_the_shards_together_collect_every_test_once(
@@ -63,6 +79,31 @@ def test_the_shards_together_collect_every_test_once(
     assert len(full) == sum(range(7)) + 1
     assert sorted(test for shard in shards for test in shard) == sorted(full)
     assert all(shards), "a shard collected nothing; pick files so each gets one"
+
+
+def test_a_spread_files_tests_run_once_across_the_shards(
+    pytester: pytest.Pytester, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", str(Path(__file__).parent))
+    pytester.makepyfile(test_big="\n".join(f"def test_{t}(): pass" for t in range(60)))
+    pytester.makepyfile(test_small="def test_x(): pass\n")
+    recorded = pytester.path / "durations.json"
+    recorded.write_text('{"test_big.py": 100.0, "test_small.py": 1.0}')
+
+    def collect(*shard: str) -> list[str]:
+        manifest = pytester.path / f"manifest{''.join(shard).replace('/', 'of')}.txt"
+        result = pytester.runpytest_subprocess(
+            "-p", "_shards", "--collect-only", "--shard-manifest", str(manifest),
+            "--shard-recorded", str(recorded),
+            *(["--shard", *shard] if shard else []), timeout=SUBPROCESS_TIMEOUT,
+        )  # fmt: skip
+        assert result.ret == 0, result.stdout.str()
+        return manifest.read_text().splitlines()
+
+    full = collect()
+    shards = [collect(f"{k}/3") for k in (1, 2, 3)]
+    assert sorted(test for shard in shards for test in shard) == sorted(full)
+    assert all(sum(test.startswith("test_big.py") for test in shard) > 5 for shard in shards)
 
 
 def test_verify_names_the_missing_and_the_repeated(tmp_path: Path):

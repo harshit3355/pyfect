@@ -30,6 +30,10 @@ EXPONENT = math.log(BOUND, FACTOR)
 MIN_SECONDS = 0.002
 MAX_SIZE = 1 << 22
 RUNS = 3
+YOUNG = 1
+"""The generations ``cpu`` collects before measuring: the garbage earlier runs left. A full
+collection walks the whole test process's heap, which cost 40 to 120 ms a call, about 90% of
+each parser case's time, and changed nothing measured: the collector is off while it runs."""
 
 type Work = Callable[[], object]
 type Make = Callable[[int], Work]
@@ -40,7 +44,7 @@ def cpu(work: Work, runs: int = RUNS) -> float:
     """The least thread CPU time of ``runs`` runs of ``work``."""
     best = float("inf")
     enabled = gc.isenabled()
-    gc.collect()
+    gc.collect(YOUNG)
     gc.disable()
     try:
         for _ in range(runs):
