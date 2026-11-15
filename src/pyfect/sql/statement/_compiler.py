@@ -63,10 +63,78 @@ class CompilerOptions:
 _EMPTY_IN_KEYWORD = re.compile(r"\b(NOT\s+)?IN\s*$", re.IGNORECASE)
 
 
-def _in_line_comment(sql: str, index: int) -> bool:
-    # JavaScript's ``lastIndexOf(s, index)``: the last ``s`` starting at or
-    # before ``index``.
-    return sql.rfind("--", 0, index + 2) > sql.rfind("\n", 0, index + 1)
+class _Text:
+    """SQL built from appended parts, joined once, so a statement of many
+    segments compiles in linear time. It answers ``empty_in`` from the parts
+    near its end and offsets it tracks as it grows, never the whole text."""
+
+    __slots__ = ("_last", "_last_dash", "_last_newline", "_newline_before", "_parts", "_starts")
+
+    def __init__(self) -> None:
+        self._parts: list[str] = []
+        self._starts: list[int] = []
+        self._newline_before: list[int] = []
+        self._last_newline = -1
+        self._last_dash = -1
+        """Where the last ``--`` starts."""
+        self._last = ""
+
+    def _size(self) -> int:
+        return self._starts[-1] + len(self._parts[-1]) if self._parts else 0
+
+    def append(self, text: str) -> None:
+        if not text:
+            return
+        start = self._size()
+        self._parts.append(text)
+        self._starts.append(start)
+        self._newline_before.append(self._last_newline)
+        newline = text.rfind("\n")
+        if newline >= 0:
+            self._last_newline = start + newline
+        dash = text.rfind("--")
+        if dash >= 0:
+            self._last_dash = start + dash
+        elif self._last == "-" and text[0] == "-":
+            self._last_dash = start - 1
+        self._last = text[-1]
+
+    def value(self) -> str:
+        return "".join(self._parts)
+
+    def empty_in(self) -> tuple[int, bool] | None:
+        """Where a trailing ``IN`` / ``NOT IN`` keyword starts and whether it
+        is negated, unless there is none or it is in a ``--`` comment."""
+        first = len(self._parts)
+        tail = ""
+        # The keyword is at most the last two words; a third shows its start.
+        while first > 0 and len(tail.split()) < 3:
+            first -= 1
+            tail = self._parts[first] + tail
+        match = _EMPTY_IN_KEYWORD.search(tail)
+        if match is None:
+            return None
+        base = self._starts[first] if self._parts else 0
+        newline = tail.rfind("\n", 0, match.start() + 1)
+        line_start = base + newline if newline >= 0 else self._newline_before[first]
+        # The keyword holds no ``-``, so the last ``--`` is before it.
+        if self._last_dash > line_start:
+            return None
+        return base + match.start(), match.group(1) is not None
+
+    def replace_from(self, start: int, text: str) -> None:
+        """Replace everything from ``start`` (in the last part's keyword)."""
+        while self._starts[-1] > start:
+            self._parts.pop()
+            self._starts.pop()
+            self._newline_before.pop()
+        kept = self._parts[-1][: start - self._starts[-1]]
+        self._parts.pop()
+        self._starts.pop()
+        self._last_newline = self._newline_before.pop()
+        self._last = self._parts[-1][-1] if self._parts else ""
+        self.append(kept)
+        self.append(text)
 
 
 class Compiler:
@@ -136,7 +204,7 @@ class _Run:
         self.compiler = compiler
         self.opts = compiler.options
         self.without_transform = without_transform
-        self.sql = ""
+        self.sql = _Text()
         self.binds: list[object] = []
         self.count = 0
         self.placeholder: Placeholder = override or self._next_placeholder
@@ -198,13 +266,13 @@ class _Run:
         for segment in statement.segments:
             match segment:
                 case LiteralSegment(value, params):
-                    self.sql += value
+                    self.sql.append(value)
                     if params:
                         self.binds.extend(params)
                 case Identifier(value):
-                    self.sql += self._identifier(value)
+                    self.sql.append(self._identifier(value))
                 case Parameter(value):
-                    self.sql += self.placeholder(value)
+                    self.sql.append(self.placeholder(value))
                     self.binds.append(value)
                 case ArrayHelper(value):
                     self._array(value)
@@ -218,25 +286,24 @@ class _Run:
                     sql, binds = self.opts.on_custom(
                         segment, self.placeholder, self.without_transform
                     )
-                    self.sql += sql
+                    self.sql.append(sql)
                     self.binds.extend(binds)
-        return (self.sql, tuple(self.binds))
+        return (self.sql.value(), tuple(self.binds))
 
     def _array(self, value: tuple[object, ...]) -> None:
         if not value:
-            match = _EMPTY_IN_KEYWORD.search(self.sql)
-            if match is None or _in_line_comment(self.sql, match.start()):
-                self.sql += "()"
+            keyword = self.sql.empty_in()
+            if keyword is None:
+                self.sql.append("()")
             elif self.opts.dialect == "pg":
                 # An empty subquery is typed as text in Postgres, so compare
                 # with an empty array, which takes the left operand's type.
-                self.sql = self.sql[: match.start()] + (
-                    "<> ALL('{}')" if match.group(1) else "= ANY('{}')"
-                )
+                start, negated = keyword
+                self.sql.replace_from(start, "<> ALL('{}')" if negated else "= ANY('{}')")
             else:
-                self.sql += "(SELECT NULL WHERE 1=0)"
+                self.sql.append("(SELECT NULL WHERE 1=0)")
             return
-        self.sql += "(" + ",".join(self.placeholder(v) for v in value) + ")"
+        self.sql.append("(" + ",".join(self.placeholder(v) for v in value) + ")")
         self.binds.extend(value)
 
     def _insert(self, segment: RecordInsertHelper) -> None:
@@ -249,18 +316,18 @@ class _Run:
                 values,
                 self._returning(segment.returning_identifier),
             )
-            self.sql += sql
+            self.sql.append(sql)
             self.binds.extend(binds)
             return
         for row in values:
             self.binds.extend(row)
-        self.sql += f"{self._columns(keys)} VALUES {placeholders}"
+        self.sql.append(f"{self._columns(keys)} VALUES {placeholders}")
         returning = segment.returning_identifier
         if isinstance(returning, str):
-            self.sql += f" RETURNING {returning}"
+            self.sql.append(f" RETURNING {returning}")
         elif returning is not None:
             sql, binds = cast("Compiled", self._returning(returning))
-            self.sql += f" RETURNING {sql}"
+            self.sql.append(f" RETURNING {sql}")
             self.binds.extend(binds)
 
     def _update_single(self, segment: RecordUpdateHelperSingle) -> None:
@@ -271,25 +338,25 @@ class _Run:
                 [self._primitive(segment.value[key]) for key in keys],
                 self._returning(segment.returning_identifier),
             )
-            self.sql += sql
+            self.sql.append(sql)
             self.binds.extend(binds)
             return
         for i, key in enumerate(keys):
             value = segment.value[key]
             assignment = f"{self._identifier(key)} = {self.placeholder(value)}"
-            self.sql += assignment if i == 0 else f", {assignment}"
+            self.sql.append(assignment if i == 0 else f", {assignment}")
             self.binds.append(self._primitive(value))
         returning = segment.returning_identifier
         mssql = self.opts.dialect == "mssql"
         if isinstance(returning, str):
             if mssql:
-                self.sql += f" OUTPUT {'INSERTED.*' if returning == '*' else returning}"
+                self.sql.append(f" OUTPUT {'INSERTED.*' if returning == '*' else returning}")
             else:
-                self.sql += f" RETURNING {returning}"
+                self.sql.append(f" RETURNING {returning}")
         elif returning is not None:
-            self.sql += " OUTPUT " if mssql else " RETURNING "
+            self.sql.append(" OUTPUT " if mssql else " RETURNING ")
             sql, binds = cast("Compiled", self._returning(returning))
-            self.sql += sql
+            self.sql.append(sql)
             self.binds.extend(binds)
 
     def _update(self, segment: RecordUpdateHelper) -> None:
@@ -302,7 +369,7 @@ class _Run:
             values,
             self._returning(segment.returning_identifier),
         )
-        self.sql += sql
+        self.sql.append(sql)
         self.binds.extend(binds)
 
 

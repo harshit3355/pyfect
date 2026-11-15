@@ -1,0 +1,97 @@
+"""A union of mutually recursive TypedDicts decodes in time linear in the
+input's depth. Each TypedDict met again while its own fields are derived is a
+suspended union member; once made, its discriminator picks it like any
+other member's, where every suspended member used to be tried on every
+value (2**depth parses under ``errors="all"``)."""
+
+from __future__ import annotations
+
+from typing import Literal, TypedDict
+
+import pytest
+
+import pyfect as fx
+from pyfect import schema as S
+from tests._growth import Work, assert_near_linear
+
+
+class And(TypedDict):
+    op: Literal["and"]
+    left: And | Or | Eq
+    right: And | Or | Eq
+
+
+class Or(TypedDict):
+    op: Literal["or"]
+    left: And | Or | Eq
+    right: And | Or | Eq
+
+
+class Eq(TypedDict):
+    op: Literal["eq"]
+    field: str
+
+
+class Late(TypedDict):
+    # The discriminator after the recursive field.
+    next: Late | End
+    kind: Literal["late"]
+
+
+class End(TypedDict):
+    kind: Literal["end"]
+
+
+def _filter(depth: int) -> object:
+    value: object = {"op": "eq", "field": "x"}
+    for _ in range(depth):
+        value = {"op": "or", "left": {"op": "eq", "field": "y"}, "right": value}
+    return value
+
+
+def _late(depth: int) -> object:
+    value: object = {"kind": "end"}
+    for _ in range(depth):
+        value = {"next": value, "kind": "late"}
+    return value
+
+
+@pytest.mark.parametrize("errors", ["all", "first"])
+def test_mutually_recursive_typed_dicts_decode_in_linear_time(errors: str) -> None:
+    decode = S.decode_unknown_exit(
+        S.Union(S.Struct(And), S.Struct(Or), S.Struct(Eq)),
+        errors="all" if errors == "all" else "first",
+    )
+
+    def sized(depth: int) -> Work:
+        value = _filter(depth)
+        return lambda: decode(value)
+
+    assert isinstance(sized(30)(), fx.Success)
+    assert_near_linear(sized, 6, factor=4)
+
+
+def test_a_discriminator_after_the_recursive_field_still_picks_the_member() -> None:
+    decode = S.decode_unknown_exit(S.Union(S.Struct(Late), S.Struct(End)))
+
+    def sized(depth: int) -> Work:
+        value = _late(depth)
+        return lambda: decode(value)
+
+    assert isinstance(sized(40)(), fx.Success)
+    assert_near_linear(sized, 8, factor=4)
+
+
+def test_issues_name_the_members_a_discriminator_picks() -> None:
+    decode = S.decode_unknown_exit(S.Union(S.Struct(And), S.Struct(Or), S.Struct(Eq)), errors="all")
+    bad = {
+        "op": "or",
+        "left": {"op": "and", "left": {"op": "eq", "field": "a"}, "right": {"op": "x"}},
+        "right": 5,
+    }
+    exit = decode(bad)
+    assert isinstance(exit, fx.Failure)
+    text = str(exit.cause)
+    assert 'at ["left"]["right"]' in text
+    assert 'at ["right"]' in text
+    assert '{ readonly "op": "and", ... }' in text

@@ -31,6 +31,11 @@ class Suspend(AST):
             self._memo.append(self.thunk())
         return self._memo[0]
 
+    @property
+    def made(self) -> AST | None:
+        """The target if it was made already, without making it."""
+        return self._memo[0] if self._memo else None
+
     def get_expected(self) -> str:
         return self.target.expected()
 

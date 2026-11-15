@@ -93,21 +93,32 @@ def _number(text: str) -> float:
     return int(value) if value.is_integer() and abs(value) <= _SAFE_INTEGER else value
 
 
-def match_part(node: AST, text: str, options: ParseOptions) -> bool:  # noqa: PLR0911
+def match_part(node: AST, text: str, options: ParseOptions) -> bool:
     """``text`` is a segment of the part ``node`` (Effect's ``matchPart``)."""
+    return _match_span(node, text, 0, len(text), options)
+
+
+def _match_span(node: AST, input: str, start: int, end: int, options: ParseOptions) -> bool:  # noqa: PLR0911
+    """``input[start:end]`` is a segment of ``node``. The span is copied only
+    for a part that reads it whole, so trying every split stays linear."""
     match node:
         case String():
-            return _passes(node, text, options)
+            return node.checks is None or _passes(node, input[start:end], options)
         case Number():
-            return _FINITE.match(text) is not None and _passes(node, _number(text), options)
+            if _FINITE.match(input, start, end) is None:
+                return False
+            return node.checks is None or _passes(node, _number(input[start:end]), options)
         case BigInt():
-            return _BIG_INT.match(text) is not None and _passes(node, to_int(text), options)
+            if _BIG_INT.match(input, start, end) is None:
+                return False
+            return node.checks is None or _passes(node, to_int(input[start:end]), options)
         case Literal():
-            return text == to_string(node.literal)
+            text = to_string(node.literal)
+            return end - start == len(text) and input.startswith(text, start)
         case TemplateLiteral():
-            return segment(node, text, options) is not None
+            return segment(node, input[start:end], options) is not None
         case Union():
-            return any(match_part(member, text, options) for member in node.types)
+            return any(_match_span(member, input, start, end, options) for member in node.types)
         case _:
             return False
 
@@ -211,9 +222,8 @@ class _Segmenter:
             return False
         part = parts[i]
         if i == len(parts) - 1:
-            text = input[pos:]
-            if match_part(part, text, options):
-                out[i] = text
+            if _match_span(part, input, pos, size, options):
+                out[i] = input[pos:]
                 return True
         elif isinstance(part, Literal):
             text = literals[i] or ""
@@ -226,9 +236,8 @@ class _Segmenter:
             anchor = literals[i + 1]
             end = maximum if anchor is None else self.last_index(anchor, maximum)
             while end >= pos:
-                text = input[pos:end]
-                if match_part(part, text, options) and self.go(i + 1, end):
-                    out[i] = text
+                if _match_span(part, input, pos, end, options) and self.go(i + 1, end):
+                    out[i] = input[pos:end]
                     return True
                 if end == 0:
                     break

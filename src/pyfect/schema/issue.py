@@ -190,13 +190,24 @@ def has_input(issue: Issue) -> bool:
             return issue.input is not None
 
 
-def format_issue(issue: Issue) -> str:
+DEFAULT_MAX_FORMATTED_ISSUES = 100
+"""How many leaves ``format_issue`` writes before it counts the rest."""
+
+
+def format_issue(issue: Issue, *, max_issues: int | None = DEFAULT_MAX_FORMATTED_ISSUES) -> str:
     """Effect's default formatter (``SchemaIssue.defaultFormatter``): one
-    message per leaf, each followed by ``\\n  at <path>`` below the root."""
-    return "\n".join(
+    message per leaf, each followed by ``\\n  at <path>`` below the root.
+    Past ``max_issues`` leaves (``None``: no limit) a last line says how many
+    were left out: each line repeats its whole path, so every leaf of a deep
+    value would make the text (leaves x depth) long (Effect writes them all)."""
+    messages, omitted = _limited_messages(issue, leaf_message, default_check_hook, max_issues)
+    lines = [
         "" if message is None else f"{message}\n  at {format_path(path)}" if path else message
-        for path, message in _messages(issue, leaf_message, default_check_hook)
-    )
+        for path, message in messages
+    ]
+    if omitted:
+        lines.append(f"... and {omitted} more issue{'' if omitted == 1 else 's'}")
+    return "\n".join(lines)
 
 
 def make_formatter_default() -> Formatter[str]:
@@ -243,27 +254,51 @@ def _messages(
     """Each leaf's path and text, in order; an empty ``Composite`` is
     ``None`` (an empty line in ``format_issue``, nothing in a Standard
     Schema failure)."""
+    return _limited_messages(issue, leaf_hook, check_hook, None)[0]
+
+
+type _Trail = tuple[_Trail, tuple[PathKey, ...]] | None
+"""A path as the pointers met on the way down: each leaf's path is built
+only when it is written, so deep trees cost (leaves written x depth)."""
+
+
+def _path_of(trail: _Trail) -> Path:
+    pieces: list[tuple[PathKey, ...]] = []
+    while trail is not None:
+        trail, segments = trail
+        pieces.append(segments)
+    return tuple(key for segments in reversed(pieces) for key in segments)
+
+
+def _limited_messages(
+    issue: Issue, leaf_hook: LeafHook, check_hook: CheckHook, limit: int | None
+) -> tuple[list[tuple[Path, str | None]], int]:
+    """``_messages`` up to ``limit`` leaves, and how many leaves are past it."""
     # A loop over an explicit stack: an issue tree is as deep as the input.
     out: list[tuple[Path, str | None]] = []
-    stack: list[tuple[Issue, Path, str | None]] = [(issue, (), None)]
+    omitted = 0
+    stack: list[tuple[Issue, _Trail, str | None]] = [(issue, None, None)]
     while stack:
-        issue, path, override = stack.pop()
+        issue, trail, override = stack.pop()
         match issue:
             case Filter(issue=inner):
                 found = override if override is not None else filter_message(issue, check_hook)
-                stack.append((inner, path, found))
+                stack.append((inner, trail, found))
                 continue
             case Encoding(issue=inner):
-                stack.append((inner, path, override))
+                stack.append((inner, trail, override))
                 continue
             case Pointer(segments, inner):
-                stack.append((inner, (*path, *segments), override))
+                stack.append((inner, (trail, segments) if segments else trail, override))
                 continue
             case Composite(issues=issues) | AnyOf(issues=issues) if issues:
-                stack.extend((i, path, override) for i in reversed(issues))
+                stack.extend((i, trail, override) for i in reversed(issues))
+                continue
+            case _ if limit is not None and len(out) >= limit:
+                omitted += 1
                 continue
             case Composite():
-                out.append((path, None))
+                out.append((_path_of(trail), None))
                 continue
             case AnyOf(ast=ast):
                 found = override if override is not None else _find_message(issue)
@@ -272,8 +307,8 @@ def _messages(
                 )
             case _:
                 message = override if override is not None else leaf_hook(issue)
-        out.append((path, message))
-    return out
+        out.append((_path_of(trail), message))
+    return out, omitted
 
 
 def leaf_message(issue: Leaf) -> str:
@@ -387,6 +422,7 @@ def _show(input: Some[object]) -> str:
 
 
 __all__ = [
+    "DEFAULT_MAX_FORMATTED_ISSUES",
     "AnyOf",
     "CheckHook",
     "Composite",

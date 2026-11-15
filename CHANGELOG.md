@@ -48,6 +48,90 @@
 - OpenAI WebSocket mode counts each response's messages against `max_response_bytes`, as the
   HTTP transport counts a response body: past it the response fails with the same error and
   the connection is replaced.
+- RPC server: messages a transport receives before the server runs (while other layers are
+  still being built) are replayed one by one, so one that fails ends only itself instead of
+  stopping the server for every client. An `Ack` or `Interrupt` without a valid `requestId`
+  is answered with a defect for its client (it raised `KeyError` on the server), and an HTTP
+  request without an id no longer fails the whole body. Client control messages are read
+  through `rpc.message.decode_control`; `tests/test_rpc_server_reads_messages_safely.py`
+  keeps the server modules from indexing a client's message.
+- RPC over HTTP with a framed serialization (`ndjson`, `schema_binary`): a body that answers more
+  requests at once than the stream buffer holds (17 failing requests with the default 16)
+  gets its response; the requests are now written while the response is read, where the
+  writes used to wait for a reader that only started after them.
+- `schema_binary`: a varint read as a number fails past the 147 bytes a finite double needs, and
+  long `BigInt`, `Duration` and `BigDecimal` varints are read in near-linear time; both used to
+  cost time quadratic in the run's length.
+- `schema_binary`: when a schema pass checks the decoded value, the values one frame's
+  back-references name are limited to `max_expanded_size` bytes (64 MiB by default, `None` for
+  no limit), a new keyword of `to_codec`, `to_codec_direct`, `parser` and
+  `rpc.serialization.make_schema_binary`. Past it, decoding fails with a `SchemaError`; a check
+  used to run once per reference over the same value.
+- Ints a peer sends no longer cost quadratic time when their hashes collide (CPython does not
+  seed `int` hashes, so `k * (2**61 - 1)` all hash alike). RPC and MCP request ids, on the
+  server and the client, and JSON-RPC batches key them through `pyfect._peer_keys`
+  (`PeerKeyDict`, `PeerKeySet`); a JSON-RPC batch item whose id is not a request id no longer
+  fails the whole body. `S.FrozenSet`, `S.Map`, `is_unique` and `Array.dedupe`-style dedupes
+  refuse values where more than 64 distinct items share one hash (`FrozenSet` and `Map`
+  decode to an `InvalidValue`, `is_unique` fails its check, `dedupe` raises `HashFlood`, a
+  `ValueError`). `tests/test_peer_hash_keys.py` feeds all-colliding ints to each, and keeps
+  maps keyed by `RequestId` from being plain dicts or sets.
+- `sql_event_log_server_encrypted`: two (public key, store id) pairs that joined to one
+  `publicKey/storeId` string (`("a", "b/c")` and `("a/b", "c")`) shared one store. Upgrading:
+  a pair whose `publicKey/storeId` has exactly one `/` keeps its tables and needs nothing. Any
+  other pair is keyed apart; if its tables from 0.6.5 or earlier hold batches, which another
+  pair may have written, the store does not open (its storage operations die with
+  `LegacyStoreNeedsMigration`) until its owner runs
+  `sql_event_log_server_encrypted.migrate_legacy_store(public_key, store_id)` once, which
+  gives it those tables. Only one pair can claim them (another gets
+  `LegacyStoreMigrationError`). Stores whose public keys hold a `/` (base64 keys often do)
+  need this before they serve again; a store with no 0.6.5 batches opens as before.
+- Event journals (memory and SQL): an imported entry id that is not 16 bytes, or more than a
+  day ahead of the clock (one at the UUID v7 ceiling), is no longer the floor of local ids, so
+  local writes go on after importing one, also after reopening a SQL journal that holds it.
+  They used to fail with `OverflowError` or `IndexError`, as Effect's journals still do.
+- `http.headers.parse_http_date` and `parse_retry_after` return an `Err` for a leap second past
+  the last `datetime` (`Fri, 31 Dec 9999 23:59:60 GMT`); they raised `OverflowError`, so such a
+  `Retry-After` ended `retry_transient` with a defect instead of retrying.
+- `HttpClient.with_rate_limiter` no longer learns a `ratelimit-limit` below 1 from a response:
+  a request waits `window / limit`, so `0.000000001` parked the key for thousands of years,
+  past the hour pyfect allows a peer's time hints.
+- Schema: a union of mutually recursive `TypedDict`s (the members met again while their own
+  fields are derived are suspended) decodes in time linear in the input's depth. A suspended
+  member whose target is made is picked by its discriminator like any other member, where
+  every one used to be tried on every value: 2^depth parses under `errors="all"`, the MCP
+  server's tool-argument decoding. Issues then name only the members the discriminator picks.
+- Process workers: the worker's channel to its parent is no longer inheritable in the worker,
+  so a program the worker starts with `additional_fds` (which spawns without `close_fds`) does
+  not get it.
+- PostgreSQL migrator: a client-key passphrase in `ssl` (libpq's `sslpassword`) reaches
+  `pg_dump` through a service file only the user reads (removed after the dump), no longer on
+  its command line, which other local accounts can read, or in a failed spawn's error.
+- SQL: statements compile in time linear in their segments. The compiler grew the text with
+  `+=` on an attribute, copying it for every segment, so an `and_` / `or_` / `csv` over a
+  long list took quadratic time; an empty `IN` list now reads only the end of the text.
+- Schema: `TemplateLiteral` tries each split point without copying the text on both sides, so
+  a long string that does not match (`"-" * n + "a"` against `${string}-${number}`) fails in
+  linear time.
+- Schema: `format_issue` (the `message` of a `SchemaError`) writes at most
+  `issue.DEFAULT_MAX_FORMATTED_ISSUES` (100) leaves and ends with `... and N more issues`;
+  pass `max_issues=None` for all of them. Every line repeats its whole path, so an
+  `errors="all"` failure of a deep value made a message (failing leaves x depth) long, which
+  the MCP server sent back for invalid tool arguments. Paths are built only for the leaves
+  written.
+- `key_value_store.layer_file_system` escapes upper-case ASCII letters and a trailing `.` in
+  file names (`user:Alice` is `user%3A%41lice`), so keys that differ only in letter case or
+  by a trailing `.` no longer share one file on macOS or Windows file systems. Keys without
+  either keep their file names. Upgrading: when the store opens it renames, once, each file
+  0.6.5 named for a key with an upper-case letter or a trailing `.`, so every entry reads back
+  as it did (`get`, `has`, `keys`, `size`, `remove` agree). Each file goes to the key its name
+  spells, as 0.6.5's `keys` listed it; of a 0.6.5 file and a newer-named one for the same key,
+  the more recently written stays.
+- SQL `PersistedQueue` on MySQL: `offer` fails with a `PersistedQueueError` for an id or queue
+  name longer than its column (1020 bytes of UTF-8), and a duplicate is skipped with
+  `ON DUPLICATE KEY UPDATE` instead of `INSERT IGNORE`. `INSERT IGNORE` cut such an id to the
+  column, so a second id sharing its first 1020 bytes was dropped while `offer` reported it
+  stored. The other stores keep or refuse long ids already.
 
 ## 0.6.5 (2026-11-14)
 

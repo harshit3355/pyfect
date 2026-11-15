@@ -217,6 +217,24 @@ def is_request_id(value: object) -> TypeIs[RequestId]:
     return isinstance(value, str) or (isinstance(value, int) and not isinstance(value, bool))
 
 
+def decode_control(message: Mapping[str, object]) -> Eof | Ack | Interrupt | None:
+    """A client's control message (``Eof``, ``Ack``, ``Interrupt``), or
+    ``None`` for another tag. An ``Ack`` or ``Interrupt`` without a valid
+    ``requestId`` raises ``MalformedMessage``. Every server reads them
+    through this."""
+    match message:
+        case {"_tag": "Eof"}:
+            return EOF
+        case {"_tag": "Ack", "requestId": request_id} if is_request_id(request_id):
+            return Ack(request_id)
+        case {"_tag": "Interrupt", "requestId": request_id} if is_request_id(request_id):
+            return Interrupt(request_id)
+        case {"_tag": "Ack" | "Interrupt" as tag}:
+            raise MalformedMessage(f"a client's {tag} message has no valid requestId")
+        case _:
+            return None
+
+
 _READ: dict[str, tuple[str, ...]] = {
     "Chunk": ("requestId", "values"),
     "Exit": ("requestId", "exit"),
@@ -302,6 +320,7 @@ __all__ = [
     "ResponseExit",
     "ResponseExitEncoded",
     "ServerMessage",
+    "decode_control",
     "decode_from_server",
     "is_request_id",
     "is_terminal_response",

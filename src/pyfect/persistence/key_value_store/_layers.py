@@ -11,11 +11,11 @@ from pyfect._concurrency import for_each
 from pyfect._core import Effect
 from pyfect._js import text_encode
 from pyfect.effect import fail, gen, succeed, sync, try_
-from pyfect.file_system import FileSystem
+from pyfect.file_system import FileInfo, FileSystem, FileSystemService
 from pyfect.layer import Layer
 from pyfect.layer import effect as layer_effect
 from pyfect.layer import sync as layer_sync
-from pyfect.path import Path
+from pyfect.path import Path, PathService
 from pyfect.persistence.key_value_store._store import (
     KeyValueStore,
     KeyValueStoreError,
@@ -76,7 +76,8 @@ def layer_file_system(
     directory: str,
 ) -> Layer[KeyValueStore, PlatformError, FileSystem | Path]:
     """A store keeping each value in a file of ``directory`` (made if
-    missing) named by its percent-encoded key. The keys ``""``, ``"."``
+    missing) named by its percent-encoded key, upper-case letters and a
+    trailing ``.`` escaped too (files 0.6.5 named are renamed on open). The keys ``""``, ``"."``
     and ``".."`` are rejected without touching the file system. ``keys``
     decodes the file names (failing on one that is not percent-encoded
     UTF-8), and ``clear_prefix`` skips such files."""
@@ -86,6 +87,7 @@ def layer_file_system(
         path = yield from Path()
         if not (yield from fs.exists(directory)):
             yield from fs.make_directory(directory, recursive=True)
+        yield from _rename_legacy_files(fs, path, directory)
 
         def with_key_path[A](
             method: str, key: str, f: Callable[[str], Effect[A, KeyValueStoreError]]
@@ -215,16 +217,73 @@ def layer_file_system(
     return layer_effect(KeyValueStore, gen(build))
 
 
-def _file_name(key: str) -> str | None:
-    """``key`` as JavaScript's ``encodeURIComponent`` writes it, or ``None``
-    for a key that names no file of its own (``""``, ``"."``, ``".."``) or
-    holds a lone surrogate (which ``encodeURIComponent`` rejects)."""
-    if key in ("", ".", ".."):
-        return None
+_UPPER = re.compile(r"%[0-9A-F]{2}|[A-Z]")
+"""An upper-case letter, or an escape ``quote`` wrote (kept as is)."""
+_TRAILING_DOT = re.compile(r"\.$")
+
+
+def _escape(match: re.Match[str]) -> str:
+    text = match[0]
+    return text if len(text) == 3 else f"%{ord(text):02X}"
+
+
+def _rename_legacy_files(
+    fs: FileSystemService, path: PathService, directory: str
+) -> Effect[None, PlatformError]:
+    """Gives each file named as 0.6.5 named it (``encodeURIComponent`` of
+    its key, upper-case letters and a trailing ``.`` kept) its current name,
+    once, when the store opens: a file system that ignores letter case
+    would otherwise give one key's legacy file to another key's name. Of a
+    legacy file and one already under the current name, the newer stays."""
+
+    def newer(first: str, second: str) -> Effect[bool, PlatformError]:
+        def compare(a: FileInfo, b: FileInfo) -> bool:
+            return a.mtime is not None and b.mtime is not None and a.mtime > b.mtime
+
+        return fs.stat(first).zip(fs.stat(second)).map(lambda pair: compare(*pair))
+
+    def body():
+        for name in (yield from fs.read_directory(directory)):
+            key = _decode_file_key(name)
+            if key is None or name != _legacy_file_name(key):
+                continue
+            current = _file_name(key)
+            if current is None or current == name:
+                continue
+            source, target = path.join(directory, name), path.join(directory, current)
+            if (yield from fs.exists(target)):
+                if not (yield from newer(source, target)):
+                    yield from fs.remove(source, force=True)
+                    continue
+                yield from fs.remove(target, force=True)
+            yield from fs.rename(source, target).catch_all(
+                lambda cause: succeed(None) if isinstance(cause.reason, NotFound) else fail(cause)
+            )
+
+    return gen(body)
+
+
+def _legacy_file_name(key: str) -> str | None:
+    """``key`` as 0.6.5 named its file (``encodeURIComponent``)."""
     try:
         return urllib.parse.quote(key, safe="-_.!~*'()", errors="strict")
     except UnicodeEncodeError:
         return None
+
+
+def _file_name(key: str) -> str | None:
+    """``key`` as JavaScript's ``encodeURIComponent`` writes it, with every
+    upper-case ASCII letter and a trailing ``.`` escaped too, or ``None`` for
+    a key that names no file of its own (``""``, ``"."``, ``".."``) or holds a
+    lone surrogate (which ``encodeURIComponent`` rejects). The escapes keep
+    keys apart on file systems that ignore letter case (macOS, Windows) or
+    drop a trailing ``.`` (Windows), where Effect's names share one file."""
+    if key in ("", ".", ".."):
+        return None
+    encoded = _legacy_file_name(key)
+    if encoded is None:
+        return None
+    return _TRAILING_DOT.sub(_escape, _UPPER.sub(_escape, encoded))
 
 
 _PERCENT = re.compile(r"%(?![0-9A-Fa-f]{2})")

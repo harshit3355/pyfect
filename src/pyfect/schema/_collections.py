@@ -37,8 +37,13 @@ RD_co = TypeVar("RD_co", covariant=True)
 RE_co = TypeVar("RE_co", covariant=True)
 
 
-_SET_EXPECTED = "items a frozenset keeps apart (True and 1 are one item in Python)"
-_MAP_EXPECTED = "keys a dict keeps apart (True and 1 are one key in Python)"
+_SET_EXPECTED = (
+    "items a frozenset keeps apart (True and 1 are one item in Python, and at most 64 may share"
+    " a hash)"
+)
+_MAP_EXPECTED = (
+    "keys a dict keeps apart (True and 1 are one key in Python, and at most 64 may share a hash)"
+)
 
 
 def _built(

@@ -21,7 +21,7 @@ from typing import Any, Literal, LiteralString, Never, cast
 from pyfect._concurrency import for_each
 from pyfect._core import Effect, Restore, uninterruptible_mask
 from pyfect.clock import Clock, ClockService
-from pyfect.effect import die, gen, succeed
+from pyfect.effect import die, gen, succeed, suspend
 from pyfect.eventlog._conflicts import ConflictGroup, ConflictIndex
 from pyfect.eventlog.event_journal import (
     Compact,
@@ -40,6 +40,7 @@ from pyfect.eventlog.event_journal import (
     advance_sequence,
     entry_id_millis,
     entry_order,
+    latest_entry_id_floor,
     make_entries,
     next_sequence_after,
     warn_if_ahead,
@@ -436,12 +437,19 @@ class _SqlJournal(EventJournalService):
     def _latest_entry_ids(self) -> Effect[list[EntryId], SqlError]:
         # Other processes share the database but not the entry id sequence.
         # Ids in the latest millisecond are few, and comparing them here
-        # avoids ordering id bytes in SQL.
-        return self._sql(
-            "SELECT id FROM {} WHERE timestamp = (SELECT MAX(timestamp) FROM {})",
-            self._t.entries,
-            self._t.entries,
-        ).map(lambda rows: [EntryId(column_bytes(row["id"])) for row in rows])
+        # avoids ordering id bytes in SQL. An id too far ahead for local ids
+        # to follow (an imported one) is not a floor.
+        def latest() -> Effect[list[EntryId], SqlError]:
+            limit = latest_entry_id_floor()
+            return self._sql(
+                "SELECT id FROM {} WHERE timestamp = "
+                "(SELECT MAX(timestamp) FROM {} WHERE timestamp <= {})",
+                self._t.entries,
+                self._t.entries,
+                limit,
+            ).map(lambda rows: [EntryId(column_bytes(row["id"])) for row in rows])
+
+        return suspend(latest)
 
     def _conflicts(self, index: ConflictIndex) -> Effect[list[Entry], SqlError]:
         """The stored entries of the batch's groups, each once, in statements

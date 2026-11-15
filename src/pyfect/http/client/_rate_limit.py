@@ -174,7 +174,10 @@ class _Inspector:
 
     def _limit(self, current: _Limits, headers: Headers, tokens: float) -> float | None:
         value = _number(_header(headers, self._names.limit))
-        if value is not None and value > 0:
+        # A request waits ``window / limit``: below one request per window, a
+        # peer's limit would hold the key for longer than the hour its time
+        # hints may (Effect takes any limit above 0).
+        if value is not None and value >= 1:
             return value
         remaining = self.remaining(headers)
         if remaining is None:

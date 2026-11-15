@@ -229,9 +229,10 @@ def _http_date(text: str) -> datetime | None:
             year += 2000 if year < 70 else 1900
         try:
             day = datetime(year, _MONTHS.index(month_name) + 1, int(match["day"]), tzinfo=UTC)
-        except ValueError:
+            # 9999-12-31 23:59:60 is past datetime.max: invalid, as RFC 9110 reads it.
+            return day + timedelta(hours=hour, minutes=minute, seconds=second)
+        except (ValueError, OverflowError):
             return None
-        return day + timedelta(hours=hour, minutes=minute, seconds=second)
     return None
 
 

@@ -348,19 +348,6 @@ def test_continues_the_local_id_counter_after_a_low_imported_rand_a_in_the_same_
 
 
 @pytest.mark.usefixtures("isolated_ids")
-def test_never_commits_a_local_id_below_an_imported_id_at_the_maximum_timestamp():
-    """EventJournal / never commits a local id below an imported id at the maximum timestamp"""
-    journal = fx.run_blocking(J.make_memory)
-    remote = maximum_entry()
-    fx.run_blocking(import_entry(journal, remote).or_die())
-    # No later id exists, so the write may fail, but it must not commit an
-    # id that sorts before the imported one.
-    fx.run_blocking_exit(_write_local(journal))
-    below = [item for item in fx.run_blocking(journal.entries.or_die()) if item.id < remote.id]
-    assert id_strings(below) == []
-
-
-@pytest.mark.usefixtures("isolated_ids")
 def test_keeps_local_writes_working_after_a_failed_import_of_an_id_at_the_maximum_timestamp():
     """EventJournal / keeps local writes working after a failed import of an id at the maximum timestamp"""  # noqa: E501
     journal = fx.run_blocking(J.make_memory)

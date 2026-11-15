@@ -194,3 +194,25 @@ def test_upgrades_a_table_that_already_has_rows(client: fx.Layer[Any, Any]) -> N
         assert taken == {("old-a", "a"), ("old-b", "b"), ("OLD-A", "new")}
 
     _run(client, body)
+
+
+def test_an_id_longer_than_its_column_fails_instead_of_being_cut(
+    client: fx.Layer[Any, Any],
+) -> None:
+    """Cut to the column, two long ids sharing its first bytes were one: the
+    second offer was dropped while it reported the id stored (MySQL's
+    ``INSERT IGNORE``)."""
+    table = "effect_queue_exact_long_ids"
+    long = "x" * 1100
+
+    def body():
+        yield from _drop(table)
+        queue = yield from _queue(table, "jobs")
+        for suffix in ("a", "b"):
+            failed = yield from queue.offer(suffix, id=long + suffix).flip()
+            assert isinstance(failed, pq.PersistedQueueError)
+        yield from queue.offer("short", id="short")
+        yield from queue.offer("again", id="short")
+        assert (yield from _rows(table)) == 1
+
+    _run(client, body)

@@ -19,6 +19,7 @@ from pyfect import _json_text
 from pyfect import schema as S
 from pyfect._core import Effect
 from pyfect._fiber import Fiber
+from pyfect._peer_keys import PeerKeyDict, PeerKeySet
 from pyfect.ai._mcp import (
     log_levels,
     param_headers,
@@ -311,15 +312,15 @@ class Connection:
     list_change_revision: int = 0
     """The server's newest list change when the client initialized: it gets
     only newer ones."""
-    _listening: set[RequestId] = field(default_factory=set[RequestId])
+    _listening: PeerKeySet[RequestId] = field(default_factory=PeerKeySet[RequestId])
     """The requests that are subscriptions: they end only when cancelled."""
-    _pending: dict[RequestId, Deferred[JsonObject]] = field(
-        default_factory=dict[RequestId, "Deferred[JsonObject]"]
+    _pending: PeerKeyDict[RequestId, Deferred[JsonObject]] = field(
+        default_factory=PeerKeyDict[RequestId, "Deferred[JsonObject]"]
     )
-    _inflight: dict[RequestId, Fiber[Any, Any]] = field(
-        default_factory=dict[RequestId, "Fiber[Any, Any]"]
+    _inflight: PeerKeyDict[RequestId, Fiber[Any, Any]] = field(
+        default_factory=PeerKeyDict[RequestId, "Fiber[Any, Any]"]
     )
-    _cancelled: set[RequestId] = field(default_factory=set[RequestId])
+    _cancelled: PeerKeySet[RequestId] = field(default_factory=PeerKeySet[RequestId])
     """The requests ended without an answer (a subscription that overflowed)."""
     _reverse_ids: itertools.count[int] = field(default_factory=lambda: itertools.count(1))
 

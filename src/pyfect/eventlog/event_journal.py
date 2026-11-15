@@ -125,6 +125,22 @@ def _max_entry_id(ids: Iterable[EntryId]) -> EntryId | None:
     return max(ids, default=None)
 
 
+def _is_floor(entry_id: bytes, now: int) -> bool:
+    """Whether local ids may follow ``entry_id``: a 16-byte id at most a day
+    ahead of ``now``. Ids past that (an imported id at the UUID v7 ceiling)
+    would leave no local ids to make."""
+    return len(entry_id) == 16 and entry_id_millis(entry_id) <= now + _MAX_CLOCK_SKEW_MILLIS
+
+
+def latest_entry_id_floor() -> int:
+    """The latest millisecond of an id local ids may follow, now."""
+    return now_millis() + _MAX_CLOCK_SKEW_MILLIS
+
+
+def _local_floor(ids: Iterable[EntryId], now: int) -> EntryId | None:
+    return _max_entry_id(i for i in ids if _is_floor(i, now))
+
+
 def make_entry_id_unsafe(*, msecs: float | None = None) -> EntryId:
     """A new entry id: the next local id, or with ``msecs`` a random id of
     that millisecond, truncated and clamped to the UUID v7 range (Effect's
@@ -228,7 +244,7 @@ def make_entries(
     ``after`` and every local id so far (Effect's ``makeEntries``)."""
 
     def build() -> list[Entry]:
-        sequence = _sequence_after(_max_entry_id(after))
+        sequence = _sequence_after(_local_floor(after, now_millis()))
         unchecked = S.new(Entry, disable_checks=True)
         return [
             unchecked(
@@ -431,7 +447,7 @@ class _MemoryJournal(EventJournalService):
         self._locks = StoreLocks()
 
     def _commit_latest(self, ids: Iterable[EntryId]) -> None:
-        latest = _max_entry_id(ids)
+        latest = _local_floor(ids, now_millis())
         if latest is not None and (self._latest is None or latest > self._latest):
             self._latest = latest
 
@@ -622,6 +638,7 @@ __all__ = [
     "advance_sequence",
     "entry_id_millis",
     "entry_order",
+    "latest_entry_id_floor",
     "layer_memory",
     "make_entries",
     "make_entry_id_unsafe",

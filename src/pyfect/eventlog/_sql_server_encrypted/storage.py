@@ -10,15 +10,15 @@ from collections.abc import Sequence
 from typing import Any
 
 from pyfect._core import Effect
-from pyfect._js import text_encode
 from pyfect.clock import Clock, now_millis_unsafe
-from pyfect.crypto.digest import Digest, DigestService, sha256
+from pyfect.crypto.digest import Digest, DigestService
 from pyfect.effect import gen, succeed
 from pyfect.eventlog._server_encrypted.audit import hour_of
 from pyfect.eventlog._server_encrypted.models import CompactionOptions, make_compaction_config
 from pyfect.eventlog._server_encrypted.storage import StorageService
 from pyfect.eventlog._sql_server_encrypted.compaction import SqlCompaction
 from pyfect.eventlog._sql_server_encrypted.db import CHUNK, Db, Steps, StoreResources, new_id
+from pyfect.eventlog._sql_server_encrypted.legacy import LegacyStoreNeedsMigration, resolve_scope
 from pyfect.eventlog._sql_server_encrypted.rows import to_batch
 from pyfect.eventlog._sql_server_encrypted.sweeper import Sweeper
 from pyfect.eventlog._sql_server_encrypted.tables import (
@@ -41,10 +41,6 @@ from pyfect.sql.statement import Identifier
 from pyfect.stream import Stream, from_iterable, from_subscription
 from pyfect.stream import die as stream_die
 from pyfect.stream import unwrap as stream_unwrap
-
-
-def _scope_key(public_key: str, store_id: str) -> str:
-    return f"{public_key}/{store_id}"
 
 
 def _ensure_store(db: Db, scope: str, table: Identifier) -> Effect[None, SqlError]:
@@ -111,14 +107,18 @@ def _ensure_store(db: Db, scope: str, table: Identifier) -> Effect[None, SqlErro
     return gen(body)
 
 
+type _Pair = tuple[str, str]
+"""A store's public key and id."""
+
+
 def _make_lookup(db: Db, digest: DigestService):
     # Stores whose tables and row this instance has ensured, so a store
     # reopened after idling skips the DDL.
     ensured: set[str] = set()
 
-    def lookup(scope_key: str) -> Effect[StoreResources, SqlError, Scope]:
+    def lookup(pair: _Pair) -> Effect[StoreResources, SqlError | LegacyStoreNeedsMigration, Scope]:
         def body():
-            scope = (yield from digest.digest_hex(sha256, text_encode(scope_key)))[:16]
+            scope = yield from resolve_scope(db, digest, *pair)
             tables = db.scope_tables(scope)
             if scope not in ensured:
                 yield from create_scope_tables(db.sql, f"{db.prefix}_{scope}")
@@ -173,7 +173,10 @@ class _SqlStorage(StorageService):
     first_sequence = 1
 
     def __init__(
-        self, db: Db, remote_id: RemoteId, resources: RcMap[str, StoreResources, SqlError]
+        self,
+        db: Db,
+        remote_id: RemoteId,
+        resources: RcMap[_Pair, StoreResources, SqlError | LegacyStoreNeedsMigration],
     ) -> None:
         self._db = db
         self._remote_id = remote_id
@@ -182,7 +185,7 @@ class _SqlStorage(StorageService):
         self.compaction = SqlCompaction(db, self._get_store)
 
     def _get_store(self, public_key: str, store_id: StoreId) -> Effect[StoreResources, Any, Scope]:
-        return self._resources.get(_scope_key(public_key, store_id)).or_die()
+        return self._resources.get((public_key, store_id)).or_die()
 
     @property
     def get_id(self) -> Effect[RemoteId]:
@@ -277,7 +280,7 @@ class _SqlStorage(StorageService):
             return stored
 
         def body():
-            store = yield from self._resources.get(_scope_key(public_key, store_id))
+            store = yield from self._resources.get((public_key, store_id))
             now = yield from Clock().map(now_millis_unsafe)
             return (
                 yield from store.semaphore.with_permits(
@@ -293,7 +296,7 @@ class _SqlStorage(StorageService):
         sql = self._db.sql
 
         def body():
-            store = yield from self._resources.get(_scope_key(public_key, store_id))
+            store = yield from self._resources.get((public_key, store_id))
             acks: list[WriteAck] = []
             for chunk in itertools.batched(entry_ids, CHUNK, strict=False):
                 rows = yield from sql(
@@ -322,7 +325,7 @@ class _SqlStorage(StorageService):
         sql = db.sql
 
         def body():
-            store = yield from self._resources.get(_scope_key(public_key, store_id))
+            store = yield from self._resources.get((public_key, store_id))
             tables = store.tables
             subscription = yield from store.pubsub.subscribe()
             live = from_subscription(subscription)
@@ -366,7 +369,7 @@ class _SqlStorage(StorageService):
         db = self._db
 
         def body():
-            store = yield from self._resources.get(_scope_key(public_key, store_id))
+            store = yield from self._resources.get((public_key, store_id))
             row = yield from db.select_store(store.scope)
             last_sequence = yield from db.max_last_sequence(store.tables.table)
             head = max(row.next_sequence - 1, last_sequence)
