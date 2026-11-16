@@ -128,18 +128,26 @@ class MessageCounts:
     unprocessed: int
 
 
+type SessionFault = Literal["blackhole", "fail"]
+
+
 class _LockSession:
-    def __init__(self) -> None:
-        self.fault: Literal["blackhole", "fail"] | None = None
+    def __init__(self, fault: SessionFault | None) -> None:
+        self.fault: SessionFault | None = fault
+        # What each lock statement met: None when it ran, else the fault.
+        self.statements: list[LockFaultMode | None] = []
 
 
 _UNLOCK_ALL = ("pg_advisory_unlock_all", "RELEASE_ALL_LOCKS")
+# The statements that set a lock session up (PostgreSQL, MySQL).
+_SESSION_SETUP = ("idle_session_timeout", "wait_timeout")
 
 
 class _FaultyConnection:
     """A reserved connection whose statements obey the current fault, but
     for the release of every advisory lock (so a closing scope still drops
-    the database's locks)."""
+    the database's locks) and, under a session fault, the session's setup
+    (so a rebuild connects, then its lock statements meet the fault)."""
 
     def __init__(
         self, inner: SqlConnection, controller: _LockFaultController, session: _LockSession
@@ -152,7 +160,11 @@ class _FaultyConnection:
         def start() -> fx.Effect[A, SqlError]:
             if any(marker in sql for marker in _UNLOCK_ALL):
                 return effect
-            mode = self._session.fault or self._controller.persistent
+            setup = any(marker in sql for marker in _SESSION_SETUP)
+            fault = None if setup else self._session.fault
+            mode = fault or self._controller.persistent
+            if not setup:
+                self._session.statements.append(mode)
             if mode == "fail":
                 cause = RuntimeError("lock connection lost")
                 return fx.fail(SqlError(reason=SqlConnectionError(cause=cause)))
@@ -184,18 +196,27 @@ class _FaultyConnection:
 class _LockFaultController:
     """Wraps the ``reserve`` of a client: the runner storage's lock
     connection (PostgreSQL) can be blackholed, stuck, failed, or kept from
-    being released (Effect's ``makeLockFaultController``)."""
+    being released (Effect's ``makeLockFaultController``).
+
+    pyfect-only: a blackhole or failure also holds every connection reserved
+    after it, until ``clear``. Effect sets it on the current connection only,
+    and its tests set it again on each poll, so a connection the runner
+    rebuilds in between works: the runner takes its shards back and the
+    poll can miss the state it waits for."""
 
     def __init__(self, sql: SqlClientService) -> None:
         self.release_gate = Latch(True)
         self.persistent: Literal["stuck", "hangRelease"] | None = None
+        self.session_fault: SessionFault | None = None
         self.current: _LockSession | None = None
+        self.sessions: list[_LockSession] = []
         client = sql.without_transforms()
 
         @fx.gen
         def reserve():
-            session = _LockSession()
+            session = _LockSession(self.session_fault)
             self.current = session
+            self.sessions.append(session)
             scope = yield from Scope()
 
             def hang(_: Exit[Any, Any]) -> fx.Effect[None]:
@@ -217,6 +238,7 @@ class _LockFaultController:
         def apply() -> None:
             if mode == "clear":
                 self.persistent = None
+                self.session_fault = None
                 if self.current is not None:
                     self.current.fault = None
                 self.release_gate.open_unsafe()
@@ -225,9 +247,11 @@ class _LockFaultController:
                     raise RuntimeError("Runner has no reserved lock connection")
                 self.persistent = None
                 self.release_gate.open_unsafe()
+                self.session_fault = mode
                 self.current.fault = mode
             else:
                 self.persistent = mode
+                self.session_fault = None
                 if self.current is not None:
                     self.current.fault = None
                 if mode == "hangRelease":
