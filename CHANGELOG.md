@@ -77,6 +77,9 @@
   long `@testing.effect` error for one, and an `@fx.fn` body that is not a generator.
 - Schedules, Durations: how to find every bare-number duration with
   `PYFECT_WARN_BARE_DURATIONS` and fail on them under pytest.
+- Testing: the in-memory HTTP client takes absolute URLs (`http://localhost/...`); a relative
+  one fails with `InvalidUrlError`, as with Effect's `HttpClient.make`, unlike the
+  `layer_test` client, and how to prepend the host.
 
 ## 0.6.6 (2026-11-15)
 
