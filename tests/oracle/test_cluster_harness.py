@@ -159,3 +159,48 @@ def test_wait_until_fails_at_its_deadline_on_a_condition_that_never_returns(
         assert elapsed < 5
 
     yield from fx.scoped(fx.gen(body))
+
+
+# Statements that keep their connection busy for well over a second: a whole
+# shard lock refresh interval (500 ms) and then a refresh's 500 ms timeout.
+_SLOW_SQLITE = (
+    "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n WHERE x < 30000000) "
+    "SELECT count(*) AS n FROM n"
+)
+_SLOW_PG = "SELECT pg_sleep(1.5)"
+
+
+@testing.live(timeout="1 minute")
+def test_a_slow_statement_on_the_cluster_database_costs_no_runner_its_shards(
+    cluster_db: ClusterDatabase,
+):
+    """A slow statement of one member holds up no runner's shard lock
+    refresh past its 500 ms, so no runner drops its shards (on one shared
+    SQLite connection, every runner did at once: the flake of "preserves a
+    safe interrupt during a persisted activity handoff")."""
+
+    def body() -> Body:
+        cluster = yield from make(cluster_db, entities=standard_entities)
+        yield from cluster.start(3)
+        stable = yield from cluster.wait_for_stable_assignments()
+        changed: list[dict[str, list[str]]] = []
+
+        def sample() -> None:
+            current = cluster.assignment_map()
+            if current != stable:
+                changed.append(current)
+
+        sampler = yield from (
+            fx.sync(sample).and_then(fx.sleep("10 millis")).forever().fork(start_immediately=True)
+        )
+        clock = yield from fx.clock.Clock()
+        started = clock.monotonic_unsafe()
+        yield from cluster.sql(_SLOW_SQLITE if cluster_db.backend == "sqlite" else _SLOW_PG)
+        elapsed = clock.monotonic_unsafe() - started
+        # Give a refresh held up by the statement time to time out.
+        yield from fx.sleep("600 millis")
+        yield from sampler.interrupt()
+        assert elapsed >= 1, f"The slow statement took only {elapsed:.2f} s"
+        assert changed == []
+
+    yield from fx.scoped(fx.gen(body))

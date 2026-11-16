@@ -569,6 +569,7 @@ class Cluster:
     entities: RunnerEntities
     sql: SqlClientService
     database: Context[Any]
+    make_database: DatabaseMaker
     shared: Context[Any]
     parent: CloseableScope
     client: Context[Any]
@@ -613,7 +614,13 @@ class Cluster:
             server = server_context.get_unsafe(SocketServer)
             assert isinstance(server.address, InetAddressV4)
             address = runner_address.make("127.0.0.1", server.address.port)
-            lock_fault = _LockFaultController(self.database.get_unsafe(SqlClient))
+            # A runner holds its shard locks on a database client of its own, as a
+            # runner process does (Effect's harness gives each a connection of a
+            # 32-connection pool). Sharing the cluster's one SQLite connection, a
+            # slow statement of another member held every runner's lock refresh
+            # past its 500 ms, and every shard of the cluster was dropped at once.
+            runner_sql = yield from self.make_database().pipe(fx.provide_service(Scope, scope))
+            lock_fault = _LockFaultController(runner_sql)
             runner_database = self.database.add(SqlClient, lock_fault.client)
             raw_storage = yield from self._runner_storage(scope, config, runner_database)
             yield from scope.add_finalizer(lambda _: lock_fault.set("clear"))
@@ -1020,6 +1027,7 @@ def make(
             entities=resolved,
             sql=sql,
             database=database_context,
+            make_database=database.make,
             shared=shared,
             parent=parent,
             client=client,
