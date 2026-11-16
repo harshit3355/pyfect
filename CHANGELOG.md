@@ -80,6 +80,11 @@
 - Testing: the in-memory HTTP client takes absolute URLs (`http://localhost/...`); a relative
   one fails with `InvalidUrlError`, as with Effect's `HttpClient.make`, unlike the
   `layer_test` client, and how to prepend the host.
+- Installation: the pip commands make the virtual environment with `python3.13`, since a
+  plain `python3` can be older (macOS ships 3.9), and the page shows the "No matching
+  distribution found" error pip gives there. The uv commands start with
+  `uv init --python 3.14`, which keeps uv off the free-threaded 3.14t, where some libraries
+  (`psycopg[binary]`) publish no wheels.
 
 ## 0.6.6 (2026-11-15)
 

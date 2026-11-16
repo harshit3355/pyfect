@@ -214,12 +214,13 @@ pyfect needs Python 3.13 or later; its one dependency is `typing-extensions`. In
 project).
 
 ```sh
-uv init app && cd app      # a new project; skip in one that has a [project] table
+uv init --python 3.14 app && cd app   # a new project; skip in one that has a [project] table
 uv add pyfect-dev
 uv add --dev pyright
 ```
 
-With pip: `pip install pyfect-dev pyright`.
+With pip, in a virtual environment of Python 3.13 or later (`python3.13 -m venv .venv`): `pip install
+pyfect-dev pyright`. On an older Python, pip says only "No matching distribution found".
 
 Optional extras: `otel` (OpenTelemetry), `hypothesis`, `pydantic`, `msgspec`, `httpx` (the
 HTTP client backend), `websockets` (WebSocket clients and servers), `server` (the uvicorn
