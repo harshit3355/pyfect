@@ -265,37 +265,6 @@ class _Yielded:
         self.decided = decided
 
 
-class _CancelIfFailed(Frame):
-    """Below a wake-up (``_Retry``): if the fiber fails before the wake-up
-    decides anything (an interrupt that reached it first), run the wait's
-    canceler, uninterruptibly, so a parked entry it left is taken back."""
-
-    __slots__ = ("canceler",)
-
-    def __init__(self, canceler: Effect[Any, Any, Any]) -> None:
-        self.canceler = canceler
-
-    def _on_failure(self, cause: Cause[Any], fiber: Fiber[Any, Any]) -> Step:
-        fiber._push(_RestoreInterruptible(fiber._interruptible))
-        fiber._interruptible = False  # pragma: no mutate, falsy either way
-        return _run_finalizer(self.canceler, Failure(cause))
-
-
-class _ReturnExit(Frame):
-    """Finish with a stored exit, ignoring whatever ran above it."""
-
-    __slots__ = ("exit",)
-
-    def __init__(self, ex: Exit[Any, Any]) -> None:
-        self.exit = ex
-
-    def _on_success(self, value: Any, fiber: Fiber[Any, Any]) -> Step:
-        return self.exit
-
-    def _on_failure(self, cause: Cause[Any], fiber: Fiber[Any, Any]) -> Step:
-        return self.exit
-
-
 class Fiber(Generic[A_co, E_co]):
     """A running effect. Obtain one with ``eff.fork()``."""
 
@@ -778,7 +747,9 @@ class Fiber(Generic[A_co, E_co]):
                     nxt = self._finish(cur)
                     if nxt is None:
                         return
-                    cur = nxt
+                    # Effect evaluates the children's ending in a run loop of
+                    # its own, counting ops from the first again.
+                    ops, self._resumed_op, cur = 0, 0, nxt
                     continue
                 # A ``succeed_with`` counts; every ``_INLINE_STEPS``-th
                 # goes through the loop as one more op.
@@ -954,10 +925,8 @@ class Fiber(Generic[A_co, E_co]):
         elif self._stack_frame is not None and isinstance(ex, Failure):
             ex = self._in_frame(ex, self._stack_frame)
         if self._children:
-            children = list(self._children)
             self._interruptible = False  # pragma: no mutate, falsy either way
-            self._push(_ReturnExit(ex))
-            return interrupt_all(children, self.id, self._interruptor_annotations())
+            return _end_children(list(self._children), ex, self._interruptor_annotations())
         self._exit = ex
         if self._runtime_metrics is not None:
             self._runtime_metrics.record_fiber_end(self._ctx, ex)
@@ -1062,11 +1031,12 @@ class Fiber(Generic[A_co, E_co]):
         if self._waiting is wait:
             self._waiting = None
             if canceler is not None:
-                # Effect keeps the canceler's frame under every wait: an
-                # interrupt the wait resumes with runs it too. Below a
-                # wake-up it also runs on any failure before the wake-up
-                # decides.
-                self._push(_CancelIfFailed(canceler) if wait.woken else _AsyncFinalizer(canceler))
+                # Effect keeps the canceler's frame under every wait, a
+                # wake-up's too: a cause with interrupts runs it (an
+                # interrupt that reached the fiber before the wake-up
+                # decided, or one the wait resumed with); any other failure,
+                # a deferred's stored ``fail`` among them, is one op on.
+                self._push(_AsyncFinalizer(canceler))
             self._evaluate(effect)
         deferred, self._interrupts_after_resume = self._interrupts_after_resume, []
         for by, interruptor in deferred:
@@ -1384,6 +1354,33 @@ def root_fiber(scheduler: Scheduler, context: Context) -> Fiber[Any, Any]:
     """A fiber with no parent, running on ``scheduler`` unless an effect
     provides another ``CurrentScheduler``."""
     return Fiber(scheduler, context, None)
+
+
+def _end_children(
+    children: list[Fiber[Any, Any]], ex: Exit[Any, Any], annotations: Context | None
+) -> Effect[Any, Any, Any]:
+    """A fiber's last steps once its own effect is done, as Effect's
+    ``flatMap(fiberInterruptAll(children), () => exit)``, op for op: interrupt
+    every child, wait for all, then end with ``ex``."""
+
+    def wait(resume: Callable[[Effect[Any, Any, Any]], None]) -> None:
+        remaining = len(children)
+
+        def observer(_: Exit[Any, Any]) -> None:
+            nonlocal remaining
+            remaining -= 1
+            if remaining == 0:
+                resume(_Succeed(None))
+
+        for f in children:
+            f.add_observer_unsafe(observer)
+
+    def interrupt(parent: Fiber[Any, Any]) -> Effect[None]:
+        for f in children:
+            f.interrupt_as_unsafe(parent.id, annotations)
+        return _Callback(wait).as_void()
+
+    return _WithFiber(interrupt).flat_map(lambda _: _FromExit(ex))
 
 
 def interrupt_all(

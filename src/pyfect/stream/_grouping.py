@@ -55,7 +55,7 @@ def from_queue_shutdown_on_end(queue: Queue[Any, Any]) -> AnyStream_:
     shuts the queue down when it stops."""
 
     def transform(_upstream: object, scope: CloseableScope) -> AnyEffect:
-        take = queue.take_all().map(tuple)
+        take = queue._take_chunk()
         return scope.add_finalizer(lambda _: queue.shutdown()).as_(take)
 
     built: channel.Channel[Any, Any, Any, Any, Any, Any, Any] = channel.from_transform(transform)
@@ -141,7 +141,7 @@ def _group_by(
                 return out.fail_cause(cause)
 
             yield fork_in(run.catch_cause(stop), scope)
-            return out.take_all().map(tuple)
+            return out._take_chunk()
 
         return _Gen(body)
 

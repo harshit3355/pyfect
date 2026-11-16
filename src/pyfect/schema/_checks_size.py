@@ -15,7 +15,7 @@ from collections.abc import Callable, Mapping, Sequence, Sized
 from typing import Any
 
 from pyfect._equal import dedupe
-from pyfect._peer_keys import HashFlood
+from pyfect._peer_keys import SHARED_HASH_LIMIT, HashFlood
 from pyfect.exit import Success
 from pyfect.schema._options import ParseOptions
 from pyfect.schema._schema import Top
@@ -257,18 +257,20 @@ def is_property_names(key_schema: Top, /, **annotations: object) -> Filter[Mappi
     )
 
 
-def _all_unique(items: Sequence[object]) -> bool:
+def _all_unique(items: Sequence[object], what: str) -> bool | str:
+    """Whether no two items are equal, or why distinct items were refused:
+    too many share a hash (as ``FrozenSet`` says)."""
     try:
         return len(dedupe(items)) == len(items)
     except HashFlood:
-        return False
+        return f"Expected an array with unique {what} ({SHARED_HASH_LIMIT})"
 
 
 def is_unique(**annotations: object) -> Filter[Sequence[object]]:
     """A sequence with no two items ``Equal.equals`` calls equal (``True``
     is not ``1``, NaN is NaN)."""
     return filter_of(
-        _all_unique,
+        lambda items: _all_unique(items, "items"),
         {
             "expected": "an array with unique items",
             "representation": {"id": "effect/schema/isUnique", "payload": None},
@@ -280,7 +282,7 @@ def is_unique(**annotations: object) -> Filter[Sequence[object]]:
 def is_unique_key(**annotations: object) -> Filter[Sequence[tuple[object, object]]]:
     """A sequence of pairs with no two equal keys."""
     return filter_of(
-        lambda pairs: _all_unique([key for key, _ in pairs]),
+        lambda pairs: _all_unique([key for key, _ in pairs], "keys"),
         {
             "expected": "an array with unique keys",
             "representation": {"id": "effect/schema/isUniqueKey", "payload": None},

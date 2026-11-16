@@ -40,6 +40,7 @@ from pyfect.eventlog._server_encrypted.models import (
     make_compaction_config,
 )
 from pyfect.eventlog._server_encrypted.storage import Storage, StorageService
+from pyfect.eventlog._store_unavailable import protocol_error
 from pyfect.eventlog.event_journal import StoreId
 from pyfect.eventlog.event_log_encryption import EncryptedBatch, EncryptedRemoteBatch
 from pyfect.eventlog.event_log_message import (
@@ -193,8 +194,13 @@ def _handlers(
                     entry_ids=entry_ids,
                     write=write,
                 ).catch_cause(
-                    lambda _: fail(
-                        _error("InternalServerError", "Persistence failure", request.public_key)
+                    lambda cause: fail(
+                        protocol_error(
+                            "WriteEntries",
+                            request.public_key,
+                            request.store_id,
+                            "Persistence failure",
+                        )(cause)
                     )
                 )
             )

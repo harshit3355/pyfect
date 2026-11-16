@@ -22,7 +22,7 @@ def _frame_class_names() -> set[str]:
 
 def test_the_frame_scan_sees_primitives_in_every_module():
     names = _frame_class_names()
-    assert {"_Succeed", "_MatchCause", "_RestoreContext", "ServiceEffect"} <= names
+    assert {"_Succeed", "_MatchCause", "_RestoreInterruptible", "ServiceEffect"} <= names
 
 
 def test_the_fiber_loop_names_no_primitive():

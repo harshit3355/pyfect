@@ -97,7 +97,7 @@ def callback_array(
     """``callback``, writing every item waiting in the queue at once."""
     channel: Source[Any, Any, Any] = from_transform(
         lambda _upstream, scope: _async_queue(scope, f, buffer_size, strategy).map(
-            lambda queue: queue.take_all().map(tuple)
+            lambda queue: queue._take_chunk()
         )
     )
     return channel

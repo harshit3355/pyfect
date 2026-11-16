@@ -31,19 +31,27 @@ def test_the_corpus_runs_out_of_budget():
     assert len(small) * 2 > len(_CORPUS), "add cases (--write)"
 
 
-def _ops(value: program.Json) -> set[str]:
-    if isinstance(value, list):
-        return set[str]().union(*(_ops(item) for item in value))
-    if isinstance(value, dict):
-        ops = {str(value["op"])} if "op" in value else set[str]()
-        return ops.union(*(_ops(item) for item in value.values()))
-    return set()
-
-
 def test_the_corpus_uses_every_node():
     """A node added to the language is compared with Effect in every run."""
-    used = _ops([program.to_json(expr) for (expr, _), _ in _CORPUS])
+    used = generate.features([program.to_json(expr) for (expr, _), _ in _CORPUS])
     assert set(program.NODES) - used == set(), "regenerate corpus.json (--write)"
+
+
+def test_the_corpus_runs_every_node_and_mode_at_every_swept_budget():
+    """An op count one off from Effect's shows at the one budget where that op is the
+    last before a yield, which fresh programs at random budgets hit by luck: every node,
+    and every value of a field choosing how one runs (``generate.MODES``, such as a
+    ``FlatMapStream``'s concurrency), runs in a probed program (generate.probe) at each
+    of ``SWEEP_BUDGETS``."""
+    swept: dict[str, set[int]] = {name: set() for name in generate.FEATURES}
+    for (expr, budget), _ in _CORPUS:
+        for name in generate.features(program.to_json(expr)):
+            swept[name].add(budget)
+    wanted = set(generate.SWEEP_BUDGETS)
+    missing = {
+        name: sorted(wanted - budgets) for name, budgets in swept.items() if wanted - budgets
+    }
+    assert missing == {}, "add the sweep to corpus.json (--sweep)"
 
 
 def test_the_effect_interpreter_handles_every_node():

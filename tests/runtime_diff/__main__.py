@@ -6,6 +6,7 @@
     python -m runtime_diff --survey 2000 [--seed N]  # every difference in a batch, smallest first
     python -m runtime_diff --write 300 [--seed N]    # add cases and Effect's answers
     python -m runtime_diff --add CASES.json          # add these cases (a JSON list) to it
+    python -m runtime_diff --sweep                   # add probed programs using every node, swept
     python -m runtime_diff --refresh                 # ask Node again for every corpus case
 
 ``--write`` and ``--add`` keep the corpus' cases and add new ones;
@@ -22,9 +23,9 @@ from pathlib import Path
 
 from hypothesis import HealthCheck, Phase, given, seed, settings
 
-from .generate import cases
+from .generate import SWEEP_BUDGETS, SWEEP_TIMES, cases, covering, probe, programs
 from .oracle import EffectOracle, case_from_json, case_json, difference, read_corpus, write_corpus
-from .program import Case, Json
+from .program import Case, Expr, Json, to_json
 
 
 def _settings(count: int, *, shrink: bool) -> settings:
@@ -77,6 +78,25 @@ def survey(count: int, at: int, max_leaves: int) -> int:
     return 1 if found else 0
 
 
+def sweep() -> list[Case]:
+    """Small programs from a fixed seed, each node used by ``SWEEP_TIMES`` of them, each probed
+    (generate.probe) at every budget in ``SWEEP_BUDGETS``."""
+    found: dict[str, Expr] = {}
+
+    @seed(0)
+    @_settings(3000, shrink=False)
+    @given(programs(4))
+    def collect(program: Expr) -> None:
+        found.setdefault(json.dumps(to_json(program)), program)
+
+    collect()
+    return [
+        (probe(p), budget)
+        for p in covering(list(found.values()), SWEEP_TIMES)
+        for budget in SWEEP_BUDGETS
+    ]
+
+
 def write(new: list[Case], *, refresh: bool) -> None:
     """Add ``new`` cases Effect answers to the corpus, asking again for the
     kept ones when ``refresh``."""
@@ -99,10 +119,14 @@ def main() -> int:
     mode.add_argument("--write", type=int, metavar="N")
     mode.add_argument("--add", type=Path, metavar="CASES.json")
     mode.add_argument("--refresh", action="store_true")
+    mode.add_argument("--sweep", action="store_true")
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--max-leaves", type=int, default=12)
     args = parser.parse_args()
     at: int = random.randrange(2**32) if args.seed is None else args.seed
+    if args.sweep:
+        write(sweep(), refresh=False)
+        return 0
     if args.add is None and not args.refresh:
         print(f"seed {at}", file=sys.stderr)
     if args.fresh is not None:

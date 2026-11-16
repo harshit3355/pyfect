@@ -250,10 +250,14 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         with self._lock:
             match self._state:
                 case st.Open(takers=takers, offers=offers, awaiters=awaiters):
+                    # As Effect's ``failCauseUnsafe``: with nothing left to take
+                    # the queue ends now, waking its takers, and schedules nothing.
+                    if not self._items and not offers:
+                        self._finish(cause)
+                        return True
                     self._state = st.Closing(takers, offers, awaiters, cause)
                     # A batch take waiting for its minimum can now drain the rest.
                     takers.notify_ready_soon(self._waker)
-                    self._finish_if_drained()
                     return True
                 case st.Closing() | st.Done():
                     return False
@@ -334,15 +338,20 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
         its capacity, so it waits for at most that many. A count of 0 or less
         takes nothing and does not wait (but still fails on a finished
         queue)."""
-        return self._take_between(minimum, maximum)
+        return self._take_between(minimum, maximum, list)
 
     def take_n(self, n: int) -> Effect[list[A], E]:
         """``take_between(n, n)``."""
-        return self._take_between(n, n)
+        return self._take_between(n, n, list)
 
     def take_all(self) -> Effect[list[A], E]:
         """Wait for at least one item, then take everything."""
-        return self._take_between(1, None)
+        return self._take_between(1, None, list)
+
+    def _take_chunk(self) -> Effect[tuple[A, ...], E]:
+        """``take_all`` as a stream chunk, in the same op: Effect's channels
+        hand ``Queue.takeAll`` on as it is, with no conversion step."""
+        return self._take_between(1, None, tuple)
 
     def poll(self) -> Effect[Option[A]]:
         """An item if one is there now; ``None`` if not, or if the queue is
@@ -622,33 +631,42 @@ class Queue[A, E = Never](Enqueue[A, E], Dequeue[A, E]):
             case _:
                 return False
 
-    def _take_between(self, minimum: int, maximum: int | None) -> Effect[list[A], E]:
+    def _take_between[T](
+        self, minimum: int, maximum: int | None, collect: Callable[[list[A]], T]
+    ) -> Effect[T, E]:
         """``maximum=None`` takes every buffered item. The items are taken in
-        the taking fiber's own step, so none is handed to a parked fiber."""
-        take: Effect[list[A], E] = _SuspendTake(
-            partial(self._take_between_attempt, minimum, maximum)
+        the taking fiber's own step, so none is handed to a parked fiber;
+        ``collect`` makes the result in that step too."""
+        take: Effect[T, E] = _SuspendTake(
+            partial(self._take_between_attempt, minimum, maximum, collect)
         )
         return take
 
-    def _take_between_attempt(self, minimum: int, maximum: int | None) -> Effect[list[A], E]:
+    def _take_between_attempt[T](
+        self, minimum: int, maximum: int | None, collect: Callable[[list[A]], T]
+    ) -> Effect[T, E]:
         with self._lock:
             match self._state:
                 case st.Done(cause=cause):
                     return _FailCause(cause)
                 case st.Open(offers=offers) | st.Closing(offers=offers):
                     if minimum <= 0 or (maximum is not None and maximum <= 0):
-                        return _Succeed([])
+                        return _Succeed(collect([]))
                     if not self._can_take(minimum):
-                        return self._wait_then(minimum, self._take_between(minimum, maximum))
+                        return self._wait_then(
+                            minimum, self._take_between(minimum, maximum, collect)
+                        )
                     if self._items:
                         items = self._take_buffered(maximum or len(self._items))
                     else:
                         taken = st.take_offer(offers, self._lock, self._wake_offer)
                         if taken is None:
-                            return self._wait_then(minimum, self._take_between(minimum, maximum))
+                            return self._wait_then(
+                                minimum, self._take_between(minimum, maximum, collect)
+                            )
                         items = [taken]
                     self._release()
-                    return _Succeed(items)
+                    return _Succeed(collect(items))
 
     def _wait_then[T](self, minimum: int, retry: Effect[T, E]) -> Effect[T, E]:
         """Park until a take of ``minimum`` items can complete (or the queue

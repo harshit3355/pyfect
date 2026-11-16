@@ -28,6 +28,7 @@ from pyfect.exit import interrupt as interrupted
 from pyfect.latch import Latch
 from pyfect.pull import done_exit_from_cause, filter_done, is_done_cause
 from pyfect.queue import Queue, Strategy
+from pyfect.queue._queue import _made
 from pyfect.result import Ok
 from pyfect.scope import CloseableScope, fork_in
 from pyfect.semaphore import Semaphore
@@ -75,88 +76,92 @@ def merge_all(
     def build(
         upstream: AnyPull, scope: CloseableScope, forked: CloseableScope
     ) -> Effect[AnyPull, Any, Any]:
-        permits = None if switch else Semaphore(n)
-        done_latch = Latch(open=True)
-        fibers: dict[Fiber[Any, Any], CloseableScope] = {}
-        queue: Queue[Any, Any] = Queue(buffer_size)
+        # Effect's generator, op for op: the latch and the queue are made as
+        # ops, the queue's shutdown added to the forked scope, the loop forked,
+        # and the queue's take returned.
+        def body() -> Generator[Effect[Any, Any, Any], Any, AnyPull]:
+            permits = None if switch else Semaphore(n)
+            done_latch: Latch = yield Latch.make(open=True)
+            fibers: dict[Fiber[Any, Any], CloseableScope] = {}
+            queue: Queue[Any, Any] = yield Queue[Any, Any].bounded(buffer_size)
+            yield _Suspend(lambda: forked._add_finalizer_exit(lambda _: queue.shutdown()))
+            pull: AnyPull = yield channels._transform(upstream, scope)
 
-        def start(
-            channel: AnyChannel,
-        ) -> tuple[
-            CloseableScope,
-            Callable[[AnyPull], Effect[Fiber[Any, Any], Any, Any]],
-            list[Fiber[Any, Any]],
-        ]:
-            child_scope = forked.fork_unsafe()
-            fiber_box: list[Fiber[Any, Any]] = []
+            def start(
+                channel: AnyChannel,
+            ) -> tuple[
+                CloseableScope,
+                Callable[[AnyPull], Effect[Fiber[Any, Any], Any, Any]],
+                list[Fiber[Any, Any]],
+            ]:
+                child_scope = forked.fork_unsafe()
+                fiber_box: list[Fiber[Any, Any]] = []
 
-            def finished(cause: Any) -> Effect[None]:
-                return _Gen(
-                    lambda: _worker_ended(
-                        cause,
-                        child_scope=child_scope,
-                        fiber_box=fiber_box,
-                        fibers=fibers,
-                        queue=queue,
-                        permits=permits,
-                        done_latch=done_latch,
+                def finished(cause: Any) -> Effect[None]:
+                    return _Gen(
+                        lambda: _worker_ended(
+                            cause,
+                            child_scope=child_scope,
+                            fiber_box=fiber_box,
+                            fibers=fibers,
+                            queue=queue,
+                            permits=permits,
+                            done_latch=done_latch,
+                        )
                     )
-                )
 
-            def worker(child_pull: AnyPull) -> Effect[Fiber[Any, Any], Any, Any]:
-                return (
-                    child_pull.tap(lambda _: yield_now())
-                    .flat_map(queue.offer)
-                    .forever(disable_yield=True)
-                    .on_error(finished)
-                    .fork()
-                )
+                def worker(child_pull: AnyPull) -> Effect[Fiber[Any, Any], Any, Any]:
+                    return (
+                        child_pull.tap(lambda _: yield_now())
+                        .flat_map(queue.offer)
+                        .forever(disable_yield=True)
+                        .on_error(finished)
+                        .fork()
+                    )
 
-            return child_scope, worker, fiber_box
+                return child_scope, worker, fiber_box
 
-        def stopped(cause: Any) -> Effect[bool]:
-            if isinstance(filter_done(cause), Ok):
-                return done_latch.when_open(queue.fail_cause(cause))
-            return queue.fail_cause(cause)
+            def stopped(cause: Any) -> Effect[bool]:
+                if isinstance(filter_done(cause), Ok):
+                    return done_latch.when_open(queue.fail_cause(cause))
+                return queue.fail_cause(cause)
 
-        def merging(pull: AnyPull) -> Generator[Effect[Any, Any, Any], Any]:
-            # Effect's loop, one generator, op for op.
-            while True:
-                pull_fiber: Fiber[Any, Any] | None = None
-                if permits is not None:
-                    if len(fibers) < n:
-                        yield from permits.take(1)
-                    else:
-                        pull_fiber = yield from pull.fork()
-                        yield from race_first(permits.take(1), pull_fiber.join().and_then(never))
-                channel: AnyChannel = (
-                    (yield from pull) if pull_fiber is None else (yield from pull_fiber.join())
-                )
-                child_scope, worker, fiber_box = start(channel)
-                child_pull: AnyPull = yield from channel._transform(upstream, child_scope)
-                while len(fibers) >= n:
-                    fiber, fiber_scope = next(iter(fibers.items()))
-                    del fibers[fiber]
-                    if not fibers:
-                        yield from done_latch.open()
-                    yield from fiber.interrupt()
-                    # A worker interrupted before it starts never closes its own
-                    # scope; failures of replaced workers' finalizers are dropped.
-                    yield from fiber_scope.close(interrupted()).ignore_cause()
-                fiber = yield from worker(child_pull)
-                fiber_box.append(fiber)
-                done_latch.close_unsafe()
-                fibers[fiber] = child_scope
+            def merging(pull: AnyPull) -> Generator[Effect[Any, Any, Any], Any]:
+                # Effect's loop, one generator, op for op.
+                while True:
+                    pull_fiber: Fiber[Any, Any] | None = None
+                    if permits is not None:
+                        if len(fibers) < n:
+                            yield from permits.take(1)
+                        else:
+                            pull_fiber = yield from pull.fork()
+                            yield from race_first(
+                                permits.take(1), pull_fiber.join().and_then(never)
+                            )
+                    channel: AnyChannel = (
+                        (yield from pull) if pull_fiber is None else (yield from pull_fiber.join())
+                    )
+                    child_scope, worker, fiber_box = start(channel)
+                    child_pull: AnyPull = yield from channel._transform(upstream, child_scope)
+                    while len(fibers) >= n:
+                        fiber, fiber_scope = next(iter(fibers.items()))
+                        del fibers[fiber]
+                        if not fibers:
+                            yield from done_latch.open()
+                        yield from fiber.interrupt()
+                        # A worker interrupted before it starts never closes its own
+                        # scope; failures of replaced workers' finalizers are dropped.
+                        yield from fiber_scope.close(interrupted()).ignore_cause()
+                    fiber = yield from worker(child_pull)
+                    fiber_box.append(fiber)
+                    done_latch.close_unsafe()
+                    fibers[fiber] = child_scope
 
-        def with_pull(pull: AnyPull) -> Effect[AnyPull, Any, Any]:
             loop = _Gen(lambda: merging(pull))
-            return fork_in(loop.catch_cause(stopped), forked).as_(queue.take())
+            yield fork_in(loop.catch_cause(stopped), forked)
+            return queue.take()
 
-        return (
-            forked.add_finalizer(lambda _: queue.shutdown())
-            .and_then(channels._transform(upstream, scope))
-            .flat_map(with_pull)
-        )
+        return _Gen(body)
 
     return bracket(build)
 
@@ -241,20 +246,20 @@ def _make_queue(capacity: Capacity, strategy: Strategy) -> Queue[Any, Any]:
 
 
 def buffer(self: AnyChannel, capacity: Capacity, strategy: Strategy, *, array: bool) -> Channel_:
+    # Effect's generator, op for op: the pull, the queue (``Queue.make``), its
+    # shutdown added to the scope, the producer forked, the queue's take
+    # returned.
     def transform(upstream: AnyPull, scope: CloseableScope) -> Effect[AnyPull, Any, Any]:
-        queue = _make_queue(capacity, strategy)
-        offer: Callable[[Any], Effect[Any]] = queue.offer_all if array else queue.offer
-
-        def with_pull(pull: AnyPull) -> Effect[AnyPull]:
+        def body() -> Generator[Effect[Any, Any, Any], Any, AnyPull]:
+            pull: AnyPull = yield self._transform(upstream, scope)
+            queue: Queue[Any, Any] = yield _made(lambda: _make_queue(capacity, strategy))
+            yield _Suspend(lambda: scope._add_finalizer_exit(lambda _: queue.shutdown()))
+            offer: Callable[[Any], Effect[Any]] = queue.offer_all if array else queue.offer
             run = pull.flat_map(offer).forever(disable_yield=True).on_error(queue.fail_cause)
-            take = queue.take_all().map(tuple) if array else queue.take()
-            return fork_in(run, scope).as_(take)
+            yield fork_in(run, scope)
+            return queue._take_chunk() if array else queue.take()
 
-        return (
-            scope.add_finalizer(lambda _: queue.shutdown())
-            .and_then(self._transform(upstream, scope))
-            .flat_map(with_pull)
-        )
+        return _Gen(body)
 
     return from_transform(transform)
 

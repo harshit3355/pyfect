@@ -636,3 +636,32 @@ def test_unsafe_is_done_once_ended_values_are_drained():
         return before, q.is_done_unsafe()
 
     assert run(program) == (False, True)
+
+
+def test_failing_a_drained_queue_queues_no_task_for_its_takers():
+    """As Effect's ``failCauseUnsafe``: a queue with nothing left to take ends at once,
+    waking its takers, and schedules no release on its creator's dispatcher. A stray
+    task there would run the creator's later forks ahead of tasks queued since."""
+    order: list[str] = []
+
+    @fx.gen
+    def program():
+        q = yield from fx.Queue[int, str].bounded(1)
+        taker = yield from q.take().exit().fork()
+        yield from fx.yield_now()
+        yield from q.fail("boom")
+
+        @fx.gen
+        def child():
+            forked = yield from fx.sync(lambda: order.append("child's fork")).fork()
+            yield from forked.join()
+
+        started = yield from child.fork(start_immediately=True)
+        forked = yield from fx.sync(lambda: order.append("parent's fork")).fork()
+        yield from started.join()
+        yield from forked.join()
+        return (yield from taker.join())
+
+    taken = run(program)
+    assert isinstance(taken, fx.Failure)
+    assert order == ["child's fork", "parent's fork"]

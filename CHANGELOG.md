@@ -2,6 +2,12 @@
 
 ## 0.6.7 (unreleased)
 
+### Added
+
+- `sql_event_log_server_encrypted.legacy_stores(store_ids)` lists the stores, among the
+  app's store ids and every authenticated key, whose 0.6.5 tables wait for a migration or
+  went to another pair, with where each stands.
+
 ### Fixed
 
 - Cancelling a task awaiting `fx.run_async` / `run_async_exit` (or a `ManagedRuntime`'s) a
@@ -43,6 +49,52 @@
   lone surrogate): `Authenticate` fails `Forbidden` and `StoreIdSchema` does not decode it.
   The SQL encrypted server's storage names each store's tables from text that keeps such
   characters apart.
+- A fiber waiting on a `Deferred` (or any wait resumed by a wake-up) that resumes with a
+  failure no longer runs the wait's canceler first: the canceler runs only for a cause with
+  interrupts, as Effect's `asyncFinalizer` does. The extra steps moved where the fiber yields
+  under `MaxOpsBeforeYield`, so it logged after a sibling it logs before in Effect.
+- `Stream.take`, `take_until`, `take_while` and `take_while_filter` pull past their end in
+  three steps, as Effect's `flatMap(suspend(...), ...)` does, and `Stream.zip`, `zip_with` and
+  the other streams that pull their sources with `Channel.to_pull_scoped` no longer spend a
+  step before building the pull. A fiber running them under `MaxOpsBeforeYield` yields where
+  Effect's does, so a forked child or a queue producer runs at the same point.
+- A fiber whose effect is done interrupts and awaits its children in a run of its own,
+  counting steps from the first again, as Effect's fiber does. Under a small
+  `MaxOpsBeforeYield` it no longer yields there, so a child forked without starting is
+  interrupted before it runs, as in Effect.
+- `Stream.flat_map` with `concurrency` above 1 (and `switch_map`, `Channel.merge_all`) and
+  `Stream.buffer` / `Channel.buffer` build as Effect's generators do, step for step: the queue
+  and latch are made as steps, the queue's shutdown is added to the scope as Effect's
+  `Scope.addFinalizer` adds it, and `buffer` builds its upstream before making its queue.
+- `Queue.fail` / `fail_cause` / `end` on a queue with nothing left to take ends it at once
+  and queues no task, as Effect's `failCauseUnsafe` does. The stray task sat in the
+  dispatcher of the fiber that made the queue, so that fiber's later forks ran ahead of
+  tasks other fibers had queued since.
+- `provide_service` and the other effects that run with a changed context restore it as
+  Effect's `updateContext` does, uninterruptibly, so an interrupt that arrives while the
+  fiber is paused there lands one step later, as in Effect. Before, a repeated effect
+  interrupted at that point finished a step early.
+- `Stream.buffer`, `group_by`, `partition`, `callback` and `Channel.callback_array` hand each
+  chunk on in the step that takes it from their queue, as Effect's `Queue.takeAll` does,
+  without a further step to convert it.
+- `sql_event_log_server_encrypted.migrate_legacy_store` only migrates a pair that
+  authenticated: it refuses a public key with no session auth binding, and, when another key
+  sharing the store's 0.6.5 name has authenticated too, until the call names those keys in
+  the new `not_written_by`. The server now migrates a store by itself, on its first request,
+  when its key is the only one sharing the name that has authenticated, so most upgrades from
+  0.6.5 need no manual step. A refusal describes the asking store without telling the
+  operator to migrate it. See [Upgrading event log stores from
+  0.6.5](https://pyfect.dev/docs/eventlog-upgrade-0-6-7).
+- A store the SQL encrypted server refused (`LegacyStoreNeedsMigration`) opens on the same
+  server once migrated: a store that fails to open is no longer kept for the storage's idle
+  time, which each retry renewed. A failed store open of any kind (a dropped connection) is
+  retried on the next request too.
+- A refused store is no longer hidden: the server logs a warning naming it once, and the
+  client gets an `InternalServerError` saying the store waits for the server's operator,
+  with its `store_id`, instead of "Decoding failure" or "Persistence failure". A store a
+  0.6.5 node wrote after it opened on a newer version is logged as split.
+- `S.is_unique` and `S.is_unique_key` refusing more than 64 distinct items of one hash say
+  so, as `FrozenSet` and `Map` do, instead of calling them duplicates.
 
 ### Performance
 
@@ -70,6 +122,9 @@
   `TlsUpgradeOptions`, a private CA for `wss://` with `SSL_CERT_FILE`, and that `layer_test`
   with TLS still gives an `http://` client.
 - `TxReentrantLock` has no writer preference, and a sole reader can take the write lock.
+- [Upgrading event log stores from 0.6.5](https://pyfect.dev/docs/eventlog-upgrade-0-6-7):
+  who is affected, stopping every 0.6.5 node first, what the server does by itself, when the
+  operator acts, and why stores two identities shared can't be split.
 
 ## 0.6.6 (2026-11-15)
 

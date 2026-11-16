@@ -1,8 +1,10 @@
 """The SQL encrypted event log server keeps every (public key, store id)
 pair in its own scope, and stores written by 0.6.5 upgrade without losing
 data: a pair whose 0.6.5 key (``publicKey/storeId``) splits back to it
-alone keeps its tables; any other pair with 0.6.5 batches waits for its
-owner to claim them with ``migrate_legacy_store``, never opening empty."""
+alone keeps its tables; any other pair with 0.6.5 batches gets them once
+the bindings show it wrote them, never opening empty
+(``tests/oracle/test_sql_event_log_legacy_stores.py`` covers who gets
+them)."""
 
 from __future__ import annotations
 
@@ -69,12 +71,14 @@ def _run(path: Path, body: Any) -> Any:
     return fx.run_blocking(fx.scoped(fx.gen(body)).pipe(fx.provide(_sql(path))).or_die())
 
 
-def _migrate(path: Path, public_key: str, store_id: str) -> fx.Effect[bool, Any]:
+def _migrate(
+    path: Path, public_key: str, store_id: str, not_written_by: tuple[str, ...] | list[str] = ()
+) -> fx.Effect[bool, Any]:
     from pyfect.crypto.digest import layer_web_crypto
 
     client = sqlite.layer(sqlite.SqliteClientConfig(filename=str(path)))
     return (
-        migrate_legacy_store(public_key, store_id)
+        migrate_legacy_store(public_key, store_id, not_written_by=not_written_by)
         .pipe(fx.provide(layer_web_crypto))
         .pipe(fx.provide(client))
     )
@@ -123,18 +127,29 @@ def test_a_store_whose_key_splits_back_to_it_reads_its_0_6_5_data(
     assert _read(db, "0b0d2f6e", "notes") == (1, 1)
 
 
+def _bind(path: Path, public_key: str) -> None:
+    """Authenticates ``public_key`` once, as a server does."""
+
+    def body():
+        storage = yield from Storage()
+        yield from storage.get_or_create_session_auth_binding(public_key, bytes(32))
+
+    _run(path, body)
+
+
 @pytest.mark.parametrize("pair", [("ab/cd+ef==", "notes"), ("victim", "notes/2024")])
 def test_a_store_with_ambiguous_0_6_5_data_does_not_open_empty(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pair: tuple[str, str]
 ) -> None:
     db = tmp_path / "log.db"
     written = _write(db, monkeypatch, [pair])
+    # Nothing shows who wrote them until the key authenticates.
     with pytest.raises(LegacyStoreNeedsMigration) as raised:
         _read(db, *pair)
-    assert "migrate_legacy_store" in raised.value.message
-    assert fx.run_blocking(_migrate(db, *pair)) is True
-    assert fx.run_blocking(_migrate(db, *pair)) is True  # once is enough; again is a no-op
+    assert "never authenticated" in raised.value.message
+    _bind(db, pair[0])
     assert _read(db, *pair) == (1, 1)
+    assert fx.run_blocking(_migrate(db, *pair)) is True  # done already; a no-op
 
     def acks():
         storage = yield from Storage()
@@ -149,9 +164,11 @@ def test_only_one_pair_can_claim_shared_0_6_5_tables(
     db = tmp_path / "log.db"
     owner, other = ("a/b", "c"), ("a", "b/c")
     _write(db, monkeypatch, [owner])
+    _bind(db, owner[0])
     assert fx.run_blocking(_migrate(db, *owner)) is True
+    _bind(db, other[0])
     with pytest.raises(LegacyStoreMigrationError):
-        fx.run_blocking(_migrate(db, *other))
+        fx.run_blocking(_migrate(db, *other, not_written_by=[owner[0]]))
     # The other pair now opens a store of its own, apart from the owner's.
     assert _read(db, *other) == (None, 0)
     assert _read(db, *owner) == (1, 1)

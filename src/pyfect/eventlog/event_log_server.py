@@ -26,6 +26,7 @@ from pyfect.crypto.mac import timing_safe_equal
 from pyfect.effect import fail, gen, succeed, suspend, sync
 from pyfect.eventlog import _uuid
 from pyfect.eventlog._identity import Identity, IdentityService
+from pyfect.eventlog._store_unavailable import protocol_error
 from pyfect.eventlog.event_journal import EntryId, RemoteId, StoreId
 from pyfect.eventlog.event_log_message import (
     CHUNK_SIZE,
@@ -475,13 +476,10 @@ def layer_rpc_handlers(
                 )
                 .map_array(lambda chunk: tuple(m for data in chunk for m in to_frames(data)))
                 .catch_cause(
-                    lambda _: stream_fail(
-                        EventLogProtocolError(
-                            request_tag="Changes",
-                            code="InternalServerError",
-                            message="Decoding failure",
-                            public_key=public_key,
-                        )
+                    lambda cause: stream_fail(
+                        protocol_error(
+                            "Changes", public_key, payload["store_id"], "Decoding failure"
+                        )(cause)
                     )
                 )
             )
@@ -494,13 +492,11 @@ def layer_rpc_handlers(
                 return fail(
                     _forbidden("LatestSequence", "Identity is not authenticated", public_key)
                 )
-            return latest_sequence(public_key, request.payload["store_id"]).catch_cause(
-                lambda _: fail(
-                    EventLogProtocolError(
-                        request_tag="LatestSequence",
-                        code="InternalServerError",
-                        message="Persistence failure",
-                        public_key=public_key,
+            store_id = request.payload["store_id"]
+            return latest_sequence(public_key, store_id).catch_cause(
+                lambda cause: fail(
+                    protocol_error("LatestSequence", public_key, store_id, "Persistence failure")(
+                        cause
                     )
                 )
             )

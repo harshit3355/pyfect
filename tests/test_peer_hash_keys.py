@@ -138,6 +138,20 @@ def test_schema_sets_and_maps_of_colliding_numbers_fail_in_near_linear_time(
     assert_near_linear(sized, 1000)
 
 
+def test_is_unique_says_a_hash_flood_is_not_a_duplicate() -> None:
+    """Like ``FrozenSet`` and ``Map``, ``is_unique`` explains refusing
+    distinct items that share one hash, instead of calling them duplicates."""
+    decode = S.decode_unknown_exit(S.Array(S.Number).check(S.is_unique()))
+    flooded = decode(_colliding(MAX_SHARED_HASH + 1))
+    assert isinstance(flooded, fx.Failure)
+    assert str(flooded.cause.squash()) == (
+        f"Expected an array with unique items (at most {MAX_SHARED_HASH} may share a hash)"
+    )
+    duplicated = decode([1, 2, 1])
+    assert isinstance(duplicated, fx.Failure)
+    assert str(duplicated.cause.squash()) == "Expected an array with unique items"
+
+
 def test_schema_sets_of_ordinary_numbers_still_decode() -> None:
     decode = S.decode_unknown_sync(S.to_codec_json(S.FrozenSet(S.Number)))
     assert decode([1, 2, 2, P, 2 * P]) == frozenset({1, 2, P, 2 * P})

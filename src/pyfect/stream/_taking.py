@@ -33,6 +33,15 @@ def _pulling(self: AnyStream, build: Callable[[AnyEffect], AnyEffect]) -> AnyStr
     return Stream(transform_pull(self._channel, lambda pull, _: _Succeed(build(pull))))
 
 
+def _until(
+    done: Callable[[], bool], pull: AnyEffect, cut: Callable[[Chunk], AnyEffect]
+) -> AnyEffect:
+    """Effect's ``takeUntil`` / ``takeWhile`` pump, op for op:
+    ``flatMap(suspend(() => done ? Cause.done() : pull), cut)``. A pull after
+    the cut costs three ops, which ``MaxOpsBeforeYield`` counts."""
+    return _FlatMap(_Suspend(lambda: _ENDED if done() else pull), cut)
+
+
 # --- filtering ----------------------------------------------------------------
 
 
@@ -76,7 +85,7 @@ def take(self: AnyStream, n: int) -> AnyStream_:
             taken += len(kept)
             return _Succeed(kept)
 
-        return _Suspend(lambda: _ENDED if taken >= count else _FlatMap(pull, cut))
+        return _until(lambda: taken >= count, pull, cut)
 
     return _pulling(self, build)
 
@@ -111,7 +120,7 @@ def take_until(self: AnyStream, predicate: Callable[[Any], bool], exclude_last: 
                     return _Succeed(kept) if kept else _ENDED
             return _Succeed(chunk)
 
-        return _Suspend(lambda: _ENDED if done else _FlatMap(pull, cut))
+        return _until(lambda: done, pull, cut)
 
     return _pulling(self, build)
 
@@ -152,7 +161,7 @@ def take_while(self: AnyStream, predicate: Callable[[Any], bool]) -> AnyStream_:
                     return _Succeed(kept) if kept else _ENDED
             return _Succeed(chunk)
 
-        return _Suspend(lambda: _ENDED if done else _FlatMap(pull, cut))
+        return _until(lambda: done, pull, cut)
 
     return _pulling(self, build)
 
@@ -172,7 +181,7 @@ def take_while_filter(self: AnyStream, f: Callable[[Any], Result[Any, object]]) 
                 out.append(result.value)
             return _Succeed(tuple(out))
 
-        return _Suspend(lambda: _ENDED if done else _FlatMap(pull, cut))
+        return _until(lambda: done, pull, cut)
 
     return _pulling(self, build)
 
