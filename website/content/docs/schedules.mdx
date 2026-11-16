@@ -51,6 +51,18 @@ every version. Timestamps are epoch milliseconds too: `testing.set_time`,
 `clock.current_time_millis` (which replaces `clock.now`) and a step's `start` and `now`.
 </Callout>
 
+To find the bare numbers in a project, set `PYFECT_WARN_BARE_DURATIONS=1`. Every duration given
+as a number other than 0 or an infinity then warns with `BareNumberDurationWarning`, at the
+line that passed it: `the duration 2 was read as 2 milliseconds; write "2 seconds" if you meant
+seconds, or "2 millis" to keep milliseconds`. It is off by default. To fail on them, also make
+the warning an error, with `-W error::pyfect.duration.BareNumberDurationWarning` or, under
+pytest:
+
+```toml title="pyproject.toml"
+[tool.pytest.ini_options]
+filterwarnings = ["error::pyfect.duration.BareNumberDurationWarning"]
+```
+
 ## Cron
 
 `pyfect.cron` parses cron expressions: five fields (minute, hour, day, month, weekday), or

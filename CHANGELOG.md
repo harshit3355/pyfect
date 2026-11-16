@@ -54,6 +54,12 @@
   `<pyfect._primitives._Locally object at 0x...>`. Effects stay neither callable nor
   awaitable: a `__call__` or `__await__` would change what `callable()` and
   `inspect.isawaitable()` say about them.
+- `PYFECT_WARN_BARE_DURATIONS=1` makes every duration given as a bare number (other than 0
+  or an infinity) warn with `pyfect.duration.BareNumberDurationWarning`, at the caller's line:
+  `the duration 2 was read as 2 milliseconds; write "2 seconds" if you meant seconds, or
+  "2 millis" to keep milliseconds`. Off by default; `-W
+  error::pyfect.duration.BareNumberDurationWarning` (or pytest's `filterwarnings`) makes it an
+  error. A bare number is still milliseconds, as in Effect.
 
 ### Docs
 
@@ -69,6 +75,8 @@
   exact `TypeError` that `await eff` raises, with what to write instead.
 - Effects: a "Reading pyright errors" section: a missing service at a run function, the
   long `@testing.effect` error for one, and an `@fx.fn` body that is not a generator.
+- Schedules, Durations: how to find every bare-number duration with
+  `PYFECT_WARN_BARE_DURATIONS` and fail on them under pytest.
 
 ## 0.6.6 (2026-11-15)
 
