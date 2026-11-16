@@ -22,13 +22,17 @@ VECTORS: list[tuple[mac.Algorithm, str]] = [
     (mac.hmac_sha256, "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"),
     (
         mac.hmac_sha384,
-        "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47"
-        "e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649",
+        (
+            "af45d2e376484031617f78d2b58a6b1b9c7ef464f5a01b47"
+            "e42ec3736322445e8e2240ca5e69e2c78b3239ecfab21649"
+        ),
     ),
     (
         mac.hmac_sha512,
-        "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554"
-        "9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737",
+        (
+            "164b7a7bfcf819e2e395fbe73b56e0a387bd64222e831fd610270cd7ea250554"
+            "9758bf75c05a994a6d034f65f8f0e6fdcaeab1a34d4a6b4b636e070a38bce737"
+        ),
     ),
 ]
 

@@ -10,7 +10,7 @@ backslash-escaped), so it is used here only for the types whose literal holds no
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 from collections.abc import Callable
 from decimal import Decimal
 from typing import cast
@@ -31,10 +31,10 @@ _FORMATTED = frozenset(
         int,
         float,
         Decimal,
-        datetime.date,
-        datetime.datetime,
-        datetime.time,
-        datetime.timedelta,
+        dt.date,
+        dt.datetime,
+        dt.time,
+        dt.timedelta,
     )
 )
 """The types asyncmy writes as numbers or fixed date and time text."""

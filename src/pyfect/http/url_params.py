@@ -225,7 +225,7 @@ def current_redacted_names() -> tuple[Pattern, ...]:
 
 _BAD_ESCAPE = re.compile(r"%(?![0-9A-Fa-f]{2})")
 _AUTHORITY_START = re.compile(
-    r"^(?:(https?|ftp|wss?):[/\\]*|[a-z][a-z0-9+.-]*://|[/\\]{2,})", re.I | re.ASCII
+    r"^(?:(https?|ftp|wss?):[/\\]*|[a-z][a-z0-9+.-]*://|[/\\]{2,})", re.IGNORECASE | re.ASCII
 )
 _SPECIAL_AUTHORITY_END = re.compile(r"[/\\?#]")
 _AUTHORITY_END = re.compile(r"[/?#]")

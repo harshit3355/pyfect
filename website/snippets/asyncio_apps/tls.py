@@ -1,4 +1,4 @@
-import datetime
+import datetime as dt
 import ipaddress
 import ssl
 import tempfile
@@ -20,7 +20,7 @@ def self_signed(directory: Path) -> tuple[str, str]:
     """A certificate for 127.0.0.1 and its key, as PEM files (use real ones in production)."""
     key = ec.generate_private_key(ec.SECP256R1())
     name = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "127.0.0.1")])
-    now = datetime.datetime.now(datetime.UTC)
+    now = dt.datetime.now(dt.UTC)
     ski = x509.SubjectKeyIdentifier.from_public_key(key.public_key())
     cert = (
         x509.CertificateBuilder()
@@ -28,8 +28,8 @@ def self_signed(directory: Path) -> tuple[str, str]:
         .issuer_name(name)
         .public_key(key.public_key())
         .serial_number(x509.random_serial_number())
-        .not_valid_before(now - datetime.timedelta(minutes=1))
-        .not_valid_after(now + datetime.timedelta(hours=1))
+        .not_valid_before(now - dt.timedelta(minutes=1))
+        .not_valid_after(now + dt.timedelta(hours=1))
         .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
         .add_extension(
             x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),

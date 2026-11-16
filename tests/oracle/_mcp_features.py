@@ -164,7 +164,7 @@ def registrations(observations: Observations) -> fx.Effect[None, Any, M.McpServe
         text: Any = (arguments or {}).get("value", "")
         return fx.succeed({"content": [{"type": "text", "text": text}]})
 
-    def test_prompt(_: object) -> fx.Effect[Any]:
+    def handle_test_prompt(_: object) -> fx.Effect[Any]:
         observations.prompt_invocations += 1
         message = {"role": "user", "content": {"type": "text", "text": "tested"}}
         return fx.succeed({"messages": [message]})
@@ -219,7 +219,7 @@ def registrations(observations: Observations) -> fx.Effect[None, Any, M.McpServe
         )
         yield from server.add_prompt(PromptEntry({"name": MRTR_PROMPT}, _MODERN, {}, _mrtr_prompt))
         yield from server.add_prompt(
-            PromptEntry({"name": "TestPrompt"}, Context.empty(), {}, test_prompt)
+            PromptEntry({"name": "TestPrompt"}, Context.empty(), {}, handle_test_prompt)
         )
         yield from M.register_resource(
             uri="file:///test",

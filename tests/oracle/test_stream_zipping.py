@@ -112,6 +112,8 @@ class _SliceCounting(tuple[int, ...]):
     """A chunk that counts the items sliced out of it, and of its slices
     (as an ``Array`` subclass's ``slice`` gives the subclass)."""
 
+    __slots__ = ()
+
     copied = 0
 
     def __getitem__(self, key: "SupportsIndex | slice[Any, Any, Any]") -> Any:

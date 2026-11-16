@@ -102,8 +102,8 @@ def _take_lock_at_once(table: str) -> bool:
     """Whether another connection can lock the row now (``NOWAIT``: no queueing behind it)."""
     try:
         query_now(f"SELECT id FROM {table} WHERE id = 1 FOR UPDATE NOWAIT", root=True)
-    except RuntimeError as error:
-        assert "3572" in str(error), error
+    except RuntimeError as error:  # a probe: any other error fails the test
+        assert "3572" in str(error), error  # noqa: PT017
         return False
     return True
 

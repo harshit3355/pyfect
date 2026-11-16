@@ -71,7 +71,8 @@ def test_a_public_key_with_a_lone_surrogate_does_not_authenticate():
     yield from fx.scoped(fx.gen(body)).pipe(fx.provide(layer_subtle))
 
 
-@pytest.mark.parametrize("store_id", ["notes\ud800", "\udc00", "\ud83d"])
+# chr(): ruff reads lone-surrogate literals as one value and calls them duplicates (PT014)
+@pytest.mark.parametrize("store_id", ["notes" + chr(0xD800), chr(0xDC00), chr(0xD83D)])
 def test_a_store_id_with_a_lone_surrogate_does_not_decode(store_id: str) -> None:
     with pytest.raises(S.SchemaError):
         S.decode_unknown_sync(StoreIdSchema)(store_id)

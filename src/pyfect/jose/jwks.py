@@ -79,7 +79,7 @@ def _is_unsupported(jwk: Mapping[str, object]) -> bool:
 # symmetric members, including RSA factors, are still rejected.
 _UnsupportedJwkSchema = S.StructWithRest(
     S.Struct(
-        _UnsupportedJwk, **{name: S.Never for name in ("d", "p", "q", "dp", "dq", "qi", "oth", "k")}
+        _UnsupportedJwk, **dict.fromkeys(("d", "p", "q", "dp", "dq", "qi", "oth", "k"), S.Never)
     ),
     S.Record(S.String, S.Unknown),
 ).check(S.make_filter(_is_unsupported))

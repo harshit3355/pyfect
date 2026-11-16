@@ -15,7 +15,7 @@ else raises ``TypeError``: give such a field its schema explicitly.
 from __future__ import annotations
 
 import collections.abc
-import datetime
+import datetime as dt
 import enum
 import sys
 import types
@@ -58,7 +58,7 @@ _SIMPLE: dict[object, AnyBottom] = {
     _duration.Duration: Duration,
     bytes: Bytes,
     ZoneInfo: TimeZoneNamed,
-    datetime.timezone: TimeZoneOffset,
+    dt.timezone: TimeZoneOffset,
     Url: URL,
     JsonValue: Json,
 }

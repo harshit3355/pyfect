@@ -247,14 +247,18 @@ def test_rejects_leading_empty_lines_more_indented_than_the_first_block_content_
         ),
         (
             "comments and blank lines before and between items",
-            "tools: # key comment\n# before sequence\n\n- Read # item comment\n"
-            "  # between items\n\n- Bash\n",
+            (
+                "tools: # key comment\n# before sequence\n\n- Read # item comment\n"
+                "  # between items\n\n- Bash\n"
+            ),
             {"tools": ["Read", "Bash"]},
         ),
         (
             "nested mapping items and their indentless sequences",
-            "steps:\n- name: deploy\n  tools:\n  - Read\n  - Bash\n  enabled: true\n"
-            "- name: verify\n",
+            (
+                "steps:\n- name: deploy\n  tools:\n  - Read\n  - Bash\n  enabled: true\n"
+                "- name: verify\n"
+            ),
             {
                 "steps": [
                     {"name": "deploy", "tools": ["Read", "Bash"], "enabled": True},
@@ -272,8 +276,10 @@ def test_rejects_leading_empty_lines_more_indented_than_the_first_block_content_
         ),
         (
             "multiline descriptions alongside sequences",
-            "description: Deploy the service\n  and verify it.\ntools:\n- Read\nmetadata:\n"
-            "  description: 'Check\n    the logs'\n  tools:\n  - Bash\n",
+            (
+                "description: Deploy the service\n  and verify it.\ntools:\n- Read\nmetadata:\n"
+                "  description: 'Check\n    the logs'\n  tools:\n  - Bash\n"
+            ),
             {
                 "description": "Deploy the service and verify it.",
                 "tools": ["Read"],
@@ -312,8 +318,10 @@ _FLOW_SCALARS = [
     ),
     (
         "leading and trailing comments",
-        "# before key\ndescription: # before value\n  # before scalar\n  Deploy\n"
-        "  and verify. # after scalar\n# after value\n",
+        (
+            "# before key\ndescription: # before value\n  # before scalar\n  Deploy\n"
+            "  and verify. # after scalar\n# after value\n"
+        ),
         "Deploy and verify.",
     ),
     ("trailing whitespace", "description: Deploy  \n    and verify.  \n", "Deploy and verify."),

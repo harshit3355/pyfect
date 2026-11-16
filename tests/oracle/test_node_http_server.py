@@ -828,9 +828,9 @@ def test_sends_no_body_for_method_with_status(method: str, status: int) -> None:
     assert received.endswith("\r\n\r\n")
     # 304 describes the representation, 204 and 205 have no content.
     if status == 304:
-        assert re.search(r"\r\ncontent-length: 1\r\n", received, re.I)
+        assert re.search(r"\r\ncontent-length: 1\r\n", received, re.IGNORECASE)
     else:
-        assert not re.search(r"\r\ncontent-length:", received, re.I)
+        assert not re.search(r"\r\ncontent-length:", received, re.IGNORECASE)
 
 
 class _Chunks:

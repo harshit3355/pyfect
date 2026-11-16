@@ -103,7 +103,7 @@ def _dict(raw: dict[str, Any], key: str) -> dict[str, Any]:
     value = raw.get(key)
     if not isinstance(value, dict):
         raise RecordError(f"{key!r} is not an object: {value!r}")
-    return cast(dict[str, Any], value)
+    return cast("dict[str, Any]", value)
 
 
 def _latency(raw: dict[str, Any]) -> Latency:
@@ -120,7 +120,7 @@ def parse(line: str) -> Record:
     loaded: object = json.loads(line)
     if not isinstance(loaded, dict):
         raise RecordError(f"not an object: {line[:80]!r}")
-    raw = cast(dict[str, Any], loaded)
+    raw = cast("dict[str, Any]", loaded)
     match raw.get("kind"):
         case "start":
             return Start(
@@ -146,10 +146,10 @@ def parse(line: str) -> Record:
                 threads=_int(raw, "threads"),
                 cpu_seconds=_num(raw, "cpu_seconds"),
                 latency={
-                    name: _latency(cast(dict[str, Any], value))
+                    name: _latency(cast("dict[str, Any]", value))
                     for name, value in _dict(raw, "latency").items()
                 },
-                stalled=[str(name) for name in cast(list[object], stalled)],
+                stalled=[str(name) for name in cast("list[object]", stalled)],
             )
         case "end":
             error = raw.get("error")

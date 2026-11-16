@@ -87,7 +87,7 @@ class Caa(_Record):
     _checks: ClassVar[dict[str, _Check]] = {
         "critical": lambda u: isinstance(u, bool),
         "tag_name": lambda u: (
-            isinstance(u, str) and re.fullmatch(r"[a-z0-9]+", u, re.I) is not None
+            isinstance(u, str) and re.fullmatch(r"[a-z0-9]+", u, re.IGNORECASE) is not None
         ),
         "value": _string,
     }
@@ -199,7 +199,9 @@ class Txt(_Record):
     chunks: tuple[str, ...]
     tag: ClassVar[RecordType] = "TXT"
     _checks: ClassVar[dict[str, _Check]] = {
-        "chunks": lambda u: isinstance(u, tuple) and _non_empty_strings(cast(tuple[object, ...], u))
+        "chunks": lambda u: (
+            isinstance(u, tuple) and _non_empty_strings(cast("tuple[object, ...]", u))
+        )
     }
 
 

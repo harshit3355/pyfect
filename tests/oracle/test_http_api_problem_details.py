@@ -10,6 +10,8 @@ prefixed by its ``describe`` blocks."""
 import asyncio
 from typing import Any
 
+import pytest
+
 import pyfect as fx
 from pyfect import effect, error_reporter, layer
 from pyfect import schema as S
@@ -144,17 +146,12 @@ def test_problem_fixed_members_and_message() -> None:
     assert str(OutOfCredit(balance=1, detail="Top up")) == "Top up"
     assert OutOfCredit(balance=1).report_ignored
     assert not api_error.InternalServerErrorProblem().report_ignored
-    try:
+    with pytest.raises(TypeError, match="status"):
 
         class Bad(  # pyright: ignore[reportUnusedClass]
             api_error.Problem, type="about:blank", status=400, title="Bad"
         ):
             status: int  # pyright: ignore[reportGeneralTypeIssues]
-
-    except TypeError as error:
-        assert "status" in str(error)
-    else:
-        raise AssertionError("expected a TypeError")
 
 
 _LIST = HttpApiGroup.make("test").add(

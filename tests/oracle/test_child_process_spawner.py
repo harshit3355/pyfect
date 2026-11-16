@@ -399,8 +399,10 @@ def test_should_handle_more_stderr_than_stdout(node_services: Services[Platform]
         "sh",
         [
             "-c",
-            "echo output; "
-            "echo err1 >&2; echo err2 >&2; echo err3 >&2; echo err4 >&2; echo err5 >&2",
+            (
+                "echo output; "
+                "echo err1 >&2; echo err2 >&2; echo err3 >&2; echo err4 >&2; echo err5 >&2"
+            ),
         ],
     )
     stdout, stderr = yield from _both(handle)
@@ -1405,8 +1407,10 @@ def test_kills_every_process_in_a_pipeline(live_services: Services[Platform], tm
         "sh",
         [
             "-c",
-            "printf x >> \"$1\"; printf 'ROOT_READY\\n'; "
-            'while :; do printf x >> "$1"; sleep 0.01; done',
+            (
+                "printf x >> \"$1\"; printf 'ROOT_READY\\n'; "
+                'while :; do printf x >> "$1"; sleep 0.01; done'
+            ),
             "pipeline-root",
             root_heartbeat,
         ],
@@ -1415,8 +1419,10 @@ def test_kills_every_process_in_a_pipeline(live_services: Services[Platform], tm
         "sh",
         [
             "-c",
-            "printf x >> \"$1\"; printf 'CHILD_READY\\n'; read -r ready; "
-            'printf \'%s\\n\' "$ready"; while :; do printf x >> "$1"; sleep 0.01; done',
+            (
+                "printf x >> \"$1\"; printf 'CHILD_READY\\n'; read -r ready; "
+                'printf \'%s\\n\' "$ready"; while :; do printf x >> "$1"; sleep 0.01; done'
+            ),
             "pipeline-child",
             child_heartbeat,
         ],

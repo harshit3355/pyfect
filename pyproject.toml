@@ -169,13 +169,107 @@ target-version = "py313"
 extend-exclude = ["research", "src/pyfect/ai/openai/generated", "src/pyfect/ai/openrouter/generated", "tests/oracle/_generated_code_sample.py"]
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "PL", "PERF", "TID251"]
-# UP046/UP047: Effect and Layer need explicit variance + PEP 696 defaults,
-# which the PEP 695 class syntax cannot spell.
-# PLR0913/PLR2004: combinator signatures and tests legitimately trip these.
-ignore = ["UP046", "UP047", "PLR0913", "PLR2004", "PLC0415"]
+# Every rule ruff has, minus the ones below. ruff is pinned in uv.lock, so a
+# ruff upgrade is the only way new rules arrive, and it shows up as a diff.
+select = ["ALL"]
+ignore = [
+    # Conflict with `ruff format` (ruff's own formatter-conflict list).
+    "COM812", "COM819", "ISC001", "ISC002", "Q000", "Q001", "Q002", "Q003", "W191",
+    "E111", "E114", "E117",
+    # D: docstring style; docstrings here are prose, not a numpydoc/google contract.
+    "D",
+    # CPY: LICENSE covers the repo; no per-file copyright headers.
+    "CPY",
+    # ANN: pyright strict already demands and checks every annotation it needs.
+    "ANN",
+    # TC001-TC003: annotations are evaluated at runtime (schema classes,
+    # get_type_hints), so typing-only imports must stay real imports.
+    "TC001", "TC002", "TC003",
+    # S101: asserts state internal invariants and narrow types for pyright.
+    "S101",
+    # S105: fires on lexer variables named `token`; there are no passwords in source.
+    "S105",
+    # S104: servers bind every interface when no host is given, as Node does.
+    "S104",
+    # S311: Random mirrors Effect's Random, a non-cryptographic PRNG by design.
+    "S311",
+    # S603: the process and workers modules exist to start subprocesses.
+    "S603",
+    # S608: SQL statements interpolate configured table names; values are bound.
+    "S608",
+    # FBT: `succeed(True)` passes data, and boolean options mirror Effect's.
+    "FBT",
+    # A001-A004, A006: the API mirrors Effect's names (map, filter, all, id, ...).
+    "A001", "A002", "A003", "A004", "A006",
+    # N801/N802/N806/N815/N818: Effect's names (Schema constructors like Struct,
+    # tagged errors without an Error suffix, camelCase wire fields).
+    # N812: modules are imported under Effect's namespace names (`import ... as Effect`).
+    "N801", "N802", "N806", "N812", "N815", "N818",
+    # SLF001: package-internal modules share underscore members across files.
+    "SLF001",
+    # EM101/EM102/TRY003: a message variable per raise adds lines and catches nothing.
+    "EM101", "EM102", "TRY003",
+    # TRY004: switching ValueError to TypeError would change what pyfect raises.
+    "TRY004",
+    # RET503: the flagged functions end in a match that pyright proves exhaustive.
+    "RET503",
+    # ERA001: every hit is prose citing Effect's TypeScript, not dead code.
+    "ERA001",
+    # TRY301: raising inside try for local control flow is clearer than a helper.
+    "TRY301",
+    # BLE001: catching Exception is the runtime's contract: a raise becomes a Die.
+    "BLE001",
+    # C901: PLR0912 and PLR0915 already bound function size.
+    "C901",
+    # PTH: file_system and path mirror Node's string-path fs; pathlib normalises
+    # paths (resolve() follows symlinks, Path drops trailing slashes) and would
+    # change results.
+    "PTH",
+    # FLY002: a joined list of lines reads better than one long literal.
+    "FLY002",
+    # ASYNC109: `timeout` parameters are Effect-style options or third-party
+    # interfaces (httpcore's network backend).
+    "ASYNC109",
+    # PYI051: `Literal["a"] | str` documents known values, like Effect's
+    # `"a" | (string & {})`.
+    "PYI051",
+    # PIE807: pyright strict infers `default_factory=list` as list[Unknown];
+    # `lambda: []` keeps the field's type.
+    "PIE807",
+    # PT012: tests of class-definition errors need a class body inside pytest.raises.
+    "PT012",
+    # PT009: flags Console.assert_ (Effect's console.assert); no unittest here.
+    "PT009",
+    # INT: no gettext; `_` is a throwaway name.
+    "INT",
+    # UP046/UP047: Effect and Layer need explicit variance and PEP 696 defaults,
+    # which the PEP 695 syntax cannot spell.
+    "UP046", "UP047",
+    # PLR0913/PLR2004: combinator signatures and tests legitimately trip these.
+    "PLR0913", "PLR2004",
+    # PLC0415: function-level imports break import cycles and defer optional deps.
+    "PLC0415",
+    # Follow-ups, too many to fix in one reviewable change:
+    # ARG (~1,350: fixtures used for side effects, interface overrides).
+    "ARG",
+    # PT018 (263 composite asserts in tests).
+    "PT018",
+    # PT011 (59 pytest.raises without match= in tests).
+    "PT011",
+]
 
 # tests/ is not a package: its helpers are imported by module name (`from _growth import ...`).
 # `from tests._x import` only works when the repo root happens to be on sys.path.
 [tool.ruff.lint.flake8-tidy-imports.banned-api]
 "tests".msg = "tests/ is not a package; import its helpers by module name, e.g. `from _growth import ...`"
+
+[tool.ruff.lint.per-file-ignores]
+# Not packages: scripts, docs snippets, benchmarks and pytest's rootdir tests.
+# They print, and run subprocesses and fixtures without security concerns.
+"{tests,website,scripts,benchmarks,examples}/**" = ["INP001", "T201", "S"]
+# Tests build naive datetimes on purpose, raise plain exceptions to stand in for
+# user code, test hashing with single-item set membership, and poll state that
+# other threads change.
+"tests/**" = ["DTZ", "TRY002", "FURB171", "ASYNC110"]
+# Snippets show plain asyncio code as people write it.
+"website/**" = ["TRY300"]

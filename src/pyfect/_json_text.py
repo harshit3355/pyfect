@@ -96,7 +96,7 @@ def quote(text: str) -> str:
     return encoded if text.isascii() else _LONE_SURROGATE.sub(_escape_surrogate, encoded)
 
 
-def _number(value: int | float) -> str:
+def _number(value: float) -> str:
     if isinstance(value, int):
         return int_text(value)
     return js_number(value) if math.isfinite(value) else "null"

@@ -7,7 +7,8 @@ import gc
 
 import pytest
 
-from ._growth import MIN_SECONDS, Make, assert_near_linear, cpu
+from . import _growth
+from ._growth import MIN_SECONDS, Make, assert_near_linear, cpu, cpu_pair
 
 
 def _units_for(seconds: float) -> int:
@@ -56,3 +57,35 @@ def test_measuring_collects_only_the_young_generations(monkeypatch: pytest.Monke
     monkeypatch.setattr(gc, "collect", lambda generation=2: generations.append(generation) or 0)
     cpu(lambda: None)
     assert generations and max(generations) < 2
+
+
+class _SlowingClock:
+    """A thread clock under which work runs ``factor`` times slower for its first ``reads``."""
+
+    def __init__(self, reads: int, factor: float) -> None:
+        self.now, self.reads_left, self.factor = 0.0, reads, factor
+
+    def __call__(self) -> float:
+        self.reads_left -= 1
+        return self.now
+
+    def work(self, seconds: float):
+        def run() -> None:
+            self.now += seconds * (self.factor if self.reads_left > 0 else 1)
+
+        return run
+
+
+def test_a_slow_stretch_falls_on_both_sides_of_a_comparison(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Measured one after the other, a slow stretch during the first inflates the ratio (a CI
+    run once read 3.3 ms against 1.6 ms for work that is 1.2 times as costly); run in turn,
+    each side keeps a run outside the stretch."""
+    slow = _growth.RUNS * 2  # the clock reads of one side's runs
+    clock = _SlowingClock(reads=slow, factor=3)
+    costly, plain = clock.work(0.0012), clock.work(0.001)
+    assert cpu(costly, clock=clock) / cpu(plain, clock=clock) == pytest.approx(3.6)
+    clock.reads_left = slow
+    first, second = cpu_pair(costly, plain, clock=clock)
+    assert first / second == pytest.approx(1.2)

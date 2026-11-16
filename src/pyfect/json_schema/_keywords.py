@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Set
+from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from typing import Literal, cast
 
 from pyfect.json_schema._converter import Context
@@ -47,8 +48,8 @@ def convert_subschema_keyword(
     value: object,
     context: Context,
     *,
-    single_keywords: Set[str],
-    map_keywords: Set[str] = SCHEMA_MAP_KEYWORDS,
+    single_keywords: AbstractSet[str],
+    map_keywords: AbstractSet[str] = SCHEMA_MAP_KEYWORDS,
 ) -> bool:
     """Convert ``key`` into ``out`` when it holds subschemas; ``False``
     when it does not."""

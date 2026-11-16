@@ -88,13 +88,12 @@ def layer_options(
 
     def build(scope: CloseableScope) -> Effect[AtomRegistryService]:
         def create() -> AtomRegistryService:
-            registry = make(
+            return make(
                 initial_values=initial_values,
                 scheduler=scheduler,
                 timeout_resolution=timeout_resolution,
                 default_idle_ttl=default_idle_ttl,
             )
-            return registry
 
         def register(registry: AtomRegistryService) -> Effect[AtomRegistryService]:
             return scope.add_finalizer(lambda _exit: _Sync(registry.dispose)).as_(registry)

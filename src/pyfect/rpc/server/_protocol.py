@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Set
+from collections.abc import Callable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Any, Never, Self
 
@@ -72,7 +73,7 @@ class ServerProtocolService:
         codec_for: CodecFor,
         initial_message: Effect[Option[object]] = _NO_INITIAL_MESSAGE,
         supports_notifications: bool = True,
-        client_ids: Effect[Set[int]] | None = None,
+        client_ids: Effect[AbstractSet[int]] | None = None,
     ) -> None:
         self._run = run
         self.disconnects = disconnects
@@ -118,7 +119,7 @@ class ServerProtocolService:
         return self._initial_message
 
     @property
-    def client_ids(self) -> Effect[Set[int]] | None:
+    def client_ids(self) -> Effect[AbstractSet[int]] | None:
         """The ids of the clients connected now (never fails), or ``None``
         when the transport does not report them."""
         return self._client_ids
@@ -140,7 +141,7 @@ class ProtocolParts:
     codec_for: CodecFor
     initial_message: Effect[Option[object]] = field(default_factory=_no_initial_message)
     supports_notifications: bool = True
-    client_ids: Effect[Set[int]] | None = None
+    client_ids: Effect[AbstractSet[int]] | None = None
 
 
 _REPLAY_FAILED = "RpcServer: a message written before the server ran failed"

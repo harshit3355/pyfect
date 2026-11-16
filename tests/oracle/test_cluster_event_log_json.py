@@ -78,8 +78,10 @@ _FORMS: dict[str, tuple[Any, Any, str]] = {
         M.EventLogProtocolError(
             request_tag="r", code="Forbidden", message="m", public_key="p", store_id=_STORE
         ),
-        '{"_tag":"EventLogProtocolError","requestTag":"r","publicKey":"p","storeId":"s",'
-        '"code":"Forbidden","message":"m"}',
+        (
+            '{"_tag":"EventLogProtocolError","requestTag":"r","publicKey":"p","storeId":"s",'
+            '"code":"Forbidden","message":"m"}'
+        ),
     ),
     "hello": (
         M.HelloResponse,
@@ -96,8 +98,10 @@ _FORMS: dict[str, tuple[Any, Any, str]] = {
         M.Authenticate(
             public_key="p", signing_public_key=_BYTES, signature=_BYTES, algorithm="Ed25519"
         ),
-        f'{{"publicKey":"p","signingPublicKey":{_BYTES_FORM},"signature":{_BYTES_FORM},'
-        '"algorithm":"Ed25519"}',
+        (
+            f'{{"publicKey":"p","signingPublicKey":{_BYTES_FORM},"signature":{_BYTES_FORM},'
+            '"algorithm":"Ed25519"}'
+        ),
     ),
     "write_ack": (
         M.WriteAck,
@@ -238,8 +242,10 @@ _OTHER_FORMS: dict[str, tuple[Any, Any, str]] = {
     "graphql_transport": (
         TransportError,
         TransportError(description="d", status=503, close_code=1006, retry_after=millis(1000)),
-        '{"_tag":"TransportError","description":"d","status":503,"retryAfter":1000,'
-        '"closeCode":1006}',
+        (
+            '{"_tag":"TransportError","description":"d","status":503,"retryAfter":1000,'
+            '"closeCode":1006}'
+        ),
     ),
 }
 

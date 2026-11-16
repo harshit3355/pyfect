@@ -4,7 +4,8 @@ builds from its path parameters (Effect's ``internal/path``)."""
 from __future__ import annotations
 
 import re
-from collections.abc import Callable, Set
+from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 
 from pyfect.http.find_my_way._paths import closing_parenthesis
 from pyfect.schema import Top, ast
@@ -21,7 +22,7 @@ def last_encoding(node: ast.AST) -> ast.AST:
     return node
 
 
-def param_names(schema: Top | None) -> Set[str] | None:
+def param_names(schema: Top | None) -> AbstractSet[str] | None:
     """The keys of a params struct; ``None`` when the schema is not a plain
     struct (any parameter may be one)."""
     if schema is None:
@@ -74,7 +75,7 @@ def to_router_path(path: str, schema: Top | None) -> str:
 
 def replace_params(
     path: str,
-    names: Set[str] | None,
+    names: AbstractSet[str] | None,
     replace: Callable[[str, bool], str | None],
 ) -> str:
     """``path`` with each declared parameter replaced by ``replace(name,

@@ -124,7 +124,7 @@ def test_order_follows_spec_precedence_and_ignores_build_metadata() -> None:
             "10.0.0",
         ]
     ]
-    assert sorted(reversed(chain)) == chain
+    assert sorted(reversed(chain)) == chain  # noqa: C414  sorts from the reverse order
     assert semver.compare_core(v("1.0.0-10"), v("1.0.0-0a")) == -1
     assert semver.compare_core(v("1.0.0-Z"), v("1.0.0-a")) == -1
     assert semver.compare_core(v("1.0.0+a"), v("1.0.0+b")) == 0

@@ -169,8 +169,7 @@ class _NdjsonParser:
         return MaxBufferSizeExceeded(cast("int", self._max))
 
     def _parse(self, line: str, items: list[object]) -> None:
-        if line.endswith("\r"):
-            line = line[:-1]
+        line = line.removesuffix("\r")
         if not line:
             return
         try:

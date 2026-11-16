@@ -63,8 +63,10 @@ def test_ends_strings_only_at_quotes_after_an_even_run_of_backslashes():
     "text",
     [
         "1E-3",
-        r'{"url":"https://example.com/a/*b*/", "quote":"\"//still a string", '
-        r'"escapes":"\\\b\f\n\r\t\/A"}',
+        (
+            r'{"url":"https://example.com/a/*b*/", "quote":"\"//still a string", '
+            r'"escapes":"\\\b\f\n\r\t\/A"}'
+        ),
         '"\u2028\u2029"',
         '{"__proto__":{"polluted":true},"constructor":1,"a":1,"a":2}',
     ],

@@ -365,7 +365,7 @@ def test_handles_chains_of_multiple_flat_maps_and_with_defaults():
     ) -> Callable[[Config[int]], Config[int]]:
         def apply(self: Config[int]) -> Config[int]:
             def choose(e: object) -> Config[int]:
-                return fallback if e is marker else config.succeed(cast(int, e))
+                return fallback if e is marker else config.succeed(cast("int", e))
 
             return self.with_default(marker).flat_map(choose)
 

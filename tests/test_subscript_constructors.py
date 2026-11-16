@@ -81,7 +81,7 @@ def _constructors() -> Iterator[tuple[str, type, str, _Method]]:
         for name, attr in vars(cls).items():
             if name.startswith("_") or not isinstance(attr, staticmethod | classmethod):
                 continue
-            method = typing.cast(_Method, attr)
+            method = typing.cast("_Method", attr)
             func: Callable[..., Any] = method.__func__
             signatures = [func, *_overloads(func)]
             if any(f.__type_params__ for f in signatures) and any(

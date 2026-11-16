@@ -145,7 +145,7 @@ class SecretJwk(_Metadata):
 _base64url = S.String.check(
     S.make_filter(is_canonical_segment, expected="a canonical base64url encoded string")
 )
-_no_private_members = {name: S.Never for name in ("d", "p", "q", "dp", "dq", "qi", "oth", "k")}
+_no_private_members = dict.fromkeys(("d", "p", "q", "dp", "dq", "qi", "oth", "k"), S.Never)
 
 PublicJwkSchema = S.Union(
     S.Struct(RsaPublicJwk, n=_base64url, e=_base64url, **_no_private_members),

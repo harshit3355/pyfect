@@ -139,7 +139,7 @@ class AddressResolverService:
 def _widen[E](
     eff: Effect[tuple[InetAddress, ...], E],
 ) -> Effect[tuple[SocketAddress, ...], E]:
-    return cast(Effect[tuple[SocketAddress, ...], E], eff)
+    return cast("Effect[tuple[SocketAddress, ...], E]", eff)
 
 
 class AddressResolver(Tag[AddressResolverService], key="effect/net/AddressResolver"):

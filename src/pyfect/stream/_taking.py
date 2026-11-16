@@ -140,7 +140,7 @@ def take_until_effect(
                 if (yield predicate(item)):
                     done = True
                     kept = chunk[: index if exclude_last else index + 1]
-                    return kept if kept else (yield _ENDED)
+                    return kept or (yield _ENDED)
             return chunk
 
         return _Gen(body)

@@ -14,7 +14,7 @@ Omitted, with the reason:
 
 from __future__ import annotations
 
-import datetime
+import datetime as dt
 import json
 from collections.abc import Sequence
 from typing import Any, Never, NotRequired, TypedDict, cast
@@ -335,7 +335,7 @@ def test_registers_non_strict_tools_with_identified_input_schemas():
 
 
 class Event(S.Class):
-    at: datetime.datetime = S.field(S.DateTimeUtc)
+    at: dt.datetime = S.field(S.DateTimeUtc)
 
 
 class Tree(TypedDict):
@@ -358,9 +358,7 @@ def test_registers_tools_with_identified_output_schemas():
     server, exit = yield from _register(
         K.make(identified, event, tree),
         identified.handler(lambda _, __: fx.succeed(Value(value="ok"))),
-        event.handler(
-            lambda _, __: fx.succeed(Event(at=datetime.datetime.fromtimestamp(0, datetime.UTC)))
-        ),
+        event.handler(lambda _, __: fx.succeed(Event(at=dt.datetime.fromtimestamp(0, dt.UTC)))),
         tree.handler(lambda _, __: fx.succeed(Tree(children=[]))),
     )
     assert isinstance(exit, fx.Success)

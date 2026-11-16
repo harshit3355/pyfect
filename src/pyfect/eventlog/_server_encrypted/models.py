@@ -90,7 +90,7 @@ def make_compaction_config(options: CompactionOptions | None = None) -> Effect[C
         if not config.sweep_interval.is_positive():
             return die(IllegalArgumentError("Compaction sweepInterval must be positive"))
         # Untyped callers can pass any value.
-        floor = cast(object, config.threshold_floor)
+        floor = cast("object", config.threshold_floor)
         if not (
             isinstance(floor, int)
             and not isinstance(floor, bool)

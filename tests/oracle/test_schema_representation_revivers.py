@@ -165,9 +165,9 @@ def test_revives_is_between_length():
 def test_revives_is_pattern():
     """revives isPattern"""
     assert_filter_reviver(
-        S.String.check(S.is_pattern(re.compile("^a+$", re.I))),
+        S.String.check(S.is_pattern(re.compile("^a+$", re.IGNORECASE))),
         "effect/schema/isPattern",
-        {"source": "^a+$", "flags": int(re.I | re.U)},
+        {"source": "^a+$", "flags": int(re.IGNORECASE | re.UNICODE)},
         R.is_pattern_reviver,
         valid="AAA",
         invalid="bbb",

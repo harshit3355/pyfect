@@ -190,10 +190,9 @@ def test_error_with_stack_trace_and_fields() -> None:
     e = MyError(code=404, message="not found")
     assert isinstance(e, Exception)
     assert (e.code, e.message, str(e)) == (404, "not found", "not found")
-    try:
+    with pytest.raises(MyError) as raised:
         raise e
-    except MyError as raised:
-        assert raised.__traceback__ is not None
+    assert raised.value.__traceback__ is not None
 
 
 def test_error_without_fields() -> None:

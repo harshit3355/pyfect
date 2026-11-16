@@ -56,7 +56,7 @@ def _request_parsers(head: Any) -> None:
 def http_request(data: bytes) -> None:
     """A connection's bytes read as the live server does: heads, bodies
     (``Content-Length`` or chunked, with trailers), one request after another."""
-    inbound = Inbound(cast(Connection, _Received(chunks(data))))
+    inbound = Inbound(cast("Connection", _Received(chunks(data))))
 
     def serve() -> Any:
         for _ in range(_MAX_REQUESTS):

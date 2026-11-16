@@ -80,7 +80,7 @@ class WallClock:
         y = v.year if year is None else year
         m = v.month - 1 if month is None else month
         y, m = y + m // 12, m % 12
-        base = datetime(y, m + 1, 1)
+        base = datetime(y, m + 1, 1)  # noqa: DTZ001  the prompt edits naive local time
         self.value = base + timedelta(
             days=(v.day if day is None else day) - 1,
             hours=v.hour if hours is None else hours,

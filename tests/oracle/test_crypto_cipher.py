@@ -27,32 +27,40 @@ VECTORS: list[tuple[cipher.Algorithm, str, str, str]] = [
         cipher.aes128_ctr,
         KEY_128,
         CTR_IV,
-        "874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff"
-        "5ae4df3edbd5d35e5b4f09020db03eab1e031dda2fbe03d1792170a0f3009cee",
+        (
+            "874d6191b620e3261bef6864990db6ce9806f66b7970fdff8617187bb9fffdff"
+            "5ae4df3edbd5d35e5b4f09020db03eab1e031dda2fbe03d1792170a0f3009cee"
+        ),
     ),
     (
         cipher.aes256_ctr,
         KEY_256,
         CTR_IV,
-        "601ec313775789a5b7a7f504bbf3d228f443e3ca4d62b59aca84e990cacaf5c5"
-        "2b0930daa23de94ce87017ba2d84988ddfc9c58db67aada613c2dd08457941a6",
+        (
+            "601ec313775789a5b7a7f504bbf3d228f443e3ca4d62b59aca84e990cacaf5c5"
+            "2b0930daa23de94ce87017ba2d84988ddfc9c58db67aada613c2dd08457941a6"
+        ),
     ),
     # The NIST ciphertext followed by the PKCS#7 padding block, from OpenSSL.
     (
         cipher.aes128_cbc,
         KEY_128,
         CBC_IV,
-        "7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b2"
-        "73bed6b8e3c1743b7116e69e222295163ff1caa1681fac09120eca307586e1a7"
-        "8cb82807230e1321d3fae00d18cc2012",
+        (
+            "7649abac8119b246cee98e9b12e9197d5086cb9b507219ee95db113a917678b2"
+            "73bed6b8e3c1743b7116e69e222295163ff1caa1681fac09120eca307586e1a7"
+            "8cb82807230e1321d3fae00d18cc2012"
+        ),
     ),
     (
         cipher.aes256_cbc,
         KEY_256,
         CBC_IV,
-        "f58c4c04d6e5f1ba779eabfb5f7bfbd69cfc4e967edb808d679f777bc6702c7d"
-        "39f23369a9d9bacfa530e26304231461b2eb05e2c39be9fcda6c19078c6a9d1b"
-        "3f461796d6b0d6b2e0c2a72b4d80e644",
+        (
+            "f58c4c04d6e5f1ba779eabfb5f7bfbd69cfc4e967edb808d679f777bc6702c7d"
+            "39f23369a9d9bacfa530e26304231461b2eb05e2c39be9fcda6c19078c6a9d1b"
+            "3f461796d6b0d6b2e0c2a72b4d80e644"
+        ),
     ),
 ]
 

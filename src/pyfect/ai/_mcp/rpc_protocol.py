@@ -14,7 +14,8 @@ the sessions of clients that left forgotten when a notification goes out.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence, Set
+from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from typing import Any, Never, cast
 
@@ -228,7 +229,7 @@ class _Peer:
         transport = self.transport
         client_ids = transport.protocol.client_ids
 
-        def connected(ids: Set[int]) -> Effect[None]:
+        def connected(ids: AbstractSet[int]) -> Effect[None]:
             if self.client_id not in ids:
                 transport.forget(self.client_id)
                 return _VOID

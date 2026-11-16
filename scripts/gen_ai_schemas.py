@@ -102,20 +102,28 @@ _OPENROUTER_PATCHES = (
         '  readonly "id"?: string | null\n  readonly "index"?: number\n',
     ),
     (
-        f'  "index": Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n'
-        '    Schema.isInt().annotate({ "expected": "an integer" })\n'
-        "  ),\n",
-        '  "index": Schema.optionalKey(\n'
-        f"    Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n"
-        '      Schema.isInt().annotate({ "expected": "an integer" })\n'
-        "    )\n"
-        "  ),\n",
+        (
+            f'  "index": Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n'
+            '    Schema.isInt().annotate({ "expected": "an integer" })\n'
+            "  ),\n"
+        ),
+        (
+            '  "index": Schema.optionalKey(\n'
+            f"    Schema.Number.annotate({_INDEX_DESCRIPTION}).check(\n"
+            '      Schema.isInt().annotate({ "expected": "an integer" })\n'
+            "    )\n"
+            "  ),\n"
+        ),
     ),
     (
-        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
-        '  readonly "id": string\n',
-        '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
-        '  readonly "id"?: string\n',
+        (
+            '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+            '  readonly "id": string\n'
+        ),
+        (
+            '  readonly "function": { readonly "arguments": string; readonly "name": string }\n'
+            '  readonly "id"?: string\n'
+        ),
     ),
     (
         f'  "id": Schema.String.annotate({_ID_DESCRIPTION}),\n',
@@ -382,7 +390,7 @@ class Declaration:
 
 _START = re.compile(r"^(export type |export const |const |export interface |export function )")
 _CONST = re.compile(
-    r"^(?:export )?const ([A-Za-z_$][A-Za-z0-9_$]*)(?:: Schema\.Schema<\1>)?\s*=\s*", re.S
+    r"^(?:export )?const ([A-Za-z_$][A-Za-z0-9_$]*)(?:: Schema\.Schema<\1>)?\s*=\s*", re.DOTALL
 )
 """A declaration, possibly typed as its own type (Effect's generator
 config annotates the schemas TypeScript cannot serialize)."""

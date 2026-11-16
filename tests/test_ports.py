@@ -114,7 +114,7 @@ def _blocks(statement: ast.stmt) -> list[list[ast.stmt]]:
         for field in ("body", "orelse", "finalbody"):
             nested: object = getattr(node, field, None)
             if isinstance(nested, list) and nested and isinstance(nested[0], ast.stmt):
-                blocks.append(cast(list[ast.stmt], nested))
+                blocks.append(cast("list[ast.stmt]", nested))
     return blocks
 
 

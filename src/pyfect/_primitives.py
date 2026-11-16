@@ -455,7 +455,7 @@ class _Gen[A, E, R](Effect[A, E, R]):
         self.factory = factory
 
     def _step(self, fiber: Fiber[Any, Any]) -> Step:
-        gen = cast(object, self.factory())  # a lambda may return anything
+        gen = cast("object", self.factory())  # a lambda may return anything
         if not isinstance(gen, Generator):
             return Failure(
                 die_cause(

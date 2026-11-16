@@ -166,7 +166,7 @@ def date(
     type into it; Enter submits once ``validate`` accepts the value. Gives
     an aware datetime in the local time zone (naive ``initial`` values are
     read as local time)."""
-    start = (initial or datetime.now()).astimezone().replace(tzinfo=None)
+    start = (initial or datetime.now()).astimezone().replace(tzinfo=None)  # noqa: DTZ005  local time
     handlers = _DatePrompt(message, start, date_mask, validate, locales or Locales(), theme)
     return custom(
         sync(handlers.initial), Handlers(handlers.render, handlers.process, handlers.clear)

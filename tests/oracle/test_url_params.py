@@ -67,8 +67,10 @@ def test_set_all_reuse() -> None:
         (
             "/file?X-Amz-Credential=a&X-Amz-Expires=60&X-Amz-Security-Token=b&X-Amz-Signature=c",
             None,
-            "/file?X-Amz-Credential=REDACTED&X-Amz-Expires=60&X-Amz-Security-Token=REDACTED"
-            "&X-Amz-Signature=REDACTED",
+            (
+                "/file?X-Amz-Credential=REDACTED&X-Amz-Expires=60&X-Amz-Security-Token=REDACTED"
+                "&X-Amz-Signature=REDACTED"
+            ),
         ),
         ("/path/@user?page=a@b", None, "/path/@user?page=a@b"),
         ("https://user:password@api.test/path", None, "https://REDACTED:REDACTED@api.test/path"),

@@ -99,10 +99,10 @@ def test_to_equivalence_big_decimal() -> None:
 def _reg_exp_codec(asserts: SchemaAsserts[Never, Never]) -> None:
     encoding = asserts.encoding()
     encoding.succeed(re.compile("a"), {"source": "a", "flags": ""})
-    encoding.succeed(re.compile("a", re.I), {"source": "a", "flags": "i"})
+    encoding.succeed(re.compile("a", re.IGNORECASE), {"source": "a", "flags": "i"})
     decoding = asserts.decoding()
     decoding.succeed({"source": "a", "flags": ""}, re.compile("a"))
-    decoding.succeed({"source": "a", "flags": "i"}, re.compile("a", re.I))
+    decoding.succeed({"source": "a", "flags": "i"}, re.compile("a", re.IGNORECASE))
     decoding.fail({"source": "(", "flags": ""}, "Expected valid RegExp source and flags")
     decoding.fail({"source": "a", "flags": "x"}, "Expected valid RegExp source and flags")
 
@@ -126,16 +126,16 @@ def test_to_equivalence_reg_exp() -> None:
     """toEquivalence: RegExp"""
     equivalence = S.to_equivalence(S.RegExp)
     assert equivalence(re.compile("a"), re.compile("a"))
-    assert equivalence(re.compile("a", re.I), re.compile("a", re.I))
+    assert equivalence(re.compile("a", re.IGNORECASE), re.compile("a", re.IGNORECASE))
     assert not equivalence(re.compile("a"), re.compile("b"))
-    assert not equivalence(re.compile("a", re.I), re.compile("a", re.M))
+    assert not equivalence(re.compile("a", re.IGNORECASE), re.compile("a", re.MULTILINE))
 
 
 def test_to_formatter_reg_exp() -> None:
     """toFormatter: RegExp"""
     format = S.to_formatter(S.RegExp)
     assert format(re.compile("a")) == "/a/"
-    assert format(re.compile("a", re.I)) == "/a/i"
+    assert format(re.compile("a", re.IGNORECASE)) == "/a/i"
 
 
 def test_to_json_schema_document_reg_exp() -> None:

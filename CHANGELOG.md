@@ -95,6 +95,13 @@
   0.6.5 node wrote after it opened on a newer version is logged as split.
 - `S.is_unique` and `S.is_unique_key` refusing more than 64 distinct items of one hash say
   so, as `FrozenSet` and `Map` do, instead of calling them duplicates.
+- `big_decimal.from_string` (and `S.BigDecimalFromString`) refuses a run of more than
+  `MAX_DIGITS` significant digits before checking that every character is a digit, so an
+  over-long run costs one pass over the text instead of two.
+- The httpx `HttpClient` raises `httpx.DecodingError` again when a response body fails to
+  decode (a corrupt gzip, deflate or brotli body); since 0.6.6 it raised `NameError: name
+  'httpx' is not defined` instead. Lint now enables ruff's TC004, which catches a runtime use
+  of a name imported only for type checking.
 
 ### Performance
 

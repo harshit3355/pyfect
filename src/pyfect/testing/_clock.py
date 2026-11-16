@@ -80,7 +80,7 @@ def _timestamp_nanos(millis: float) -> int | float:
 _MAX_NANOS = math.floor(sys.float_info.max)
 
 
-def _in_float_range(nanos: int | float) -> int | float:
+def _in_float_range(nanos: float) -> int | float:
     """A count past float range as the infinity it saturates to, as JavaScript's
     millisecond timestamps do."""
     if isinstance(nanos, int) and abs(nanos) > _MAX_NANOS:
@@ -88,7 +88,7 @@ def _in_float_range(nanos: int | float) -> int | float:
     return nanos
 
 
-def _add_nanos(a: int | float, b: int | float) -> int | float:
+def _add_nanos(a: float, b: float) -> int | float:
     return _in_float_range(_in_float_range(a) + _in_float_range(b))
 
 

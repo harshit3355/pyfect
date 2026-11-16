@@ -303,7 +303,7 @@ def test_name_server_from_input() -> None:
     ]
     assert dns.name_server_from_input(inet).get_or_raise() is inet
     for value in ["ns.example", (192, 0, 2), {"address": "ns", "port": 53}]:
-        assert isinstance(dns.name_server_from_input(cast(Any, value)), Err), value
+        assert isinstance(dns.name_server_from_input(cast("Any", value)), Err), value
 
 
 @testing.live(timeout="10 seconds")

@@ -42,7 +42,7 @@ def read_frames(
             if len(payload) < size:
                 return
             try:
-                message = pickle.loads(payload)  # our own child or parent
+                message = pickle.loads(payload)  # noqa: S301  from our own child or parent
             except Exception as cause:  # reported as an unreadable message
                 on_unreadable(cause)
                 continue

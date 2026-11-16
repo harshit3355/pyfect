@@ -181,7 +181,7 @@ def _stalls(samples: Sequence[Sample]) -> Finding:
 def _end(end: End | None, limits: Limits) -> list[Finding]:
     if end is None:
         return [Finding("end", False, "the run did not finish (no end record)")]
-    findings = [
+    return [
         Finding("run", end.error is None, end.error or f"ran {end.t:,.0f}s"),
         Finding(
             "shutdown",
@@ -196,7 +196,6 @@ def _end(end: End | None, limits: Limits) -> list[Finding]:
             f"{end.fibers_live} still running",
         ),
     ]
-    return findings
 
 
 def analyse(

@@ -69,7 +69,7 @@ def _type_of(value: object) -> type:
 
 def _issue(result: Any) -> Any:
     assert isinstance(result, Err)
-    return cast(Any, result).error.issue
+    return cast("Any", result).error.issue
 
 
 @testing.effect
@@ -517,7 +517,7 @@ def test_retains_the_original_encoding_ast_in_local_checks():
 def test_retains_the_original_encoding_ast_in_structural_issues():
     """retains the original encoding AST in structural issues"""
     schema = S.String.pipe(
-        S.decode_to(S.Number, cast(Any, T.transform(decode=lambda _: "invalid", encode=str)))
+        S.decode_to(S.Number, cast("Any", T.transform(decode=lambda _: "invalid", encode=str)))
     )
     for compiled in (False, True):
         if compiled:

@@ -10,7 +10,7 @@ end)`` (Node's inclusive ``end``).
 import asyncio
 import os
 import shutil
-from collections.abc import Callable, Coroutine, Iterator
+from collections.abc import Callable, Coroutine
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urljoin
@@ -66,12 +66,12 @@ type Run = Callable[[Context], Coroutine[Any, Any, None]]
 
 
 @pytest.fixture
-def temporary_root(tmp_path: Path) -> Iterator[tuple[Path, Path]]:
+def temporary_root(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "root"
     shutil.copytree(FIXTURES / "http-static-server", root)
     outside = tmp_path / "http-static-server-outside.txt"
     shutil.copyfile(FIXTURES / "http-static-server-outside.txt", outside)
-    yield root, outside
+    return root, outside
 
 
 def with_static_files(paths: tuple[Path, Path], run: Run, **options: Any) -> None:

@@ -133,7 +133,7 @@ class Tool(Generic[N_co, P_co, S_co, F_co, HE_co, R_co]):
         return replace(self, needs_approval=needs_approval)
 
     def add_dependency[T](
-        self, tag: type[Tag[Any]] | type[T]
+        self, tag: type[Tag[Any] | T]
     ) -> Tool[N_co, P_co, S_co, F_co, HE_co, R_co | T]:
         """The same tool, whose handler may also need ``tag``'s service."""
         return cast("Any", replace(self))

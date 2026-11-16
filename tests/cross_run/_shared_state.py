@@ -56,7 +56,7 @@ def public_classes() -> dict[str, type]:
                 and obj.__module__.startswith("pyfect")
                 and not issubclass(obj, BaseException)
             ):
-                cls = cast(type[object], obj)
+                cls = cast("type[object]", obj)
                 found[full_name(cls)] = cls
     return found
 

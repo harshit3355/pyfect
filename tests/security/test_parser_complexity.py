@@ -17,7 +17,7 @@ from _pyfect_modules import modules
 
 from pyfect import schema as S
 
-from ._growth import assert_near_linear, cpu
+from ._growth import assert_near_linear, cpu_pair
 from ._parser_cases import AMPLIFIED, CASES, NOT_MEASURED, Amplified, Case
 
 _PARSER_NAME = re.compile(
@@ -44,9 +44,7 @@ def test_parser_takes_near_linear_time(found: Case) -> None:
 
 @pytest.mark.parametrize("found", [pytest.param(a, id=a.id) for a in AMPLIFIED])
 def test_costly_input_costs_about_as_much_as_plain_input(found: Amplified) -> None:
-    costly, plain = cpu(found.costly), cpu(found.plain)
-    if costly > found.bound * plain:
-        costly = cpu(found.costly)
+    costly, plain = cpu_pair(found.costly, found.plain)
     assert costly <= found.bound * max(plain, 0.001), (
         f"{costly * 1000:.1f} ms against {plain * 1000:.1f} ms for plain input"
     )

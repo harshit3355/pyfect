@@ -191,7 +191,7 @@ def _served(
     # ``serve`` reads the routes' other requirements from where it is built;
     # its overloads type only the router's own.
     return cast(
-        "Layer[Sharding | Runners, Never, _ServerNeeds | HttpServer]", serve(cast(Any, routes))
+        "Layer[Sharding | Runners, Never, _ServerNeeds | HttpServer]", serve(cast("Any", routes))
     )
 
 

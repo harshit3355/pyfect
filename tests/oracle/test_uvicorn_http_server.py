@@ -34,7 +34,7 @@ from __future__ import annotations
 import socket
 import struct
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable
 from typing import Any, Literal
 
 import pytest
@@ -68,10 +68,9 @@ def run_uvicorn(program: fx.Effect[Any, Any, Any], **options: Any) -> Any:
 
 
 @pytest.fixture(autouse=True)
-def _serve_with_uvicorn(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _serve_with_uvicorn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(node, "run_live", run_uvicorn)
     monkeypatch.setattr(features, "run_live", run_uvicorn)
-    yield
 
 
 # --- titles shared with the live server ----------------------------------------------

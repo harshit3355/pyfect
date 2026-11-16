@@ -84,8 +84,10 @@ def test_the_url_sets_the_transport_options():
         ),
         (
             "log_level=LOUD",
-            '"log_level" has invalid value: LOUD. Expected one of: TRACE, DEBUG, INFO, WARN, '
-            "ERROR, OFF.",
+            (
+                '"log_level" has invalid value: LOUD. Expected one of: TRACE, DEBUG, INFO, WARN, '
+                "ERROR, OFF."
+            ),
         ),
     ],
 )

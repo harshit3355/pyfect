@@ -38,7 +38,7 @@ def _same_literal(left: object, right: object) -> bool:
     return isinstance(left, bool) == isinstance(right, bool) and left == right
 
 
-def _satisfies_check(check: N.Check, value: str | int | float) -> bool:
+def _satisfies_check(check: N.Check, value: str | float) -> bool:
     match check:
         case N.FilterGroup(checks=checks):
             return all(_satisfies_check(c, value) for c in checks)

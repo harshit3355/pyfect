@@ -24,7 +24,7 @@ def with_fields(
     the next as with ``Date.UTC`` (months are 1-based). Sub-second parts
     are dropped."""
     carry, month_index = divmod((wall.month if month is None else month) - 1, 12)
-    first_of_month = datetime((wall.year if year is None else year) + carry, month_index + 1, 1)
+    first_of_month = datetime((wall.year if year is None else year) + carry, month_index + 1, 1)  # noqa: DTZ001  naive wall time
     return first_of_month + timedelta(
         days=(wall.day if day is None else day) - 1,
         hours=wall.hour if hour is None else hour,

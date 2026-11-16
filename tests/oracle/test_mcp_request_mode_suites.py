@@ -7,7 +7,6 @@ request mode. Here each 2026-07-28 test of those modules runs again with its
 from __future__ import annotations
 
 import functools
-from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any, cast
 
@@ -127,14 +126,13 @@ def _request_mode_conformance(protocol: P.AnyProtocolAdapter) -> fx.Effect[Confo
 
 
 @pytest.fixture(autouse=True)
-def _request_mode(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+def _request_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     for suite in _SUITES:
         monkeypatch.setattr(suite, "stdio_harness", _request_mode_harness)
     monkeypatch.setattr(test_mcp_conformance_base_protocol, "stdio_harness", _request_mode_harness)
     monkeypatch.setattr(
         test_mcp_conformance_base_protocol, "conformance", _request_mode_conformance
     )
-    yield
 
 
 def _modern_run(test: Any) -> Any | None:

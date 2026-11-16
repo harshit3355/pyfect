@@ -19,6 +19,8 @@ import functools
 from collections.abc import Iterator
 from pathlib import Path
 
+import pytest
+
 SRC = Path(__file__).resolve().parent.parent / "src" / "pyfect"
 ROUTER_MARKERS = SRC / "http" / "router" / "_markers.py"
 
@@ -192,9 +194,5 @@ def test_router_markers_are_not_service_markers() -> None:
 def test_service_markers_are_never_built() -> None:
     from pyfect.rpc.group import HandlersFor
 
-    try:
+    with pytest.raises(TypeError, match="type-level marker"):
         HandlersFor()
-    except TypeError as error:
-        assert "type-level marker" in str(error)
-    else:
-        raise AssertionError("a service marker was built")

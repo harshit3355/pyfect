@@ -36,8 +36,10 @@ def test_importing_pyfect_loads_neither_library():
             sys.executable,
             "-I",
             "-c",
-            "import sys, pyfect, pyfect.schema; "
-            "print(sorted(m for m in ('pydantic', 'msgspec') if m in sys.modules))",
+            (
+                "import sys, pyfect, pyfect.schema; "
+                "print(sorted(m for m in ('pydantic', 'msgspec') if m in sys.modules))"
+            ),
         ],
         capture_output=True,
         text=True,

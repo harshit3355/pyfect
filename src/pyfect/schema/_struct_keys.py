@@ -95,8 +95,8 @@ class ExtendTo[TD: Mapping[str, object], A: Mapping[str, object]]:
         return out  # pyright: ignore[reportReturnType]  # checked by the target struct
 
     def _encode(self, value: TD) -> A:
-        out = {key: item for key, item in value.items() if key not in self._derive}
-        return out  # pyright: ignore[reportReturnType]  # checked by the source struct
+        # The source struct checks the shape.
+        return {key: item for key, item in value.items() if key not in self._derive}  # pyright: ignore[reportReturnType]
 
     def __call__[RD, RE](
         self, schema: StructSchema[A, RD, RE], /

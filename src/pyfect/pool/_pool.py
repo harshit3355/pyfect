@@ -807,7 +807,7 @@ def _report_finalizer_failure(cause: Cause[Any]) -> Effect[None]:
 
 
 def _clamp[N: (int, float)](value: N, low: N, high: N) -> N:
-    return low if value < low else high if value > high else value
+    return low if value < low else min(value, high)
 
 
 def _noop_run(_: Pool[Any, Any]) -> Effect[None]:

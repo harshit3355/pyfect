@@ -123,13 +123,13 @@ def _content_tool(name: str, result: MS.CallToolResult) -> fx.Effect[None, Any, 
 def _features(invocations: list[str]) -> tuple[fx.Effect[None, Any, Any], ...]:
     """Effect's ``makeTestToolkitLayer`` and ``makeContentToolsLayer``."""
 
-    def test_tool(params: _Value, _: object) -> fx.Effect[str]:
+    def handle_test_tool(params: _Value, _: object) -> fx.Effect[str]:
         return fx.sync(lambda: invocations.append("TestTool")).as_(params["value"])
 
     toolkit = M.register_toolkit(_KIT).pipe(
         fx.provide(
             _KIT.to_layer(
-                TestTool.handler(test_tool),
+                TestTool.handler(handle_test_tool),
                 StructuredTool.handler(lambda _, __: fx.succeed({"value": "structured"})),
                 LogLevelTool.handler(lambda _, __: fx.CurrentLogLevel().map(str)),
                 RequestMetadataTool.handler(

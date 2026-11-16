@@ -199,9 +199,9 @@ def test_every_server_call_is_a_provider_tool():
 def test_mcp_result_is_provider_executed():
     results = _response.ServerResults(NameMapper([]), [])
     call = {"type": "mcp_tool_use", "id": _SERVER, "name": "echo", "server_name": "s", "input": {}}
-    results.mcp_call(cast(Any, call))
+    results.mcp_call(cast("Any", call))
     block = {"type": "mcp_tool_result", "tool_use_id": _SERVER, "is_error": False, "content": []}
-    (part,) = results.mcp_result(cast(Any, block))
+    (part,) = results.mcp_result(cast("Any", block))
     assert part["providerExecuted"] is True
 
 

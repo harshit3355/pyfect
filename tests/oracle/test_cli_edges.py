@@ -55,8 +55,10 @@ def test_global_flag_errors_are_shown_with_the_commands_own_parse_errors(env: Se
     error = yield from _run(command.make("simple", _Count), "--bogus", "--log-level").flip()
     assert isinstance(error, ShowHelp)
     assert [e.message for e in error.errors] == [
-        "Missing value for flag --log-level. Expected: all | trace | debug | info | warn"
-        " | warning | error | fatal | none",
+        (
+            "Missing value for flag --log-level. Expected: all | trace | debug | info | warn"
+            " | warning | error | fatal | none"
+        ),
         "Unrecognized flag: --bogus in command simple",
     ]
 

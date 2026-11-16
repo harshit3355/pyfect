@@ -682,8 +682,8 @@ def test_reports_excess_properties() -> None:
 def _validates_itself(schema: Any) -> bool:
     try:
         B.encoder(schema, dictionary=True)
-    except ValueError as error:
-        assert "dictionary" in str(error)
+    except ValueError as error:  # a probe: any other error fails the test
+        assert "dictionary" in str(error)  # noqa: PT017
         return False
     return True
 

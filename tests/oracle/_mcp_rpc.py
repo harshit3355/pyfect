@@ -4,7 +4,8 @@ with ``RpcServer.Protocol.make``): the test writes client messages with
 
 from __future__ import annotations
 
-from collections.abc import Callable, Set
+from collections.abc import Callable
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from typing import Any
 
@@ -28,13 +29,13 @@ class CustomTransport:
     disconnects: Queue[int]
 
 
-def _reading(client_ids: Set[int]) -> fx.Effect[Set[int]]:
+def _reading(client_ids: AbstractSet[int]) -> fx.Effect[AbstractSet[int]]:
     return fx.sync(lambda: frozenset(client_ids))
 
 
 def custom_transport(
     *,
-    client_ids: Set[int] | None = None,
+    client_ids: AbstractSet[int] | None = None,
     supports_notifications: bool = True,
     send: Callable[[int, Message], fx.Effect[None]] | None = None,
 ) -> fx.Effect[CustomTransport]:

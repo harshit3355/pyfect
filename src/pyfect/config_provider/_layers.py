@@ -77,4 +77,4 @@ def _provider_effect(provider: object) -> Effect[ConfigProvider, object, object]
                 "to run a function, pass fx.sync(f) or fx.suspend(f)",
             )
         )
-    return cast(Effect[ConfigProvider, object, object], provider)
+    return cast("Effect[ConfigProvider, object, object]", provider)

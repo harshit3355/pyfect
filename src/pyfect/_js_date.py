@@ -441,7 +441,7 @@ def _local_offset_ms(local_ms: int) -> int:
     year, month, day = _civil_from_days(days)
     if not 1 <= year <= 9999:
         year = year % 400 + (400 if year < 1 else 9200)
-    wall = datetime(year, month, day) + timedelta(milliseconds=ms)
+    wall = datetime(year, month, day) + timedelta(milliseconds=ms)  # noqa: DTZ001  local wall time
     offset = wall.replace(tzinfo=zone_local()).utcoffset() or timedelta(0)
     return offset // timedelta(milliseconds=1)
 
