@@ -72,9 +72,9 @@ These run, or fail far from the line that caused them. Most are what a coroutine
   `.timeout` can't interrupt it. Use `fx.sleep("1 second")`, and `fx.blocking(f)` for a blocking
   call you can't avoid: it runs on a thread, and the fiber waits without blocking the others.
 - **`run_blocking` in a coroutine or a notebook cell** blocks the running event loop until the
-  effect is done, and warns with `RunBlockingInEventLoopWarning`. There, use
-  `await fx.run_async(eff)`; Jupyter runs cells on an event loop, so `await` works at the top
-  of a cell.
+  effect is done, and warns with `RunBlockingInEventLoopWarning`; `run_main` there raises a
+  `RuntimeError`, since it starts a loop of its own. There, use `await fx.run_async(eff)`;
+  Jupyter runs cells on an event loop, so `await` works at the top of a cell.
 - **`yield eff` instead of `yield from eff`** runs the same, but pyright can't see the value or
   the effect's errors and services: the variable is `Unknown`, which strict mode reports. Always
   write `yield from`.

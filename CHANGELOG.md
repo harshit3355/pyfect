@@ -49,6 +49,10 @@
 - A request whose body is not valid JSON is logged as one `RequestParseError` with the JSON
   error's message, at INFO as in Effect, without the JSON error's Python traceback, which ran
   through the `json` module and made each bad request about 30 log lines.
+- `run_main` called where an asyncio loop is already running (in a coroutine, or a Jupyter
+  cell) raises a `RuntimeError` that points to `await fx.run_async(eff)`, before it builds
+  anything. It used to fail inside `asyncio.Runner` with "Cannot run the event loop while
+  another loop is running" and leave two coroutines that were never awaited.
 
 ### Added
 

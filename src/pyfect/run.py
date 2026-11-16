@@ -341,6 +341,14 @@ def run_main[A, E](
     unless ``disable_error_reporting`` or the squashed error's
     ``error_reported`` is ``False``."""
     require_effect(eff, "eff")
+    if loop_running_here():
+        # Checked before anything is built, so no coroutine is left unawaited.
+        raise RuntimeError(
+            "run_main starts its own asyncio loop, and one is already running on this thread "
+            "(in a coroutine, or a Jupyter cell). There, use `await fx.run_async(eff)`, or "
+            "`await fx.run_async_exit(eff)` to get the Exit; call run_main only at the top "
+            "level of a program, outside asyncio.run."
+        )
     main = eff if disable_error_reporting else eff.tap_cause(_log_failure)
     signalled = _Signalled()
     started: list[Fiber[A, E]] = []

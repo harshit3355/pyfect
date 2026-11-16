@@ -5,6 +5,8 @@ Signal handlers and exit codes belong to a process, so every test here runs
 ``run_main`` in a fresh interpreter and sends it real signals.
 """
 
+import asyncio
+import gc
 import os
 import re
 import signal
@@ -416,3 +418,16 @@ def test_a_failure_raised_by_finalizers_at_teardown_is_logged_and_exits_one(
     assert "body done" in done.stdout
     assert re.search(r"ERROR \(#1\): RuntimeError: finalizer boom", done.stdout)
     assert "unreachable" not in done.stdout
+
+
+def test_run_main_in_a_running_loop_points_to_run_async(recwarn: pytest.WarningsRecorder):
+    # It used to fail inside asyncio.Runner with "Cannot run the event loop while another loop
+    # is running", leaving two coroutines that were never awaited.
+    async def main() -> None:
+        fx.run_main(fx.succeed(1))
+
+    with pytest.raises(RuntimeError, match=r"await fx\.run_async\(") as raised:
+        asyncio.run(main())
+    assert "run_main" in str(raised.value)
+    gc.collect()
+    assert not [w for w in recwarn.list if "never awaited" in str(w.message)]
