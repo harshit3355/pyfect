@@ -40,6 +40,7 @@ from pyfect._core import (
     _YieldNow,
 )
 from pyfect._effect_args import require_effect
+from pyfect._effect_misuse import effect_maker
 from pyfect._fiber import Fiber, current_run_scheduler
 from pyfect._fn import Gen, fn, fn_untraced, fn_untraced_eager
 from pyfect._os_wait import os_wait
@@ -405,8 +406,10 @@ never: Effect[Never] = _Callback(lambda _resume: None)
 void: Effect[None] = _Succeed(None)
 
 
+@effect_maker
 def yield_now() -> Effect[None]:
-    """Let other fibers run before continuing."""
+    """Let other fibers run before continuing. A function, unlike Effect's ``yieldNow``
+    value: write ``fx.yield_now()``."""
     return _YieldNow()
 
 

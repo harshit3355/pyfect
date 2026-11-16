@@ -84,6 +84,9 @@ These run, or fail far from the line that caused them. Most are what a coroutine
   inside a generator, `yield from greet("ada")`.
 - **`eff()`** raises `TypeError: '_Succeed' object is not callable` (pyright reports it first):
   an effect is a value, not a function. Run it as above.
+- **`fx.yield_now` without `()`**: `fx.void` and `fx.never` are effects, but `yield_now` is a
+  function that makes one. Write `fx.yield_now().fork()` and `yield from fx.yield_now()`; the
+  bare form raises an error that says so.
 - **`await eff`** raises `TypeError: '_Succeed' object can't be awaited` (pyright reports it
   first): an effect is a description, not a coroutine. In a coroutine, run it with
   `await fx.run_async(eff)`; inside a generator, `yield from eff`. Effects are deliberately not

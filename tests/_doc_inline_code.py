@@ -16,6 +16,8 @@ fx.sleep(2.5)
 fx.sleep("2.5 seconds")
 # effects.mdx
 fx.sleep("1 second")
+# effects.mdx
+fx.yield_now().fork()
 # observability.mdx
 metric.prometheus_format()
 # observability.mdx

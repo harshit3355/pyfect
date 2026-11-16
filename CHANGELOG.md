@@ -53,6 +53,12 @@
   cell) raises a `RuntimeError` that points to `await fx.run_async(eff)`, before it builds
   anything. It used to fail inside `asyncio.Runner` with "Cannot run the event loop while
   another loop is running" and leave two coroutines that were never awaited.
+- `help(fx.run_blocking)` and the other run functions show that the result is the effect's
+  value (`run_blocking(eff: Effect[A, Never, Any], ...) -> A`, `run_blocking_exit(...) ->
+  Exit[A, E]`), where they showed `Effect[Any, Never, Any] -> Any`.
+- `fx.yield_now.fork()` and `yield from fx.yield_now` say that `yield_now` is a function to
+  call (`fx.yield_now().fork()`), where they raised `'function' object has no attribute
+  'fork'` and `'function' object is not iterable`. `yield_now` itself is unchanged.
 
 ### Added
 
@@ -95,6 +101,13 @@
 - HTTP server: a table of the failures that answer other than 500 (`RequestParseError` is a
   400, or 413 past `MaxBodySize`), and why `catch_tag(S.SchemaError, ...)` doesn't see a
   body that isn't JSON.
+- Effects, Common mistakes: `fx.yield_now` is a function, unlike `fx.void` and `fx.never`.
+- Observability: an unnamed `@fx.fn` shows as `at Effect.fn` in a failure's trace, as in
+  Effect; `@fx.fn("name")` names it.
+- Threads: links `benchmarks/streams.py` and PARITY.md, and says what the dogfood apps it
+  cites are.
+- Concurrency: a callout that a blocking call such as `time.sleep` holds every fiber, the
+  timer of `.timeout` included, and that `fx.blocking` lets the timeout fire.
 
 ## 0.6.6 (2026-11-15)
 
