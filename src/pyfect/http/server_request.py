@@ -181,7 +181,9 @@ class ServerRequest(ABC):
         try:
             return succeed(parse(text))
         except PARSE_ERRORS as cause:
-            return fail(request_parse_error(self, None, cause))
+            # The client sent bad JSON: the traceback only runs through the json module, and
+            # the logger middleware would log it with every such request.
+            return fail(request_parse_error(self, None, cause.with_traceback(None)))
 
     @property
     def json(self) -> Effect[Json, HttpServerError]:

@@ -46,6 +46,9 @@
   the generator body: `cannot be assigned to parameter "f" of type "(**P@fn) ->
   Generator[...]"`, where it used to say `parameter "name" of type "str"`. The
   `fn(name: str)` overload now comes first; what type-checks is unchanged.
+- A request whose body is not valid JSON is logged as one `RequestParseError` with the JSON
+  error's message, at INFO as in Effect, without the JSON error's Python traceback, which ran
+  through the `json` module and made each bad request about 30 log lines.
 
 ### Added
 
@@ -85,6 +88,9 @@
   distribution found" error pip gives there. The uv commands start with
   `uv init --python 3.14`, which keeps uv off the free-threaded 3.14t, where some libraries
   (`psycopg[binary]`) publish no wheels.
+- HTTP server: a table of the failures that answer other than 500 (`RequestParseError` is a
+  400, or 413 past `MaxBodySize`), and why `catch_tag(S.SchemaError, ...)` doesn't see a
+  body that isn't JSON.
 
 ## 0.6.6 (2026-11-15)
 

@@ -21,8 +21,20 @@ struct of the request: `body`, `method`, `url`, `headers`, `cookies`, and `pathP
 `searchParams`, spelled in camelCase as in Effect (a `params` key fails every request with a
 400). A request that matches no route gets a 404, and a handler that fails gets a 500 unless
 it handles the error itself.
-As in Effect, two failures answer otherwise: a `SchemaError` (a request that doesn't decode)
-gets an empty 400 and a `NoSuchElementException` an empty 404.
+As in Effect, these failures answer otherwise, each with an empty body:
+
+| Failure | Status |
+| --- | --- |
+| `SchemaError` (a request that doesn't decode) | 400 |
+| `HttpServerError` with a `RequestParseError`: a body that can't be read, or isn't valid JSON | 400 |
+| the same past `MaxBodySize` | 413 |
+| `HttpServerError` with a `RouteNotFound`, and `NoSuchElementException` | 404 |
+| `HttpServerError` with an `OriginNotAllowed` | 403 |
+
+A body that isn't JSON fails `schema_json` with the `HttpServerError` before the schema runs, so
+`catch_tag(S.SchemaError, ...)` doesn't see it. To answer both yourself, catch both:
+`fx.catch_tag((S.SchemaError, HttpServerError), handler)`. Each failure is logged at INFO with the
+response, as in Effect; a JSON error is logged as its message, without a Python traceback.
 
 A handler returns a response. `server_response.text(...)` is one, so `get_todo` below returns it
 as it is, while `server_response.json(...)` is an effect, since encoding the value can fail, so
