@@ -248,7 +248,8 @@ def test_a_lone_surrogate_pair_gets_no_0_6_5_tables_of_its_replacement(
     db = tmp_path / "log.db"
     victim, other = ("a\ufffd/b", "c"), ("a\ud800/b", "c")
     _write(db, monkeypatch, [victim])
-    assert fx.run_blocking(_migrate(db, *other)) is False
+    _bind(db, victim[0])  # the victim authenticated, as a real server records
+    assert fx.run_blocking(_migrate(db, *other)) is False  # no 0.6.5 tables are its
     assert _read(db, *other) == (None, 0)
     assert fx.run_blocking(_migrate(db, *victim)) is True
     assert _read(db, *victim) == (1, 1)
