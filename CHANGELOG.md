@@ -53,6 +53,8 @@
   client gets an `InternalServerError` saying the store waits for the server's operator,
   with its `store_id`, instead of "Decoding failure" or "Persistence failure". A store a
   0.6.5 node wrote after it opened on a newer version is logged as split.
+- `S.is_unique` and `S.is_unique_key` refusing more than 64 distinct items of one hash say
+  so, as `FrozenSet` and `Map` do, instead of calling them duplicates.
 
 ### Added
 

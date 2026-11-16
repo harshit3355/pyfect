@@ -23,6 +23,10 @@ MAX_SHARED_HASH = 64
 """How many distinct keys may share one hash in ``check_spread``. Floats that
 are not crafted reach about 35 (``2.0 ** (61 * k)`` all hash to 1)."""
 
+SHARED_HASH_LIMIT = f"at most {MAX_SHARED_HASH} may share a hash"
+"""How a schema refusing a ``HashFlood`` says why, so it never calls
+distinct values duplicates."""
+
 
 class HashFlood(ValueError):
     """More than ``MAX_SHARED_HASH`` distinct keys share one hash."""

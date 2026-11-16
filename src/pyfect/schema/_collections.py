@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Generic, TypeVar, cast
 
 from pyfect._equal import dict_of, frozenset_of
+from pyfect._peer_keys import SHARED_HASH_LIMIT
 from pyfect.exit import Success
 from pyfect.exit import fail as fail_exit
 from pyfect.schema import _arbitrary_links as _arb
@@ -38,11 +39,10 @@ RE_co = TypeVar("RE_co", covariant=True)
 
 
 _SET_EXPECTED = (
-    "items a frozenset keeps apart (True and 1 are one item in Python, and at most 64 may share"
-    " a hash)"
+    f"items a frozenset keeps apart (True and 1 are one item in Python, and {SHARED_HASH_LIMIT})"
 )
 _MAP_EXPECTED = (
-    "keys a dict keeps apart (True and 1 are one key in Python, and at most 64 may share a hash)"
+    f"keys a dict keeps apart (True and 1 are one key in Python, and {SHARED_HASH_LIMIT})"
 )
 
 
