@@ -78,8 +78,16 @@ These run, or fail far from the line that caused them. Most are what a coroutine
 - **`yield eff` instead of `yield from eff`** runs the same, but pyright can't see the value or
   the effect's errors and services: the variable is `Unknown`, which strict mode reports. Always
   write `yield from`.
-- **`await eff`** raises `TypeError` (pyright reports it first): an effect is a description,
-  not a coroutine. Run it with `await fx.run_async(eff)`, or inside a generator, `yield from eff`.
+- **Calling a function and using what it gives as the result.** `greet("ada")` builds an
+  effect and runs nothing: `print(greet("ada"))` shows `<Effect, not run: ...>`, and
+  `greet("ada") + "!"` raises `TypeError`. Run it with `fx.run_blocking(greet("ada"))`, or
+  inside a generator, `yield from greet("ada")`.
+- **`eff()`** raises `TypeError: '_Succeed' object is not callable` (pyright reports it first):
+  an effect is a value, not a function. Run it as above.
+- **`await eff`** raises `TypeError: '_Succeed' object can't be awaited` (pyright reports it
+  first): an effect is a description, not a coroutine. In a coroutine, run it with
+  `await fx.run_async(eff)`; inside a generator, `yield from eff`. Effects are deliberately not
+  awaitable, so libraries that await whatever is awaitable pass them through untouched.
 - **`@fx.fn async def`** is not an effect body: pyright reports that no overload of `fn` matches,
   and running it dies with a `TypeError`. Write a `def` and run the coroutine inside it with
   `yield from fx.from_async(f)`.

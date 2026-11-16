@@ -45,6 +45,12 @@
 
 ### Added
 
+- An effect's `repr` says it has not run and how to run it (`fx.run_blocking(effect)`, or
+  `yield from effect` in an effect generator), instead of
+  `<pyfect._primitives._Locally object at 0x...>`. Effects stay neither callable nor
+  awaitable: a `__call__` or `__await__` would change what `callable()` and
+  `inspect.isawaitable()` say about them.
+
 ### Docs
 
 - The docs home said pyfect covers about 64% of Effect v4 while the README and PyPI said
@@ -55,6 +61,8 @@
 - HTTP server: a "Routes that need services" section: `provide_request`, providing to the
   `serve` or in-memory client layer, why `layer.provide` on the routes layer is not one of
   them, and a test with a stub layer.
+- Effects, Common mistakes: using a function's effect as its result, `eff()`, and the
+  exact `TypeError` that `await eff` raises, with what to write instead.
 
 ## 0.6.6 (2026-11-15)
 

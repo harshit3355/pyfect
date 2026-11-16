@@ -11072,3 +11072,9 @@ async def check_effect_is_not_awaitable_or_a_catch_tag_method() -> None:
     fx.fail(NotFound("k")).catch_tag  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
     fx.succeed(1).provide  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
     fx.succeed(1).provide_service  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
+
+
+def check_effect_is_not_callable() -> None:
+    # eff() is a mistake for running it; pyright reports it (no __call__, see
+    # test_effect_misuse_messages.py).
+    fx.succeed(1)()  # pyright: ignore[reportCallIssue]
