@@ -4,8 +4,11 @@ The check line in CLAUDE.md is what "done" means locally; CI's `lint` and `test`
 the same four tools, or a commit green on one machine is red on the other.
 """
 
+import json
 import re
 from pathlib import Path
+
+from pyfect.date_time._icu_zones import NODE_VERSION
 
 ROOT = Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
@@ -129,3 +132,21 @@ def test_the_fuzz_workflow_compares_fresh_programs_with_node():
     job = _job("fuzz.yml", "runtime-differential")
     assert "python -m runtime_diff --fresh" in job
     assert "PYFECT_EFFECT_REF" in job and "setup-node" in job
+
+
+def test_ci_runs_the_node_the_recorded_answers_came_from():
+    """The Intl, ICU zone and node:path answers were recorded under one Node; under another the
+    tests that compare with it skip, which CI fails (tests/_skips.py)."""
+    pinned = (ROOT / ".node-version").read_text(encoding="utf-8").strip()
+    fixtures = ROOT / "tests" / "oracle"
+    recorded = {
+        "pyfect.date_time._icu_zones.NODE_VERSION": NODE_VERSION,
+        "intl_answers.json": json.loads((fixtures / "intl_answers.json").read_text())["node"],
+        "node_path_cases.json": json.loads(
+            (fixtures / "fixtures" / "node_path_cases.json").read_text()
+        )["node"],
+    }
+    assert recorded == dict.fromkeys(recorded, pinned)
+    for path in (".github/actions/check-setup/action.yml", ".github/workflows/fuzz.yml"):
+        text = (ROOT / path).read_text(encoding="utf-8")
+        assert "node-version-file: .node-version" in text, path

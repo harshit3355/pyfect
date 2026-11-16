@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import atexit
 import contextlib
+import glob
 import os
 import shutil
 import socket
@@ -36,7 +37,18 @@ from . import _pg_owner
 if TYPE_CHECKING:
     from pyfect.sql.pg.connection import PgConnection
 
-_SEARCH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/lib/postgresql/17/bin")
+
+def _major(directory: str) -> int:
+    version = Path(directory).parent.name
+    return int(version) if version.isdigit() else 0
+
+
+_SEARCH = (
+    "/opt/homebrew/bin",
+    "/usr/local/bin",
+    # Debian and Ubuntu keep each major version's binaries apart; the newest wins.
+    *sorted(glob.glob("/usr/lib/postgresql/*/bin"), key=_major, reverse=True),
+)
 PASSWORD = "postgres"
 
 

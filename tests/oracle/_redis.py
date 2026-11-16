@@ -2,14 +2,17 @@
 
 ``server()`` starts one ``redis-server`` (no persistence) in a temporary
 directory the first time a test asks for it, on a free localhost port, and
-stops it when the test process exits; without the binary (or redis-py),
-the tests that need it skip. It never touches a server it did not start.
-``flush()`` empties it between tests.
+stops it when the test process exits. Without the binary it runs the
+``redis`` image in Docker instead (labelled like ``_mysql``'s containers, so
+a crashed run's are reaped); without either (or redis-py), the tests that
+need it skip. It never touches a server it did not start. ``flush()``
+empties it between tests.
 """
 
 from __future__ import annotations
 
 import atexit
+import os
 import shutil
 import socket
 import subprocess
@@ -20,6 +23,8 @@ from pathlib import Path
 
 import _ports
 import pytest
+
+from . import _docker as _containers
 
 _SEARCH = ("/opt/homebrew/bin", "/usr/local/bin", "/usr/bin")
 
@@ -63,10 +68,52 @@ def _stop(process: subprocess.Popen[bytes], root: str) -> None:
     shutil.rmtree(root, ignore_errors=True)
 
 
+IMAGE = "redis:8.2-alpine"
+LABEL = "pyfect.test=redis"
+
+
+def _start_container() -> RedisServer:
+    _containers.require_docker()
+    _containers.reap_stale(LABEL)
+    _containers.pull(IMAGE)
+    started = _containers.docker(
+        "run",
+        "-d",
+        "--rm",
+        "--label",
+        LABEL,
+        "--label",
+        f"{_containers.OWNER}={os.getpid()}",
+        "-p",
+        "127.0.0.1::6379",
+        IMAGE,
+        "redis-server",
+        "--save",
+        "",
+        "--appendonly",
+        "no",
+    )
+    if started.returncode != 0:
+        raise RuntimeError(f"cannot start Redis: {started.stderr.strip()}")
+    container = started.stdout.strip()
+    atexit.register(_containers.remove, container)
+    try:
+        port = _containers.published_port(container, 6379)
+        deadline = time.monotonic() + 30
+        while not _ready(port):
+            if time.monotonic() > deadline:
+                raise RuntimeError("the Redis container did not start")
+            time.sleep(0.05)
+    except BaseException:
+        _containers.remove(container)
+        raise
+    return RedisServer("127.0.0.1", port)
+
+
 def _start() -> RedisServer:
     binary = _binary("redis-server")
     if binary is None:
-        raise RuntimeError("redis-server not found")
+        return _start_container()
     root = tempfile.mkdtemp(prefix="pyfect-redis-")
     port = _ports.reserved_port()
     process = subprocess.Popen(
@@ -108,7 +155,7 @@ def server() -> RedisServer:
             import redis  # noqa: F401  # pyright: ignore[reportUnusedImport]
 
             _Shared.server = _start()
-        except (ImportError, RuntimeError, OSError) as error:
+        except (ImportError, RuntimeError, OSError, subprocess.SubprocessError) as error:
             _Shared.reason = f"no local Redis: {error}"
     if _Shared.server is None:
         pytest.skip(_Shared.reason or "no local Redis")
