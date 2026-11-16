@@ -86,7 +86,12 @@ class ServiceEffect(Effect[S_inv, Never, T_co]):
         found, value = fiber._context.lookup(self.tag)
         if found:
             return _Succeed(value)
-        return _FailCause(Cause((Die(MissingServiceError(self.tag.key)),)))
+        error = MissingServiceError(self.tag.key)
+        for tag in fiber._context.tags():
+            if tag.__missing_service_hint__ is not None:
+                error.add_note(tag.__missing_service_hint__)
+                break
+        return _FailCause(Cause((Die(error),)))
 
 
 def _require_base_parents(cls: type[Tag[Any]]) -> None:
@@ -120,6 +125,9 @@ class Tag[S]:
 
     key: ClassVar[str]
     __tag_base__: ClassVar[bool] = True
+    # Noted on a ``MissingServiceError`` raised while this tag's service is in the context:
+    # where a service missing there should have come from.
+    __missing_service_hint__: ClassVar[str | None] = None
 
     def __init_subclass__(
         cls, *, key: str | None = None, base: bool = False, _alias: bool = False, **kwargs: Any

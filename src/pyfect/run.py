@@ -74,7 +74,7 @@ type Teardown = Callable[[Exit[Any, Any]], int]
 def run_sync_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]: ...
 @overload
 def run_sync_exit[A, E, R](eff: Effect[A, E, R], *, context: Context[R]) -> Exit[A, E]: ...
-def run_sync_exit(eff: Effect[Any, Any, Any], *, context: Context = _EMPTY) -> Exit[Any, Any]:
+def run_sync_exit[A, E](eff: Effect[A, E, Any], *, context: Context[Any] = _EMPTY) -> Exit[A, E]:
     """The effect's ``Exit``, run on this thread without waiting (Effect's
     ``runSyncExit``): an effect that waits dies with ``AsyncFiberError``."""
     require_effect(eff, "eff")
@@ -99,7 +99,7 @@ def flush_exit[A, E](scheduler: SyncOnlyScheduler, fiber: Fiber[A, E]) -> Exit[A
 def run_sync[A](eff: Effect[A, Never, Never]) -> A: ...
 @overload
 def run_sync[A, R](eff: Effect[A, Never, R], *, context: Context[R]) -> A: ...
-def run_sync(eff: Effect[Any, Never, Any], *, context: Context = _EMPTY) -> Any:
+def run_sync[A](eff: Effect[A, Never, Any], *, context: Context[Any] = _EMPTY) -> A:
     """The effect's value, run on this thread without waiting (Effect's
     ``runSync``); a defect or interruption is raised, and an effect that
     waits dies with ``AsyncFiberError``."""
@@ -110,7 +110,9 @@ def run_sync(eff: Effect[Any, Never, Any], *, context: Context = _EMPTY) -> Any:
 def run_blocking_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]: ...
 @overload
 def run_blocking_exit[A, E, R](eff: Effect[A, E, R], *, context: Context[R]) -> Exit[A, E]: ...
-def run_blocking_exit(eff: Effect[Any, Any, Any], *, context: Context = _EMPTY) -> Exit[Any, Any]:
+def run_blocking_exit[A, E](
+    eff: Effect[A, E, Any], *, context: Context[Any] = _EMPTY
+) -> Exit[A, E]:
     """The effect's ``Exit``, blocking this thread until it is done; sleeps,
     forks and ``blocking`` work, ``from_async`` does not (no asyncio loop).
     Warns with ``RunBlockingInEventLoopWarning`` on a thread whose asyncio loop
@@ -145,7 +147,7 @@ def _run_blocking_exit(eff: Effect[Any, Any, Any], context: Context) -> Exit[Any
 def run_blocking[A](eff: Effect[A, Never, Never]) -> A: ...
 @overload
 def run_blocking[A, R](eff: Effect[A, Never, R], *, context: Context[R]) -> A: ...
-def run_blocking(eff: Effect[Any, Never, Any], *, context: Context = _EMPTY) -> Any:
+def run_blocking[A](eff: Effect[A, Never, Any], *, context: Context[Any] = _EMPTY) -> A:
     """The effect's value, blocking this thread until it is done; a defect or
     interruption is raised. Sleeps, forks and ``blocking`` work,
     ``from_async`` does not (no asyncio loop). Use ``run_blocking_exit``
@@ -176,9 +178,9 @@ def drive[A, E](scheduler: SyncScheduler, fiber: Fiber[A, E]) -> Exit[A, E]:
 async def run_async_exit[A, E](eff: Effect[A, E, Never]) -> Exit[A, E]: ...
 @overload
 async def run_async_exit[A, E, R](eff: Effect[A, E, R], *, context: Context[R]) -> Exit[A, E]: ...
-async def run_async_exit(
-    eff: Effect[Any, Any, Any], *, context: Context = _EMPTY
-) -> Exit[Any, Any]:
+async def run_async_exit[A, E](
+    eff: Effect[A, E, Any], *, context: Context[Any] = _EMPTY
+) -> Exit[A, E]:
     """The effect's ``Exit``, run on the running asyncio loop; cancelling the
     awaiting task interrupts the fiber, waits for its finalizers, then
     raises ``CancelledError`` rather than returning the interruption."""
@@ -192,7 +194,7 @@ async def run_async_exit(
 async def run_async[A](eff: Effect[A, Never, Never]) -> A: ...
 @overload
 async def run_async[A, R](eff: Effect[A, Never, R], *, context: Context[R]) -> A: ...
-async def run_async(eff: Effect[Any, Never, Any], *, context: Context = _EMPTY) -> Any:
+async def run_async[A](eff: Effect[A, Never, Any], *, context: Context[Any] = _EMPTY) -> A:
     """The effect's value, run on the running asyncio loop (Effect's
     ``runPromise``); a defect or interruption is raised, and cancelling the
     awaiting task interrupts the fiber and waits for its finalizers."""
@@ -343,6 +345,14 @@ def run_main[A, E](
     unless ``disable_error_reporting`` or the squashed error's
     ``error_reported`` is ``False``."""
     require_effect(eff, "eff")
+    if loop_running_here():
+        # Checked before anything is built, so no coroutine is left unawaited.
+        raise RuntimeError(
+            "run_main starts its own asyncio loop, and one is already running on this thread "
+            "(in a coroutine, or a Jupyter cell). There, use `await fx.run_async(eff)`, or "
+            "`await fx.run_async_exit(eff)` to get the Exit; call run_main only at the top "
+            "level of a program, outside asyncio.run."
+        )
     main = eff if disable_error_reporting else eff.tap_cause(_log_failure)
     signalled = _Signalled()
     started: list[Fiber[A, E]] = []

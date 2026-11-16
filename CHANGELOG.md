@@ -7,6 +7,17 @@
 - `sql_event_log_server_encrypted.legacy_stores(store_ids)` lists the stores, among the
   app's store ids and every authenticated key, whose 0.6.5 tables wait for a migration or
   went to another pair, with where each stands.
+- An effect's `repr` says it has not run and how to run it (`fx.run_blocking(effect)`, or
+  `yield from effect` in an effect generator), instead of
+  `<pyfect._primitives._Locally object at 0x...>`. Effects stay neither callable nor
+  awaitable: a `__call__` or `__await__` would change what `callable()` and
+  `inspect.isawaitable()` say about them.
+- `PYFECT_WARN_BARE_DURATIONS=1` makes every duration given as a bare number (other than 0
+  or an infinity) warn with `pyfect.duration.BareNumberDurationWarning`, at the caller's line:
+  `the duration 2 was read as 2 milliseconds; write "2 seconds" if you meant seconds, or
+  "2 millis" to keep milliseconds`. Off by default; `-W
+  error::pyfect.duration.BareNumberDurationWarning` (or pytest's `filterwarnings`) makes it an
+  error. A bare number is still milliseconds, as in Effect.
 
 ### Fixed
 
@@ -108,6 +119,28 @@
   the `America/*` zones tz 2024b made them links to). `scripts/gen_icu_zones.py` now decides
   which ids carry ICU's data from ICU's and tz's sources, not from the generating machine's tz
   database.
+- A `MissingServiceError` raised while handling an HTTP request carries a note that names
+  `router.provide_request(layer)` and says `layer.provide` on a routes layer reaches only its
+  build, not its requests (as with Effect's `Layer.provide` there). Its message is still
+  Effect's `Service not found: <key>`. A newcomer's `Routes.pipe(layer.provide(Stub))` died on
+  every request with no pointer to the fix.
+- pyright explains an `@fx.fn` on an `async def`, or on a `def` with no `yield`, against
+  the generator body: `cannot be assigned to parameter "f" of type "(**P@fn) ->
+  Generator[...]"`, where it used to say `parameter "name" of type "str"`. The
+  `fn(name: str)` overload now comes first; what type-checks is unchanged.
+- A request whose body is not valid JSON is logged as one `RequestParseError` with the JSON
+  error's message, at INFO as in Effect, without the JSON error's Python traceback, which ran
+  through the `json` module and made each bad request about 30 log lines.
+- `run_main` called where an asyncio loop is already running (in a coroutine, or a Jupyter
+  cell) raises a `RuntimeError` that points to `await fx.run_async(eff)`, before it builds
+  anything. It used to fail inside `asyncio.Runner` with "Cannot run the event loop while
+  another loop is running" and leave two coroutines that were never awaited.
+- `help(fx.run_blocking)` and the other run functions show that the result is the effect's
+  value (`run_blocking(eff: Effect[A, Never, Any], ...) -> A`, `run_blocking_exit(...) ->
+  Exit[A, E]`), where they showed `Effect[Any, Never, Any] -> Any`.
+- `fx.yield_now.fork()` and `yield from fx.yield_now` say that `yield_now` is a function to
+  call (`fx.yield_now().fork()`), where they raised `'function' object has no attribute
+  'fork'` and `'function' object is not iterable`. `yield_now` itself is unchanged.
 
 ### Performance
 
@@ -138,6 +171,38 @@
 - [Upgrading event log stores from 0.6.5](https://pyfect.dev/docs/eventlog-upgrade-0-6-7):
   who is affected, stopping every 0.6.5 node first, what the server does by itself, when the
   operator acts, and why stores two identities shared can't be split.
+- The docs home said pyfect covers about 64% of Effect v4 while the README and PyPI said
+  about 95%. Both now state the number `scripts/parity_summary.py` computes from the weighted
+  table in docs/PARITY.md (about 95%, about 94% of the runtime core), and
+  `tests/test_parity_summary.py` fails when a page disagrees with the table. PARITY.md opens
+  with that one-line summary.
+- HTTP server: a "Routes that need services" section: `provide_request`, providing to the
+  `serve` or in-memory client layer, why `layer.provide` on the routes layer is not one of
+  them, and a test with a stub layer.
+- Effects, Common mistakes: using a function's effect as its result, `eff()`, and the
+  exact `TypeError` that `await eff` raises, with what to write instead.
+- Effects: a "Reading pyright errors" section: a missing service at a run function, the
+  long `@testing.effect` error for one, and an `@fx.fn` body that is not a generator.
+- Schedules, Durations: how to find every bare-number duration with
+  `PYFECT_WARN_BARE_DURATIONS` and fail on them under pytest.
+- Testing: the in-memory HTTP client takes absolute URLs (`http://localhost/...`); a relative
+  one fails with `InvalidUrlError`, as with Effect's `HttpClient.make`, unlike the
+  `layer_test` client, and how to prepend the host.
+- Installation: the pip commands make the virtual environment with `python3.13`, since a
+  plain `python3` can be older (macOS ships 3.9), and the page shows the "No matching
+  distribution found" error pip gives there. The uv commands start with
+  `uv init --python 3.14`, which keeps uv off the free-threaded 3.14t, where some libraries
+  (`psycopg[binary]`) publish no wheels.
+- HTTP server: a table of the failures that answer other than 500 (`RequestParseError` is a
+  400, or 413 past `MaxBodySize`), and why `catch_tag(S.SchemaError, ...)` doesn't see a
+  body that isn't JSON.
+- Effects, Common mistakes: `fx.yield_now` is a function, unlike `fx.void` and `fx.never`.
+- Observability: an unnamed `@fx.fn` shows as `at Effect.fn` in a failure's trace, as in
+  Effect; `@fx.fn("name")` names it.
+- Threads: links `benchmarks/streams.py` and PARITY.md, and says what the dogfood apps it
+  cites are.
+- Concurrency: a callout that a blocking call such as `time.sleep` holds every fiber, the
+  timer of `.timeout` included, and that `fx.blocking` lets the timeout fire.
 
 ## 0.6.6 (2026-11-15)
 

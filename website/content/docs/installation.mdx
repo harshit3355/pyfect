@@ -8,11 +8,24 @@ PyPI: the distribution is named `pyfect-dev` and you import `pyfect`.
 The PyPI package called `pyfect` is an unrelated project.
 
 <InstallCommand
-  uv={"uv init app && cd app\nuv add pyfect-dev\nuv add --dev pyright"}
-  pip={"mkdir app && cd app\npython -m venv .venv && . .venv/bin/activate\npip install pyfect-dev pyright"}
+  uv={"uv init --python 3.14 app && cd app\nuv add pyfect-dev\nuv add --dev pyright"}
+  pip={"mkdir app && cd app\npython3.13 -m venv .venv && . .venv/bin/activate\npip install pyfect-dev pyright"}
 />
 
-These start a new project in `app/`. In a project you already have, `uv add pyfect-dev` (or
+These start a new project in `app/`. `--python 3.14` pins the standard build of CPython: left to
+choose, uv can pick the free-threaded 3.14t, where some libraries publish no wheels yet
+(`psycopg[binary]` is one). The pip commands name `python3.13` because a plain `python3` is often
+older: on macOS, `/usr/bin/python3` is Python 3.9. With a Python older than 3.13, pip finds no
+release it can install and says only:
+
+```text
+ERROR: Could not find a version that satisfies the requirement pyfect-dev (from versions: none)
+ERROR: No matching distribution found for pyfect-dev
+```
+
+Check with `python3 --version`, and if it is older than 3.13, install a newer one (from
+python.org, `brew install python@3.13`, or `uv python install 3.13`) and make the virtual
+environment with it. In a project you already have, `uv add pyfect-dev` (or
 `pip install pyfect-dev`) is enough, as long as its `pyproject.toml` has a `[project]` table:
 uv adds dependencies there and refuses a file that only configures tools.
 

@@ -62,3 +62,44 @@ def test_every_pipe_only_combinator_is_listed():
     # A new curried combinator documented with `.pipe(name(...))` gets the message too.
     assert _pipe_only_in_docstrings() <= PIPE_ONLY
     assert all(callable(getattr(fx, name)) for name in PIPE_ONLY)
+
+
+@pytest.mark.parametrize(
+    "effect",
+    [fx.succeed(1), fx.fail("boom"), fx.sleep("1 second"), fx.never],
+    ids=["succeed", "fail", "sleep", "never"],
+)
+def test_an_effect_s_repr_says_it_has_not_run_and_how_to_run_it(effect: fx.Effect[object, object]):
+    # print(greet("ada")) used to show "<pyfect._primitives._Locally object at 0x...>".
+    text = repr(effect)
+    assert text == str(effect)
+    assert "not run" in text
+    assert "fx.run_blocking(" in text
+    assert "yield from" in text
+    assert "_primitives" not in text
+
+
+def test_an_effect_is_not_callable():
+    # A __call__, even one raising a clearer TypeError, would make callable(effect) true, and
+    # code that calls a callable but uses an effect as it is (cli's `layer(value) if
+    # callable(layer) else layer`) would call it. pyright reports the call (type_checks.py).
+    assert not callable(fx.succeed(1))
+
+
+def test_an_effect_method_on_yield_now_says_to_call_it():
+    # Effect's yieldNow is a value; pyfect's yield_now is a function until 0.7.0.
+    with pytest.raises(AttributeError, match=r"fx\.yield_now\(\)\.fork\(") as raised:
+        fx.yield_now.fork()  # pyright: ignore[reportFunctionMemberAccess]
+    assert "Did you mean" not in "".join(traceback.format_exception(raised.value))
+    assert fx.run_blocking(fx.yield_now().as_("ran")) == "ran"
+    assert fx.yield_now.__name__ == "yield_now"
+    assert inspect.signature(fx.yield_now).return_annotation == "Effect[None]"
+
+
+def test_yield_from_an_uncalled_yield_now_says_to_call_it():
+    @fx.gen
+    def body():
+        yield from fx.yield_now  # pyright: ignore[reportGeneralTypeIssues]
+
+    with pytest.raises(TypeError, match=r"yield from fx\.yield_now\(\)"):
+        fx.run_blocking(body)  # pyright: ignore[reportUnknownArgumentType]

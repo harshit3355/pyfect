@@ -102,9 +102,10 @@ app's own coroutines, since they share the loop's thread. Move such work off the
 ## What throughput to expect
 
 Every fiber step is several Python calls, about 15 times what the same step costs in Effect
-under V8. `benchmarks/streams.py` in the repository runs the pipelines below; these are its
-best-of-five numbers on CPython 3.14, with free-threaded 3.14t in brackets and Effect 4.1.2
-under Node 24 on the same machine (from `docs/PARITY.md`):
+under V8. [`benchmarks/streams.py`](https://github.com/tylergibbs1/pyfect/blob/main/benchmarks/streams.py)
+in the repository runs the pipelines below; these are its best-of-five numbers on CPython 3.14,
+with free-threaded 3.14t in brackets and Effect 4.1.2 under Node 24 on the same machine (from
+[`docs/PARITY.md`](https://github.com/tylergibbs1/pyfect/blob/main/docs/PARITY.md)):
 
 | Pipeline | pyfect | Effect |
 | --- | --- | --- |
@@ -123,8 +124,9 @@ free-threaded build is no faster here. To go past one core, split the work acros
 ### Rechunk before grouping
 
 Most of what `group_by` and `group_by_key` cost is paid per chunk, not per item, so items that
-arrive in chunks of one pay it for every item. A dogfood app's ingest
-pipeline measured about 59k items/s with one-item chunks, 238k/s at 5 items a chunk and about
+arrive in chunks of one pay it for every item. The ingest pipeline of a dogfood app (one of
+the applications the maintainers build on pyfect to try it under real load; they are not
+public) measured about 59k items/s with one-item chunks, 238k/s at 5 items a chunk and about
 1M/s at 64. Rechunk items that arrive one at a time before grouping them: `rechunk(n)` holds
 items until it has `n`, and `grouped_within(n, duration)` followed by `flatten_iterable()` also
 lets a partial batch go once `duration` has passed, for a live source that may trickle.
@@ -142,8 +144,8 @@ lets a partial batch go once `duration` has passed, for a live source that may t
 A run is saturated when its one thread is busy all the time: the process shows one core at
 100% while the others idle, whatever the build. The signs inside the program:
 
-- Subscribers with a `"sliding"` or `"dropping"` strategy miss items: a load run of a dogfood
-  app pushing windows to 300 clients lost about 62% of them at fast subscribers, with one core
+- Subscribers with a `"sliding"` or `"dropping"` strategy miss items: a load run of another
+  dogfood app pushing windows to 300 clients lost about 62% of them at fast subscribers, with one core
   saturated, and none at 30 clients. Count what a strategy drops, as in
   [Publishing to every subscriber](/docs/concurrency#publishing-to-every-subscriber), or look
   for gaps in sequence numbers.

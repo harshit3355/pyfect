@@ -66,6 +66,13 @@ their schema with the schema error, so a test reads them with `.exit()`. A respo
 its `.cookies`, not in `set-cookie` headers, as in Effect, which hands the server response over
 without writing it to the wire.
 
+Give the in-memory client absolute URLs, such as `http.get("http://localhost/events")`: the path
+picks the route and the host is not used. A relative URL such as `"/events"` fails with an
+`InvalidUrlError`, as with Effect's `HttpClient.make`, which resolves nothing. That differs from
+`uvicorn_server.layer_test()`, whose client prepends the test server's address to every URL, as
+Effect's `layerTest` does. To send paths to the in-memory client, prepend the host yourself:
+`client.map_request(lambda request: request.prepend_url("http://localhost"))`.
+
 <include meta='title="test_streaming_http.py"'>../../snippets/testing/test_streaming_http.py</include>
 
 ## Property tests

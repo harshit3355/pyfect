@@ -199,7 +199,7 @@ layer, concurrency, retries and timeouts.
 
 pyfect follows Effect 4.1.2, does what Effect does wherever Python can express it, and runs
 Effect's own test cases as its spec: over 25,000 tests, with a test that fails on any Effect
-test title neither ported nor omitted with a reason, and about 95% of Effect's API so far. Every
+test title neither ported nor omitted with a reason. It covers about 95% of Effect v4 (about 94% of the runtime core) so far. Every
 export of the core modules is listed against Effect's in [`docs/coverage/`](https://github.com/tylergibbs1/pyfect/tree/main/docs/coverage), and
 [`docs/PARITY.md`](https://github.com/tylergibbs1/pyfect/blob/main/docs/PARITY.md) tracks what is done, what is open and what still differs. A
 `Duration` is Effect's, exact to the nanosecond at any length or infinite, since 0.5.0. A
@@ -214,12 +214,13 @@ pyfect needs Python 3.13 or later; its one dependency is `typing-extensions`. In
 project).
 
 ```sh
-uv init app && cd app      # a new project; skip in one that has a [project] table
+uv init --python 3.14 app && cd app   # a new project; skip in one that has a [project] table
 uv add pyfect-dev
 uv add --dev pyright
 ```
 
-With pip: `pip install pyfect-dev pyright`.
+With pip, in a virtual environment of Python 3.13 or later (`python3.13 -m venv .venv`): `pip install
+pyfect-dev pyright`. On an older Python, pip says only "No matching distribution found".
 
 Optional extras: `otel` (OpenTelemetry), `hypothesis`, `pydantic`, `msgspec`, `httpx` (the
 HTTP client backend), `websockets` (WebSocket clients and servers), `server` (the uvicorn

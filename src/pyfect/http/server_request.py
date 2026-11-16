@@ -181,7 +181,9 @@ class ServerRequest(ABC):
         try:
             return succeed(parse(text))
         except PARSE_ERRORS as cause:
-            return fail(request_parse_error(self, None, cause))
+            # The client sent bad JSON: the traceback only runs through the json module, and
+            # the logger middleware would log it with every such request.
+            return fail(request_parse_error(self, None, cause.with_traceback(None)))
 
     @property
     def json(self) -> Effect[Json, HttpServerError]:
@@ -248,6 +250,14 @@ class ServerRequest(ABC):
 
 class HttpServerRequest(Tag[ServerRequest], key="effect/http/HttpServerRequest"):
     """The request being handled."""
+
+    __missing_service_hint__ = (
+        "This service was read while handling an HTTP request. Services a route needs per "
+        "request come from router.provide_request(layer) on the routes layer, or from the "
+        "layers given to router.serve(...) or router.layer_in_memory_client(...). "
+        "layer.provide(...) on a routes layer gives the service only to building that layer, "
+        "not to its requests."
+    )
 
 
 class ParsedSearchParams(Tag[Mapping[str, str | list[str]]], key="effect/http/ParsedSearchParams"):

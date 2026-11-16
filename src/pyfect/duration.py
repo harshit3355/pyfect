@@ -20,7 +20,9 @@ floats (past float range the sum is infinite), anything with ``Nanos`` exactly.
 from __future__ import annotations
 
 import math
+import os
 import re
+import warnings
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
@@ -777,15 +779,45 @@ def _from_timedelta(td: timedelta) -> Duration:
     return _from_object(units)
 
 
+WARN_BARE_DURATIONS_ENV: Final = "PYFECT_WARN_BARE_DURATIONS"
+_PACKAGE_DIR: Final = os.path.dirname(os.path.abspath(__file__)) + os.sep
+
+
+class BareNumberDurationWarning(UserWarning):
+    """A bare number was given as a duration and read as milliseconds (``fx.sleep(2)`` sleeps
+    2 ms, as in Effect). Emitted only when the ``PYFECT_WARN_BARE_DURATIONS`` environment
+    variable is set (and not ``0``); make it an error with
+    ``-W error::pyfect.duration.BareNumberDurationWarning``."""
+
+
+def _warn_bare_number(value: float) -> None:
+    text = js_number(_js_float(value))
+    warnings.warn(
+        BareNumberDurationWarning(
+            f"the duration {text} was read as {text} milliseconds; write "
+            f'"{text} seconds" if you meant seconds, or "{text} millis" to keep milliseconds'
+        ),
+        skip_file_prefixes=(_PACKAGE_DIR,),
+    )
+
+
 def from_input_unsafe(input: Input) -> Duration:
     """Parse an ``Input``; raises ``ValueError`` for one that is not a duration (Effect's
-    ``Duration.fromInputUnsafe``)."""
+    ``Duration.fromInputUnsafe``). A bare number is milliseconds; with
+    ``PYFECT_WARN_BARE_DURATIONS=1`` one other than 0 or infinity warns with
+    ``BareNumberDurationWarning``."""
     match input:
         case Duration():
             return input
         case bool():
             raise ValueError(f"Invalid Input: {_js.js_string(input)}")
         case float() | int():
+            if (
+                input
+                and not (isinstance(input, float) and not math.isfinite(input))
+                and os.environ.get(WARN_BARE_DURATIONS_ENV, "") not in ("", "0")
+            ):
+                _warn_bare_number(input)
             return _make_number(_js_float(input))
         case str():
             return _from_text(input)
@@ -867,6 +899,8 @@ def to_hr_time(input: Input) -> tuple[float, float]:
 
 
 __all__ = [
+    "WARN_BARE_DURATIONS_ENV",
+    "BareNumberDurationWarning",
     "Duration",
     "DurationObject",
     "DurationValue",

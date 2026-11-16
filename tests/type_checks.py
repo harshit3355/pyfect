@@ -11072,3 +11072,30 @@ async def check_effect_is_not_awaitable_or_a_catch_tag_method() -> None:
     fx.fail(NotFound("k")).catch_tag  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
     fx.succeed(1).provide  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
     fx.succeed(1).provide_service  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]  # noqa: B018
+
+
+def check_effect_is_not_callable() -> None:
+    # eff() is a mistake for running it; pyright reports it (no __call__, see
+    # test_effect_misuse_messages.py).
+    fx.succeed(1)()  # pyright: ignore[reportCallIssue]
+
+
+# An async def or a def with no yield is not an fn body (the message names the body
+# parameter "f", not "name": tests/test_fn_pyright_messages.py).
+@fx.fn  # pyright: ignore[reportCallIssue, reportArgumentType, reportUntypedFunctionDecorator]
+async def check_fn_rejects_a_coroutine_body(url: str):
+    return url
+
+
+@fx.fn  # pyright: ignore[reportCallIssue, reportArgumentType, reportUntypedFunctionDecorator]
+def check_fn_rejects_a_body_with_no_yield():
+    return fx.succeed(1)
+
+
+@fx.fn("named")
+def check_fn_still_takes_a_name():
+    yield from fx.succeed(None)
+    return 1
+
+
+assert_type(check_fn_still_takes_a_name(), fx.Effect[Literal[1], Never, Never])

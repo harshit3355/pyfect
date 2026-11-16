@@ -49,8 +49,11 @@ def _signature(name: str, indent: str, self_param: list[str], body: str, n: int)
 
 
 def render_fn() -> str:
-    out = [_signature("fn", "", [], GEN_BODY, n) for n in range(MAX_PIPEABLES + 1)]
-    out.append("@overload\ndef fn(name: str, /, **options: Unpack[SpanOptions]) -> _Traced: ...\n")
+    # The name overload comes first: when no overload matches a single argument, pyright
+    # reports the last one it tried, so a wrong body (an async def, a def with no yield) is
+    # explained against the generator body, not against ``name: str``.
+    out = ["@overload\ndef fn(name: str, /, **options: Unpack[SpanOptions]) -> _Traced: ...\n"]
+    out += [_signature("fn", "", [], GEN_BODY, n) for n in range(MAX_PIPEABLES + 1)]
     return "".join(out)
 
 

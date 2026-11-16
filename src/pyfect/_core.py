@@ -90,6 +90,13 @@ class Effect(
     def __iter__(self) -> Generator[Effect[Any, E_co, R_co], Any, A_co]:
         return (yield self)
 
+    def __repr__(self) -> str:
+        # ``print(greet("ada"))`` is often the first look at an effect: say what it is.
+        return (
+            "<Effect, not run: run it with fx.run_blocking(effect), "
+            "or with `yield from effect` inside an effect generator>"
+        )
+
     def pipe[B](self, f: Callable[[Self], B], /) -> B:
         """Apply ``f`` to this effect. One step per call, on purpose:
         pyright only narrows types correctly for a single step, so chain

@@ -399,6 +399,8 @@ class _Traced:
 
 # --- generated fn overloads (tests/test_fn_overloads.py) ---
 @overload
+def fn(name: str, /, **options: Unpack[SpanOptions]) -> _Traced: ...
+@overload
 def fn[**P, A, E = Never, R = Never](
     f: Callable[P, Generator[Effect[Any, E, R], Any, A]],
     /,
@@ -493,8 +495,6 @@ def fn[**P, A, B1, B2, B3, B4, B5, B6, B7, B8, B9, E = Never, R = Never](
     p9: Pipe[B8, B9, P],
     /,
 ) -> Callable[P, B9]: ...
-@overload
-def fn(name: str, /, **options: Unpack[SpanOptions]) -> _Traced: ...
 # --- end generated fn overloads ---
 def fn(
     f: _Body | str,

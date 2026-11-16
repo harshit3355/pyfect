@@ -20,6 +20,10 @@ the standard library's `logging`.
 `eff.with_span(name)` runs an effect inside a span; `@fx.fn("name")` does the same for every call
 of a function. Spans nest across forked fibers, and logs inside a span become its events.
 
+The name also labels the function in a failure's trace. A failure logged from inside a plain
+`@fx.fn` reads `at Effect.fn (app.py:12)`, the name Effect gives an unnamed `Effect.fn`;
+`@fx.fn("check_urls")` makes it `at check_urls (app.py:12)`, and adds the span.
+
 <include meta='title="tracing.py"'>../../snippets/observability/tracing.py</include>
 
 The native tracer keeps spans in memory. To export them, install the OpenTelemetry bridge

@@ -38,6 +38,8 @@ UNIT_FREE_TESTS = frozenset(
         "oracle/test_duration.py",
         "test_duration_literals.py",
         "test_duration_overflow_guard.py",
+        # Passes bare numbers to check that PYFECT_WARN_BARE_DURATIONS warns on them.
+        "test_bare_number_duration_warning.py",
     )
 )
 # A parameter that takes `duration.Input` (imported as `DurationInput`), or `Input` inside
@@ -474,6 +476,8 @@ _ON_PURPOSE = frozenset(
     {
         ("website/content/docs/schedules.mdx", "`fx.sleep(5)`: `5` passed to `sleep`"),
         ("website/content/docs/effects.mdx", "`fx.sleep(2.5)`: `2.5` passed to `sleep`"),
+        # BareNumberDurationWarning's docstring: what the warning is about.
+        ("src/pyfect/duration.py", "`fx.sleep(2)`: `2` passed to `sleep`"),
     }
 )
 

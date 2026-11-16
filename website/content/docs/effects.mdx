@@ -22,7 +22,7 @@ function that returns one.
 <Callout title="A bare number is milliseconds">
 As in Effect, `fx.sleep(2.5)` sleeps 2.5 milliseconds, and so does every other duration given as a
 number. Write the unit, `fx.sleep("2.5 seconds")`, or a `timedelta`. See
-[Durations](/docs/schedules#durations).
+[Durations](/docs/schedules#durations), which shows how to make pyfect warn on every bare number.
 </Callout>
 
 pyright infers the success type from `return`, the errors from every effect that can fail and
@@ -72,14 +72,25 @@ These run, or fail far from the line that caused them. Most are what a coroutine
   `.timeout` can't interrupt it. Use `fx.sleep("1 second")`, and `fx.blocking(f)` for a blocking
   call you can't avoid: it runs on a thread, and the fiber waits without blocking the others.
 - **`run_blocking` in a coroutine or a notebook cell** blocks the running event loop until the
-  effect is done, and warns with `RunBlockingInEventLoopWarning`. There, use
-  `await fx.run_async(eff)`; Jupyter runs cells on an event loop, so `await` works at the top
-  of a cell.
+  effect is done, and warns with `RunBlockingInEventLoopWarning`; `run_main` there raises a
+  `RuntimeError`, since it starts a loop of its own. There, use `await fx.run_async(eff)`;
+  Jupyter runs cells on an event loop, so `await` works at the top of a cell.
 - **`yield eff` instead of `yield from eff`** runs the same, but pyright can't see the value or
   the effect's errors and services: the variable is `Unknown`, which strict mode reports. Always
   write `yield from`.
-- **`await eff`** raises `TypeError` (pyright reports it first): an effect is a description,
-  not a coroutine. Run it with `await fx.run_async(eff)`, or inside a generator, `yield from eff`.
+- **Calling a function and using what it gives as the result.** `greet("ada")` builds an
+  effect and runs nothing: `print(greet("ada"))` shows `<Effect, not run: ...>`, and
+  `greet("ada") + "!"` raises `TypeError`. Run it with `fx.run_blocking(greet("ada"))`, or
+  inside a generator, `yield from greet("ada")`.
+- **`eff()`** raises `TypeError: '_Succeed' object is not callable` (pyright reports it first):
+  an effect is a value, not a function. Run it as above.
+- **`fx.yield_now` without `()`**: `fx.void` and `fx.never` are effects, but `yield_now` is a
+  function that makes one. Write `fx.yield_now().fork()` and `yield from fx.yield_now()`; the
+  bare form raises an error that says so.
+- **`await eff`** raises `TypeError: '_Succeed' object can't be awaited` (pyright reports it
+  first): an effect is a description, not a coroutine. In a coroutine, run it with
+  `await fx.run_async(eff)`; inside a generator, `yield from eff`. Effects are deliberately not
+  awaitable, so libraries that await whatever is awaitable pass them through untouched.
 - **`@fx.fn async def`** is not an effect body: pyright reports that no overload of `fn` matches,
   and running it dies with a `TypeError`. Write a `def` and run the coroutine inside it with
   `yield from fx.from_async(f)`.
@@ -89,6 +100,54 @@ These run, or fail far from the line that caused them. Most are what a coroutine
 - **`raise NotFound(...)`** in a generator is a defect, not a typed failure, so `catch_tag` never
   sees it. Fail with `return (yield from NotFound(...))` (see
   [Typed errors](/docs/errors#defining-and-failing)).
+
+## Reading pyright errors
+
+pyright reports most of the mistakes above, but its messages are about types, often several
+lines deep. Read an `Effect[A, E, R]` in one as value, errors, services: the third argument is
+what still has to be provided.
+
+**A missing service at a run function.** `fx.run_blocking(check())`, where `check` reads
+`UrlChecker` that nothing provides:
+
+```text
+Argument of type "Effect[int, Never, UrlChecker]" cannot be assigned to parameter "eff"
+of type "Effect[A@run_blocking, Never, Never]" in function "run_blocking"
+  Type parameter "R_co@Effect" is covariant, but "UrlChecker" is not a subtype of "Never"
+```
+
+The run functions take only effects that need nothing (`Never`), and this one still needs
+`UrlChecker`. Provide it: `check().pipe(fx.provide(UrlCheckerLive))`.
+
+**A missing service in a `@testing.effect` test.** The same mistake in a test is longer,
+because the decorator checks the whole generator:
+
+```text
+No overloads for "effect" match the provided arguments
+Argument of type "() -> Generator[Effect[Any, Never, UrlChecker] | Effect[Any, Never, Never], ...]"
+cannot be assigned to parameter "f" of type "(**P@effect) -> TestBody[Scope]"
+  ...
+  Type parameter "_YieldT_co@Generator" is covariant, but "Effect[Any, Never, UrlChecker] |
+  Effect[Any, Never, Never]" is not a subtype of "Effect[Any, Any, Scope]"
+```
+
+Skip to the last line: a test may only yield effects that need at most `Scope`, and one of the
+yielded effects needs `UrlChecker`. Provide it inside the test, with `.pipe(fx.provide(Stub))` on
+the effect that needs it. The "Untyped function decorator obscures type of function" error on
+the same line follows from the first one and goes away with it.
+
+**An `@fx.fn` body that is not a generator.** An `async def`, or a `def` that returns an effect
+without any `yield`:
+
+```text
+No overloads for "fn" match the provided arguments
+Argument of type "(url: str) -> CoroutineType[Any, Any, str]" cannot be assigned to
+parameter "f" of type "(**P@fn) -> Generator[Effect[Any, E@fn, R@fn], Any, A@fn]"
+```
+
+`fn` takes a generator function. Write a `def` with `yield from`; for a coroutine, use
+`yield from fx.from_async(lambda: fetch(url))`, and for a function that only builds an effect,
+drop the decorator and return the effect.
 
 See the reference for [`Effect`](/docs/reference/Effect-class) (its methods) and
 [`pyfect.effect`](/docs/reference/effect) (constructors).
