@@ -249,6 +249,14 @@ class ServerRequest(ABC):
 class HttpServerRequest(Tag[ServerRequest], key="effect/http/HttpServerRequest"):
     """The request being handled."""
 
+    __missing_service_hint__ = (
+        "This service was read while handling an HTTP request. Services a route needs per "
+        "request come from router.provide_request(layer) on the routes layer, or from the "
+        "layers given to router.serve(...) or router.layer_in_memory_client(...). "
+        "layer.provide(...) on a routes layer gives the service only to building that layer, "
+        "not to its requests."
+    )
+
 
 class ParsedSearchParams(Tag[Mapping[str, str | list[str]]], key="effect/http/ParsedSearchParams"):
     """The request's query parameters: each name's value, or values when

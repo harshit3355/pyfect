@@ -39,6 +39,25 @@ the handler runs it with `yield from` and returns what it gives.
 `uvicorn_server.layer_test()` runs the server on a free local port and gives an `HttpClient`
 whose relative URLs go to it, so the program above sends real requests.
 
+## Routes that need services
+
+A handler that reads a service, as `check` reads `UrlChecker` below, runs once per request,
+so the routes layer requires `Requires[UrlChecker]` rather than `UrlChecker` itself. Give the
+service in one of two places:
+
+- `routes.pipe(router.provide_request(layer))` builds `layer` once and gives its services to
+  every request of those routes. This is the one to use in a test with a stub.
+- Provide it to the layer that runs the routes: `router.serve(routes).pipe(layer.provide(Live))`
+  for a server, or `router.layer_in_memory_client(routes).pipe(layer.provide(Live))` in a test.
+
+`routes.pipe(layer.provide(Stub))` is not one of them. It type-checks, but it gives the service
+only to building the routes layer, not to its requests, so every request dies with
+`MissingServiceError: Service not found: ...UrlChecker`, as with Effect's `Layer.provide` on an
+`HttpRouter.add` layer. The `Requires[UrlChecker]` is still in the layer's type, so pyright
+flags the program that runs it; the error raised during a request names `provide_request`.
+
+<include meta='title="test_route_services.py"'>../../snippets/http_server/test_route_services.py</include>
+
 ## HTML templates
 
 `server_response.html_template(strings, *values)` renders a template as a `text/html`

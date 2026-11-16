@@ -37,6 +37,11 @@
 - `Stream.buffer`, `group_by`, `partition`, `callback` and `Channel.callback_array` hand each
   chunk on in the step that takes it from their queue, as Effect's `Queue.takeAll` does,
   without a further step to convert it.
+- A `MissingServiceError` raised while handling an HTTP request carries a note that names
+  `router.provide_request(layer)` and says `layer.provide` on a routes layer reaches only its
+  build, not its requests (as with Effect's `Layer.provide` there). Its message is still
+  Effect's `Service not found: <key>`. A newcomer's `Routes.pipe(layer.provide(Stub))` died on
+  every request with no pointer to the fix.
 
 ### Added
 
@@ -47,6 +52,9 @@
   table in docs/PARITY.md (about 95%, about 94% of the runtime core), and
   `tests/test_parity_summary.py` fails when a page disagrees with the table. PARITY.md opens
   with that one-line summary.
+- HTTP server: a "Routes that need services" section: `provide_request`, providing to the
+  `serve` or in-memory client layer, why `layer.provide` on the routes layer is not one of
+  them, and a test with a stub layer.
 
 ## 0.6.6 (2026-11-15)
 
