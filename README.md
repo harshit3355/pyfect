@@ -199,7 +199,7 @@ layer, concurrency, retries and timeouts.
 
 pyfect follows Effect 4.1.2, does what Effect does wherever Python can express it, and runs
 Effect's own test cases as its spec: over 25,000 tests, with a test that fails on any Effect
-test title neither ported nor omitted with a reason, and about 95% of Effect's API so far. Every
+test title neither ported nor omitted with a reason. It covers about 95% of Effect v4 (about 94% of the runtime core) so far. Every
 export of the core modules is listed against Effect's in [`docs/coverage/`](https://github.com/tylergibbs1/pyfect/tree/main/docs/coverage), and
 [`docs/PARITY.md`](https://github.com/tylergibbs1/pyfect/blob/main/docs/PARITY.md) tracks what is done, what is open and what still differs. A
 `Duration` is Effect's, exact to the nanosecond at any length or infinite, since 0.5.0. A

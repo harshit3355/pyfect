@@ -38,6 +38,16 @@
   chunk on in the step that takes it from their queue, as Effect's `Queue.takeAll` does,
   without a further step to convert it.
 
+### Added
+
+### Docs
+
+- The docs home said pyfect covers about 64% of Effect v4 while the README and PyPI said
+  about 95%. Both now state the number `scripts/parity_summary.py` computes from the weighted
+  table in docs/PARITY.md (about 95%, about 94% of the runtime core), and
+  `tests/test_parity_summary.py` fails when a page disagrees with the table. PARITY.md opens
+  with that one-line summary.
+
 ## 0.6.6 (2026-11-15)
 
 ### Added
