@@ -483,9 +483,9 @@ def _coefficient(base: str, max_digits: int) -> tuple[int, str, str] | None:
     digits = lead + fraction if dot else base
     sign = digits[:1] if digits[:1] in ("+", "-") else ""
     unsigned = digits[len(sign) :]
-    if (fraction and not is_digits(fraction)) or not is_digits(unsigned):
-        return None
     if len(lead.lstrip("+-").lstrip("0")) + len(fraction) > max_digits:
+        return None
+    if (fraction and not is_digits(fraction)) or not is_digits(unsigned):
         return None
     # Leading zeros cost time to convert and change nothing
     value = signed_digits_value(sign + (unsigned.lstrip("0") or "0"))
