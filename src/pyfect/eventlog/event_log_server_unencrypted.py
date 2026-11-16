@@ -23,6 +23,7 @@ from pyfect.context import Tag
 from pyfect.effect import die, fail, gen, succeed, sync
 from pyfect.errors import TaggedError
 from pyfect.eventlog._identity import Identity, IdentityService
+from pyfect.eventlog._store_unavailable import protocol_error
 from pyfect.eventlog.event import AnyEvent, Event
 from pyfect.eventlog.event_group import EventGroup
 from pyfect.eventlog.event_journal import (
@@ -509,8 +510,10 @@ def _rpc_handlers():
                     write=write,
                 )
                 .catch_cause(
-                    lambda _: fail(
-                        _protocol_error("InternalServerError", "Persistence failure", public_key)
+                    lambda cause: fail(
+                        protocol_error(
+                            "WriteEntries", public_key, request.store_id, "Persistence failure"
+                        )(cause)
                     )
                 )
                 .pipe(provide_service(Identity, _client_identity(public_key)))

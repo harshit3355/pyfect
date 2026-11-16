@@ -93,6 +93,8 @@ class Db:
         self.buckets = sql.identifier(f"{prefix}_compaction_buckets")
         self.activations = sql.identifier(f"{prefix}_compaction_activations")
         self.stages = sql.identifier(f"{prefix}_compaction_stages")
+        self.bindings = sql.identifier(f"{prefix}_session_auth_bindings")
+        self.aliases = sql.identifier(f"{prefix}_scope_aliases")
         none = sql.literal("")
         self.none = none
         self.lock_hint = sql.on_dialect_or_else(

@@ -37,6 +37,34 @@
 - `Stream.buffer`, `group_by`, `partition`, `callback` and `Channel.callback_array` hand each
   chunk on in the step that takes it from their queue, as Effect's `Queue.takeAll` does,
   without a further step to convert it.
+- `sql_event_log_server_encrypted.migrate_legacy_store` only migrates a pair that
+  authenticated: it refuses a public key with no session auth binding, and, when another key
+  sharing the store's 0.6.5 name has authenticated too, until the call names those keys in
+  the new `not_written_by`. The server now migrates a store by itself, on its first request,
+  when its key is the only one sharing the name that has authenticated, so most upgrades from
+  0.6.5 need no manual step. A refusal describes the asking store without telling the
+  operator to migrate it. See [Upgrading event log stores from
+  0.6.5](https://pyfect.dev/docs/eventlog-upgrade-0-6-7).
+- A store the SQL encrypted server refused (`LegacyStoreNeedsMigration`) opens on the same
+  server once migrated: a store that fails to open is no longer kept for the storage's idle
+  time, which each retry renewed. A failed store open of any kind (a dropped connection) is
+  retried on the next request too.
+- A refused store is no longer hidden: the server logs a warning naming it once, and the
+  client gets an `InternalServerError` saying the store waits for the server's operator,
+  with its `store_id`, instead of "Decoding failure" or "Persistence failure". A store a
+  0.6.5 node wrote after it opened on a newer version is logged as split.
+
+### Added
+
+- `sql_event_log_server_encrypted.legacy_stores(store_ids)` lists the stores, among the
+  app's store ids and every authenticated key, whose 0.6.5 tables wait for a migration or
+  went to another pair, with where each stands.
+
+### Docs
+
+- [Upgrading event log stores from 0.6.5](https://pyfect.dev/docs/eventlog-upgrade-0-6-7):
+  who is affected, stopping every 0.6.5 node first, what the server does by itself, when the
+  operator acts, and why stores two identities shared can't be split.
 
 ## 0.6.6 (2026-11-15)
 
