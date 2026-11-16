@@ -42,6 +42,10 @@
   build, not its requests (as with Effect's `Layer.provide` there). Its message is still
   Effect's `Service not found: <key>`. A newcomer's `Routes.pipe(layer.provide(Stub))` died on
   every request with no pointer to the fix.
+- pyright explains an `@fx.fn` on an `async def`, or on a `def` with no `yield`, against
+  the generator body: `cannot be assigned to parameter "f" of type "(**P@fn) ->
+  Generator[...]"`, where it used to say `parameter "name" of type "str"`. The
+  `fn(name: str)` overload now comes first; what type-checks is unchanged.
 
 ### Added
 
@@ -63,6 +67,8 @@
   them, and a test with a stub layer.
 - Effects, Common mistakes: using a function's effect as its result, `eff()`, and the
   exact `TypeError` that `await eff` raises, with what to write instead.
+- Effects: a "Reading pyright errors" section: a missing service at a run function, the
+  long `@testing.effect` error for one, and an `@fx.fn` body that is not a generator.
 
 ## 0.6.6 (2026-11-15)
 

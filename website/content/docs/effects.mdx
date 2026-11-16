@@ -98,5 +98,53 @@ These run, or fail far from the line that caused them. Most are what a coroutine
   sees it. Fail with `return (yield from NotFound(...))` (see
   [Typed errors](/docs/errors#defining-and-failing)).
 
+## Reading pyright errors
+
+pyright reports most of the mistakes above, but its messages are about types, often several
+lines deep. Read an `Effect[A, E, R]` in one as value, errors, services: the third argument is
+what still has to be provided.
+
+**A missing service at a run function.** `fx.run_blocking(check())`, where `check` reads
+`UrlChecker` that nothing provides:
+
+```text
+Argument of type "Effect[int, Never, UrlChecker]" cannot be assigned to parameter "eff"
+of type "Effect[A@run_blocking, Never, Never]" in function "run_blocking"
+  Type parameter "R_co@Effect" is covariant, but "UrlChecker" is not a subtype of "Never"
+```
+
+The run functions take only effects that need nothing (`Never`), and this one still needs
+`UrlChecker`. Provide it: `check().pipe(fx.provide(UrlCheckerLive))`.
+
+**A missing service in a `@testing.effect` test.** The same mistake in a test is longer,
+because the decorator checks the whole generator:
+
+```text
+No overloads for "effect" match the provided arguments
+Argument of type "() -> Generator[Effect[Any, Never, UrlChecker] | Effect[Any, Never, Never], ...]"
+cannot be assigned to parameter "f" of type "(**P@effect) -> TestBody[Scope]"
+  ...
+  Type parameter "_YieldT_co@Generator" is covariant, but "Effect[Any, Never, UrlChecker] |
+  Effect[Any, Never, Never]" is not a subtype of "Effect[Any, Any, Scope]"
+```
+
+Skip to the last line: a test may only yield effects that need at most `Scope`, and one of the
+yielded effects needs `UrlChecker`. Provide it inside the test, with `.pipe(fx.provide(Stub))` on
+the effect that needs it. The "Untyped function decorator obscures type of function" error on
+the same line follows from the first one and goes away with it.
+
+**An `@fx.fn` body that is not a generator.** An `async def`, or a `def` that returns an effect
+without any `yield`:
+
+```text
+No overloads for "fn" match the provided arguments
+Argument of type "(url: str) -> CoroutineType[Any, Any, str]" cannot be assigned to
+parameter "f" of type "(**P@fn) -> Generator[Effect[Any, E@fn, R@fn], Any, A@fn]"
+```
+
+`fn` takes a generator function. Write a `def` with `yield from`; for a coroutine, use
+`yield from fx.from_async(lambda: fetch(url))`, and for a function that only builds an effect,
+drop the decorator and return the effect.
+
 See the reference for [`Effect`](/docs/reference/Effect-class) (its methods) and
 [`pyfect.effect`](/docs/reference/effect) (constructors).
